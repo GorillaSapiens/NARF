@@ -7,7 +7,7 @@
 #define NARF_SIGNATURE 0x4652414E // FRAN
 #define NARF_VERSION 0x00000000
 
-#define NARF_TAIL 0xFFFFFFFF
+#define NARF_END 0xFFFFFFFF
 
 typedef struct __attribute__((packed)) {
    union {
