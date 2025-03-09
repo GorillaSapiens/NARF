@@ -6,9 +6,10 @@
 #include "narf_fs.h"
 #include "narf_data.h"
 
-//#define DEBUG
-//#include <stdio.h>
-//#include <math.h>
+#ifdef NARF_DEBUG
+#include <stdio.h>
+#include <math.h>
+#endif
 
 #define SECTOR_SIZE 512
 
@@ -131,7 +132,7 @@ uint32_t narf_alloc(const char *key, uint32_t size) {
    strncpy(header->key, key, sizeof(header->key));
    narf_io_write(s, buffer);
 
-#ifdef DEBUG
+#ifdef NARF_DEBUG
    printf("alloc %08x %08x %d %d\n",
          s, header->start, header->length, header->bytes);
 #endif
@@ -372,7 +373,7 @@ bool narf_insert(uint32_t sector, const uint8_t *key) {
    return true;
 }
 
-#ifdef DEBUG
+#ifdef NARF_DEBUG
 static void narf_pt(uint32_t sector, int indent) {
    uint32_t l, r;
    char *p;

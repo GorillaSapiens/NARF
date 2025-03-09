@@ -1,6 +1,8 @@
 #ifndef _INCLUDE_NARF_FS_H_
 #define _INCLUDE_NARF_FS_H_
 
+#define NARF_DEBUG
+
 /// Create a NARF
 ///
 /// @return true for success
@@ -50,7 +52,10 @@ bool narf_rebalance(void);
 /// @return true for success
 bool narf_insert(uint32_t sector, const uint8_t *key);
 
+#ifdef NARF_DEBUG
+/// Print some debug info
 void narf_debug(void);
+#endif
 
 #endif
 

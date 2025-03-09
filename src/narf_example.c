@@ -25,7 +25,7 @@ void loop(void) {
       else if (!strncmp(buffer, "rebalance", 9)) {
          narf_rebalance();
       }
-#if 0
+#ifdef NARF_DEBUG
       else if (!strncmp(buffer, "debug", 5)) {
          narf_debug();
       }
