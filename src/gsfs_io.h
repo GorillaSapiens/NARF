@@ -20,13 +20,13 @@ bool gsfs_io_open(void);
 /// @return true on success
 bool gsfs_io_close(void);
 
-/// Initialize the gsfs_io layer
+/// Get the size of the underlying hardware device in sectors
 ///
 /// This is typically implemented by you for yor
 /// hardware.
 ///
-/// @return true on success
-bool gsfs_io_init(void);
+/// @return the number of sectors supported by the device
+uint32_t gsfs_io_sectors(void);
 
 /// Write a sector to the disk
 /// 
