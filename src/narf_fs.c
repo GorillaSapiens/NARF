@@ -102,7 +102,38 @@ uint32_t narf_find(const char *key) {
 ///
 /// @param key The key to look for
 /// @return The sector of the key, or NARF_TAIL if not found
-uint32_t narf_dirfind(const char *key);
+uint32_t narf_dirfind(const char *key) {
+   uint32_t ret = root.root;
+   uint32_t prv;
+   int cmp;
+
+   while(1) {
+      if (ret == NARF_TAIL) {
+         return ret;
+      }
+      narf_io_read(ret, buffer);
+      cmp = strncmp(key, header->key, strlen(key));
+      if (cmp < 0) {
+         ret = header->left;
+      }
+      else if (cmp > 0) {
+         ret = header->right;
+      }
+      else {
+         prv = header->prv;
+         while (prv != NARF_TAIL) {
+            narf_io_read(prv, buffer);
+            if (strncmp(key, header->key, strlen(key))) {
+               break;
+            }
+            ret = prv;
+            prv = header->prv;
+         }
+         return ret;
+      }
+   }
+   // TODO FIX detect endless loops???
+}
 
 /// Allocate storage for key
 ///
@@ -378,7 +409,7 @@ static void narf_pt(uint32_t sector, int indent) {
    uint32_t l, r;
    char *p;
    if (sector == NARF_TAIL) {
-      printf("%*s\n", indent * 2, "-");
+      printf("%*s\n", indent * 2 + 1, "-");
       return;
    }
    narf_io_read(sector, buffer);
@@ -386,7 +417,7 @@ static void narf_pt(uint32_t sector, int indent) {
    r = header->right;
    p = strdup(header->key);
    narf_pt(l, indent + 1);
-   printf("%*s\n", indent * 2, p);
+   printf("%*s\n", indent * 2 + strlen(p), p);
    narf_pt(r, indent + 1);
 }
 
