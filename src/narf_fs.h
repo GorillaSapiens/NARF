@@ -22,13 +22,13 @@ bool narf_sync(void);
 /// Find the sector number matching the key
 ///
 /// @param key The key to look for
-/// @return The sector of the key, or NARF_END if not found
+/// @return The sector of the key, or -1 if not found
 uint32_t narf_find(const char *key);
 
 /// Find the sector number matching the key substring
 ///
 /// @param key The key to look for
-/// @return The sector of the key, or NARF_END if not found
+/// @return The sector of the key, or -1 if not found
 uint32_t narf_dirfind(const char *key);
 
 /// Allocate storage for key
