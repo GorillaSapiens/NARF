@@ -1,10 +1,10 @@
+#include <assert.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
 
 #include "narf_io.h"
 #include "narf_fs.h"
-#include "narf_data.h"
 
 #ifdef NARF_DEBUG
 #include <stdlib.h>
@@ -12,11 +12,47 @@
 #include <math.h>
 #endif
 
+#define SIGNATURE 0x4652414E // FRAN
+#define VERSION 0x00000000
+
+#define END 0xFFFFFFFF
+
 #define SECTOR_SIZE 512
 
+typedef struct __attribute__((packed)) {
+   union {
+      uint32_t signature;  // SIGNATURE
+      uint8_t sigbytes[4];
+   };
+   uint32_t version;       // VERSION
+   uint32_t sector_size;   // sector size in bytes
+   uint32_t total_sectors; // total size of storage in sectors
+   uint32_t root;          // sector of root node
+   uint32_t first;         // sector of root node
+   uint32_t chain;         // previously allocated but free now
+   uint32_t vacant;        // number of first unallocated
+} Root;
+static_assert(sizeof(Root) == 8 * sizeof(uint32_t), "Root wrong size");
+
+typedef struct __attribute__((packed)) {
+   uint32_t parent;      // parent sector
+   uint32_t left;        // left sibling sector
+   uint32_t right;       // right sibling sector
+   uint32_t prev;        // previous ordered sector
+   uint32_t next;        // next ordered sector
+
+   uint32_t start;       // data start sector
+   uint32_t length;      // data length in sectors
+   uint32_t bytes;       // data size in bytes
+
+   uint8_t key[512 - 8 * sizeof(uint32_t)]; // key
+} Header;
+
+static_assert(sizeof(Header) == 512, "Header wrong size");
+
 uint8_t buffer[SECTOR_SIZE] = { 0 };
-NARF_Root root = { 0 };
-NARF_Header *node = (NARF_Header *) buffer;
+Root root = { 0 };
+Header *node = (Header *) buffer;
 
 static bool read_buffer(uint32_t sector) {
    return narf_io_read(sector, buffer);
@@ -27,8 +63,8 @@ static bool write_buffer(uint32_t sector) {
 }
 
 static bool verify(void) {
-   if (root.signature != NARF_SIGNATURE) return false;
-   if (root.version != NARF_VERSION) return false;
+   if (root.signature != SIGNATURE) return false;
+   if (root.version != VERSION) return false;
    if (root.sector_size != SECTOR_SIZE) return false;
    return true;
 }
@@ -38,14 +74,14 @@ static bool verify(void) {
 /// @return true for success
 bool narf_mkfs(uint32_t sectors) {
    memset(buffer, 0, sizeof(buffer));
-   root.signature     = NARF_SIGNATURE;
-   root.version       = NARF_VERSION;
+   root.signature     = SIGNATURE;
+   root.version       = VERSION;
    root.sector_size   = SECTOR_SIZE;
    root.total_sectors = sectors;
    root.vacant        = 1;
-   root.root          = NARF_END;
-   root.first         = NARF_END;
-   root.chain         = NARF_END;
+   root.root          = END;
+   root.first         = END;
+   root.chain         = END;
    memcpy(buffer, &root, sizeof(root));
    write_buffer(0);
    return true;
@@ -73,7 +109,7 @@ bool narf_sync(void) {
 /// Find the sector number matching the key
 ///
 /// @param key The key to look for
-/// @return The sector of the key, or NARF_END if not found
+/// @return The sector of the key, or END if not found
 uint32_t narf_find(const char *key) {
    uint32_t ret = root.root;
    int cmp;
@@ -81,7 +117,7 @@ uint32_t narf_find(const char *key) {
    if (!verify()) return false;
 
    while(1) {
-      if (ret == NARF_END) {
+      if (ret == END) {
          return ret;
       }
       read_buffer(ret);
@@ -102,7 +138,7 @@ uint32_t narf_find(const char *key) {
 /// Find the sector number matching the key substring
 ///
 /// @param key The key to look for
-/// @return The sector of the key, or NARF_END if not found
+/// @return The sector of the key, or END if not found
 uint32_t narf_dirfind(const char *key) {
    uint32_t ret = root.root;
    uint32_t prev;
@@ -111,7 +147,7 @@ uint32_t narf_dirfind(const char *key) {
    if (!verify()) return false;
 
    while(1) {
-      if (ret == NARF_END) {
+      if (ret == END) {
          return ret;
       }
       read_buffer(ret);
@@ -124,7 +160,7 @@ uint32_t narf_dirfind(const char *key) {
       }
       else {
          prev = node->prev;
-         while (prev != NARF_END) {
+         while (prev != END) {
             read_buffer(prev);
             if (strncmp(key, node->key, strlen(key))) {
                break;
@@ -149,7 +185,7 @@ static bool narf_insert(uint32_t sector, const uint8_t *key) {
 
    if (!verify()) return false;
 
-   if (root.root == NARF_END) {
+   if (root.root == END) {
       root.root = sector;
       root.first = sector;
       narf_sync();
@@ -160,7 +196,7 @@ static bool narf_insert(uint32_t sector, const uint8_t *key) {
          read_buffer(p);
          cmp = strncmp(key, node->key, sizeof(node->key));
          if (cmp < 0) {
-            if (node->left != NARF_END) {
+            if (node->left != END) {
                p = node->left;
             }
             else {
@@ -175,7 +211,7 @@ static bool narf_insert(uint32_t sector, const uint8_t *key) {
                node->next = p;
                write_buffer(sector);
 
-               if (tmp != NARF_END) {
+               if (tmp != END) {
                   read_buffer(tmp);
                   node->next = sector;
                   write_buffer(tmp);
@@ -189,7 +225,7 @@ static bool narf_insert(uint32_t sector, const uint8_t *key) {
             }
          }
          else if (cmp > 0) {
-            if (node->right != NARF_END) {
+            if (node->right != END) {
                p = node->right;
             }
             else {
@@ -204,7 +240,7 @@ static bool narf_insert(uint32_t sector, const uint8_t *key) {
                node->prev = p;
                write_buffer(sector);
 
-               if (tmp != NARF_END) {
+               if (tmp != END) {
                   read_buffer(tmp);
                   node->prev = sector;
                   write_buffer(tmp);
@@ -231,17 +267,17 @@ void narf_chain(uint32_t sector) {
 
    // reset fields
    read_buffer(sector);
-   node->prev = NARF_END;
-   node->next = NARF_END;
-   node->left = NARF_END;
-   node->right = NARF_END;
-   node->parent = NARF_END;
+   node->prev = END;
+   node->next = END;
+   node->left = END;
+   node->right = END;
+   node->parent = END;
    node->bytes = 0;
    // do NOT reset "start" and "length"
    write_buffer(sector);
 
    // record them in the free chain
-   if (root.chain == NARF_END) {
+   if (root.chain == END) {
       // done above // read_buffer(sector);
       node->next = root.chain;
       write_buffer(sector);
@@ -254,18 +290,18 @@ void narf_chain(uint32_t sector) {
       // done above // read_buffer(sector);
       length = node->length;
 
-      prev = NARF_END;
+      prev = END;
       next = root.chain;
       read_buffer(next);
 
-      while (length > node->length && next != NARF_END) {
+      while (length > node->length && next != END) {
          prev = next;
          next = node->next;
-         if (next != NARF_END) {
+         if (next != END) {
             read_buffer(next);
          }
       }
-      if (prev == NARF_END) {
+      if (prev == END) {
          root.chain = sector;
          narf_sync();
       }
@@ -298,14 +334,14 @@ uint32_t narf_alloc(const char *key, uint32_t size) {
 
    s = narf_find(key);
 
-   if (s != NARF_END) {
+   if (s != END) {
       return false;
    }
 
    // first check if we can allocate from the chain
-   prev = NARF_END;
+   prev = END;
    next = root.chain;
-   while(next != NARF_END) {
+   while(next != END) {
       read_buffer(next);
       if (node->length >= length) {
          // this will do nicely
@@ -313,7 +349,7 @@ uint32_t narf_alloc(const char *key, uint32_t size) {
          next = node->next;
 
          // pull it out
-         if (prev == NARF_END) {
+         if (prev == END) {
             root.chain = next;
             narf_sync();
          }
@@ -347,7 +383,7 @@ uint32_t narf_alloc(const char *key, uint32_t size) {
       next = node->next;
    }
 
-   if (s == NARF_END) {
+   if (s == END) {
       // nothing on the chain was suitable
       s = root.vacant;
       ++root.vacant;
@@ -357,11 +393,11 @@ uint32_t narf_alloc(const char *key, uint32_t size) {
    }
 
    // reset fields except start and length
-   node->parent = NARF_END;
-   node->left   = NARF_END;
-   node->right  = NARF_END;
-   node->prev    = NARF_END;
-   node->next    = NARF_END;
+   node->parent = END;
+   node->left   = END;
+   node->right  = END;
+   node->prev    = END;
+   node->next    = END;
    node->bytes  = size;
    strncpy(node->key, key, sizeof(node->key));
    write_buffer(s);
@@ -391,7 +427,7 @@ bool narf_free(const char *key) {
 
    sector = narf_find(key);
 
-   if (sector == NARF_END) {
+   if (sector == END) {
       return false;
    }
 
@@ -400,13 +436,13 @@ bool narf_free(const char *key) {
    next = node->next;
    write_buffer(sector);
 
-   if (next != NARF_END) {
+   if (next != END) {
       read_buffer(next);
       node->prev = prev;
       write_buffer(next);
    }
 
-   if (prev != NARF_END) {
+   if (prev != END) {
       read_buffer(prev);
       node->next = next;
       write_buffer(prev);
@@ -445,14 +481,14 @@ bool narf_rebalance(void) {
 
    if (!verify()) return false;
 
-   while (sector != NARF_END) {
+   while (sector != END) {
       ++count;
       read_buffer(sector);
       sector = node->next;
    }
 
-   root.root = NARF_END;
-   root.first = NARF_END;
+   root.root = END;
+   root.first = END;
    narf_sync();
 
    while (denominator < count) {
@@ -464,7 +500,7 @@ bool narf_rebalance(void) {
 
       while (numerator < denominator) {
          read_buffer(sector);
-         while (sector != NARF_END) {
+         while (sector != END) {
             next = node->next;
             if (spot == target) {
                prev = node->prev;
@@ -472,23 +508,23 @@ bool narf_rebalance(void) {
                if (head == sector) {
                   head = next;
                }
-               if (prev != NARF_END) {
+               if (prev != END) {
                   read_buffer(prev);
                   node->next = next;
                   write_buffer(prev);
                }
-               if (next != NARF_END) {
+               if (next != END) {
                   read_buffer(next);
                   node->prev = prev;
                   write_buffer(next);
                }
 
                read_buffer(sector);
-               node->prev = NARF_END;
-               node->next = NARF_END;
-               node->left = NARF_END;
-               node->right = NARF_END;
-               node->parent = NARF_END;
+               node->prev = END;
+               node->next = END;
+               node->left = END;
+               node->right = END;
+               node->parent = END;
                strncpy(key, node->key, sizeof(node->key));
                write_buffer(sector);
 
@@ -499,7 +535,7 @@ bool narf_rebalance(void) {
             }
             ++spot;
             sector = next;
-            if (sector != NARF_END) {
+            if (sector != END) {
                read_buffer(sector);
             }
          }
@@ -511,14 +547,14 @@ bool narf_rebalance(void) {
 
    // now finish the job
    sector = head;
-   while (sector != NARF_END) {
+   while (sector != END) {
       read_buffer(sector);
       next = node->next;
-      node->prev = NARF_END;
-      node->next = NARF_END;
-      node->left = NARF_END;
-      node->right = NARF_END;
-      node->parent = NARF_END;
+      node->prev = END;
+      node->next = END;
+      node->left = END;
+      node->right = END;
+      node->parent = END;
       strncpy(key, node->key, sizeof(node->key));
       write_buffer(sector);
 
@@ -539,7 +575,7 @@ static void narf_pt(uint32_t sector, int indent, uint32_t pattern) {
 
    if (!verify()) return;
 
-   if (sector != NARF_END) {
+   if (sector != END) {
       read_buffer(sector);
       l = node->left;
       r = node->right;
@@ -568,7 +604,7 @@ static void narf_pt(uint32_t sector, int indent, uint32_t pattern) {
       c = '-';
    }
 
-   if (sector == NARF_END) {
+   if (sector == END) {
       printf("%c- (nil)\n", c);
       return;
    }
@@ -584,13 +620,13 @@ void narf_debug(void) {
    uint32_t sector;
 
    printf("root.signature     = %08x '%4s'\n", root.signature, root.sigbytes);
-   if (root.signature != NARF_SIGNATURE) {
+   if (root.signature != SIGNATURE) {
       printf("bad signature\n");
       return;
    }
 
    printf("root.version       = %08x\n", root.version);
-   if (root.version != NARF_VERSION) {
+   if (root.version != VERSION) {
       printf("bad version\n");
       return;
    }
@@ -613,7 +649,7 @@ void narf_debug(void) {
    printf("root.first         = %d\n", root.first);
 
    sector = root.first;
-   while (sector != NARF_END) {
+   while (sector != END) {
       printf("\n");
       read_buffer(sector);
       printf("sector = %d\n", sector);
@@ -632,7 +668,7 @@ void narf_debug(void) {
 
    printf("\nfreechain:\n");
    sector = root.chain;
-   while (sector != NARF_END) {
+   while (sector != END) {
       read_buffer(sector);
       printf("%d (%d:%d) -> %d\n", sector, node->start, node->length, node->next);
       sector = node->next;
