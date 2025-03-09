@@ -129,6 +129,89 @@ uint32_t narf_dirfind(const char *key) {
    // TODO FIX detect endless loops???
 }
 
+/// insert sector into the tree
+///
+/// @return true for success
+static bool narf_insert(uint32_t sector, const uint8_t *key) {
+   uint32_t tmp;
+   uint32_t next;
+   uint32_t p;
+   int cmp;
+
+   if (!verify()) return false;
+
+   if (root.root == NARF_TAIL) {
+      root.root = sector;
+      root.first = sector;
+      narf_sync();
+   }
+   else {
+      p = root.root;
+      while (1) {
+         narf_io_read(p, buffer);
+         cmp = strncmp(key, header->key, sizeof(header->key));
+         if (cmp < 0) {
+            if (header->left != NARF_TAIL) {
+               p = header->left;
+            }
+            else {
+               header->left = sector;
+               tmp = header->prev;
+               header->prev = sector;
+               narf_io_write(p, buffer);
+
+               narf_io_read(sector, buffer);
+               header->parent = p;
+               header->prev = tmp;
+               header->next = p;
+               narf_io_write(sector, buffer);
+
+               if (tmp != NARF_TAIL) {
+                  narf_io_read(tmp, buffer);
+                  header->next = sector;
+                  narf_io_write(tmp, buffer);
+               }
+               else {
+                  root.first = sector;
+                  narf_sync();
+               }
+
+               break;
+            }
+         }
+         else if (cmp > 0) {
+            if (header->right != NARF_TAIL) {
+               p = header->right;
+            }
+            else {
+               header->right = sector;
+               tmp = header->next;
+               header->next = sector;
+               narf_io_write(p, buffer);
+
+               narf_io_read(sector, buffer);
+               header->parent = p;
+               header->next = tmp;
+               header->prev = p;
+               narf_io_write(sector, buffer);
+
+               if (tmp != NARF_TAIL) {
+                  narf_io_read(tmp, buffer);
+                  header->prev = sector;
+                  narf_io_write(tmp, buffer);
+               }
+
+               break;
+            }
+         }
+         else {
+            // this should never happen !!!
+         }
+      }
+   }
+   return true;
+}
+
 /// Allocate storage for key
 ///
 /// @param key The key we're allocating for
@@ -363,89 +446,6 @@ bool narf_rebalance(void) {
       sector = next;
    }
 
-   return true;
-}
-
-/// insert sector into the tree
-///
-/// @return true for success
-bool narf_insert(uint32_t sector, const uint8_t *key) {
-   uint32_t tmp;
-   uint32_t next;
-   uint32_t p;
-   int cmp;
-
-   if (!verify()) return false;
-
-   if (root.root == NARF_TAIL) {
-      root.root = sector;
-      root.first = sector;
-      narf_sync();
-   }
-   else {
-      p = root.root;
-      while (1) {
-         narf_io_read(p, buffer);
-         cmp = strncmp(key, header->key, sizeof(header->key));
-         if (cmp < 0) {
-            if (header->left != NARF_TAIL) {
-               p = header->left;
-            }
-            else {
-               header->left = sector;
-               tmp = header->prev;
-               header->prev = sector;
-               narf_io_write(p, buffer);
-
-               narf_io_read(sector, buffer);
-               header->parent = p;
-               header->prev = tmp;
-               header->next = p;
-               narf_io_write(sector, buffer);
-
-               if (tmp != NARF_TAIL) {
-                  narf_io_read(tmp, buffer);
-                  header->next = sector;
-                  narf_io_write(tmp, buffer);
-               }
-               else {
-                  root.first = sector;
-                  narf_sync();
-               }
-
-               break;
-            }
-         }
-         else if (cmp > 0) {
-            if (header->right != NARF_TAIL) {
-               p = header->right;
-            }
-            else {
-               header->right = sector;
-               tmp = header->next;
-               header->next = sector;
-               narf_io_write(p, buffer);
-
-               narf_io_read(sector, buffer);
-               header->parent = p;
-               header->next = tmp;
-               header->prev = p;
-               narf_io_write(sector, buffer);
-
-               if (tmp != NARF_TAIL) {
-                  narf_io_read(tmp, buffer);
-                  header->prev = sector;
-                  narf_io_write(tmp, buffer);
-               }
-
-               break;
-            }
-         }
-         else {
-            // this should never happen !!!
-         }
-      }
-   }
    return true;
 }
 

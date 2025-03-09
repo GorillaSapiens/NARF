@@ -48,11 +48,6 @@ bool narf_free(const char *key);
 /// @return true for success
 bool narf_rebalance(void);
 
-/// insert sector into the tree
-///
-/// @return true for success
-bool narf_insert(uint32_t sector, const uint8_t *key);
-
 #ifdef NARF_DEBUG
 /// Print some debug info
 void narf_debug(void);
