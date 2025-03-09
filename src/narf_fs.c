@@ -377,6 +377,8 @@ uint32_t narf_alloc(const char *key, uint32_t size) {
 
 /// Free storage for key
 ///
+/// EXPENSIVE !!!
+///
 /// @param key The key we're freeing
 /// @return true for success
 bool narf_free(const char *key) {
@@ -533,6 +535,7 @@ static void narf_pt(uint32_t sector, int indent, uint32_t pattern) {
    uint32_t l, r;
    int i;
    char *p;
+   char c;
 
    if (!verify()) return;
 
@@ -553,12 +556,24 @@ static void narf_pt(uint32_t sector, int indent, uint32_t pattern) {
       }
    }
 
+   if (indent) {
+      if (pattern & (1 << indent)) {
+         c = '\\';
+      }
+      else {
+      c = '/';
+      }
+   }
+   else {
+      c = '-';
+   }
+
    if (sector == NARF_END) {
-      printf("+- (nil)\n");
+      printf("%c- (nil)\n", c);
       return;
    }
    else {
-      printf("+- %s [%d]\n", p, sector);
+      printf("%c- %s [%d]\n", c, p, sector);
       free(p);
    }
 
