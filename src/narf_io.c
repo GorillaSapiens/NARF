@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -12,48 +13,71 @@
 
 #define FILENAME "example.narf"
 #define SECTOR_SIZE 512
-#define BYTES (1024*1024*1024) // 1 Gig
-#define SECTORS (BYTES / SECTOR_SIZE)
 
-static uint8_t *image;
-static int fd;
+static uint8_t *image = NULL;
+static int fd = -1;
+static size_t total_bytes = 0;
 
 bool narf_io_open(void) {
-   if (access(FILENAME, F_OK) == 0) {
-      fd = open(FILENAME, O_RDWR, 0);
-      if (fd == -1) {
-         perror("open example.narf");
-         exit(-1);
+
+   errno = 0;
+   if (access(FILENAME, F_OK) != 0) {
+      if (system("dd if=/dev/zero of=example.narf bs=1K count=1M")) {
+         if (errno) {
+            perror("system dd [...]");
+         }
+         fprintf(stderr, "could not create NARF\n");
+         return false;
       }
+   }
+
+   errno = 0;
+   struct stat st;
+   if (stat("example.narf", &st) == 0) {
+      total_bytes = st.st_size;
    }
    else {
-      fd = open(FILENAME, O_RDWR | O_CREAT, 0766);
-      if (fd == -1) {
-         perror("create example.narf");
-         exit(-1);
+      if (errno) {
+         perror("stat");
       }
+      fprintf(stderr, "could not stat NARF\n");
+      return false;
    }
-   image = mmap(NULL, BYTES, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+
+   errno = 0;
+   fd = open(FILENAME, O_RDWR, 0);
+   if (fd == -1) {
+      perror("open example.narf");
+      return false;
+   }
+
+   errno = 0;
+   image = mmap(NULL, total_bytes, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
    if (image == NULL) {
       perror("mmap");
-      exit(-1);
+      return false;
    }
 
    return true;
 }
 
 bool narf_io_close(void) {
+   bool ret = true;
+
    sync();
-   if (munmap(image, BYTES) == -1) {
+   if (munmap(image, total_bytes) == -1) {
       perror("munmap");
-      exit(-1);
+      ret = false;
    }
-   close(fd);
-   return true;
+   if (close(fd)) {
+      perror("close");
+      ret = false;
+   }
+   return ret;
 }
 
 uint32_t narf_io_sectors(void) {
-   return SECTORS;
+   return total_bytes / SECTOR_SIZE;
 }
 
 bool narf_io_write(uint32_t sector, uint8_t *data) {

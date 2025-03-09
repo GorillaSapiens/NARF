@@ -10,25 +10,30 @@
 #define NARF_TAIL 0xFFFFFFFF
 
 typedef struct __attribute__((packed)) {
-   uint32_t signature;   // NARF_SIGNATURE
-   uint32_t version;     // NARF_VERSION
-   uint32_t sector_size; // sector size in bytes
-   uint32_t free;        // number of first free sector
-   uint32_t root;        // sector of root node
-   uint32_t first;       // sector of root node
+   union {
+      uint32_t signature;  // NARF_SIGNATURE
+      uint8_t sigbytes[4];
+   };
+   uint32_t version;       // NARF_VERSION
+   uint32_t sector_size;   // sector size in bytes
+   uint32_t total_sectors; // total size of storage in sectors
+   uint32_t root;          // sector of root node
+   uint32_t first;         // sector of root node
+   uint32_t chain;         // previously allocated but free now
+   uint32_t vacant;        // number of first unallocated
 } NARF_Root;
-static_assert(sizeof(NARF_Root) == 24, "NARF_Root wrong size");
+static_assert(sizeof(NARF_Root) == 8 * sizeof(uint32_t), "NARF_Root wrong size");
 
 typedef struct __attribute__((packed)) {
    uint32_t parent;      // parent sector
    uint32_t left;        // left sibling sector
    uint32_t right;       // right sibling sector
-   uint32_t prv;         // next sequential sector
-   uint32_t nxt;         // next sequential sector
+   uint32_t prev;        // previous ordered sector
+   uint32_t next;        // next ordered sector
 
-   uint32_t start;       // the starting sector
-   uint32_t length;      // the length in sectors
-   uint32_t bytes;       // size in bytes
+   uint32_t start;       // data start sector
+   uint32_t length;      // data length in sectors
+   uint32_t bytes;       // data size in bytes
 
    uint8_t key[512 - 8 * sizeof(uint32_t)]; // key
 } NARF_Header;

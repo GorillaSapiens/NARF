@@ -5,8 +5,9 @@
 
 /// Create a NARF
 ///
+/// @param sectors The total size in sectors
 /// @return true for success
-bool narf_mkfs(void);
+bool narf_mkfs(uint32_t sectors);
 
 /// Initialize a NARF
 ///

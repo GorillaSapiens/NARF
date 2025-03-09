@@ -13,21 +13,30 @@
 
 #define SECTOR_SIZE 512
 
-uint8_t buffer[SECTOR_SIZE];
-NARF_Root root;
+uint8_t buffer[SECTOR_SIZE] = { 0 };
+NARF_Root root = { 0 };
 NARF_Header *header = (NARF_Header *) buffer;
+
+static bool verify(void) {
+   if (root.signature != NARF_SIGNATURE) return false;
+   if (root.version != NARF_VERSION) return false;
+   if (root.sector_size != SECTOR_SIZE) return false;
+   return true;
+}
 
 /// Create a NARF
 ///
 /// @return true for success
-bool narf_mkfs(void) {
+bool narf_mkfs(uint32_t sectors) {
    memset(buffer, 0, sizeof(buffer));
-   root.signature   = NARF_SIGNATURE;
-   root.version     = NARF_VERSION;
-   root.sector_size = SECTOR_SIZE;
-   root.free        = 1;
-   root.root        = NARF_TAIL;
-   root.first       = NARF_TAIL;
+   root.signature     = NARF_SIGNATURE;
+   root.version       = NARF_VERSION;
+   root.sector_size   = SECTOR_SIZE;
+   root.total_sectors = sectors;
+   root.vacant        = 1;
+   root.root          = NARF_TAIL;
+   root.first         = NARF_TAIL;
+   root.chain         = NARF_TAIL;
    memcpy(buffer, &root, sizeof(root));
    narf_io_write(0, buffer);
    return true;
@@ -39,33 +48,14 @@ bool narf_mkfs(void) {
 bool narf_init(void) {
    narf_io_read(0, buffer);
    memcpy(&root, buffer, sizeof(root));
-   if (root.signature != NARF_SIGNATURE) {
-      return false;
-   }
-   if (root.version != NARF_VERSION) {
-      return false;
-   }
-   if (root.sector_size != SECTOR_SIZE) {
-      return false;
-   }
-
-   return true;
+   return verify();
 }
 
 /// Sync the narf to disk
 ///
 /// @return true for success
 bool narf_sync(void) {
-   if (root.signature != NARF_SIGNATURE) {
-      return false;
-   }
-   if (root.version != NARF_VERSION) {
-      return false;
-   }
-   if (root.sector_size != SECTOR_SIZE) {
-      return false;
-   }
-
+   if (!verify()) return false;
    memset(buffer, 0, sizeof(buffer));
    memcpy(buffer, &root, sizeof(root));
    return narf_io_write(0, buffer);
@@ -78,6 +68,8 @@ bool narf_sync(void) {
 uint32_t narf_find(const char *key) {
    uint32_t ret = root.root;
    int cmp;
+
+   if (!verify()) return false;
 
    while(1) {
       if (ret == NARF_TAIL) {
@@ -104,8 +96,10 @@ uint32_t narf_find(const char *key) {
 /// @return The sector of the key, or NARF_TAIL if not found
 uint32_t narf_dirfind(const char *key) {
    uint32_t ret = root.root;
-   uint32_t prv;
+   uint32_t prev;
    int cmp;
+
+   if (!verify()) return false;
 
    while(1) {
       if (ret == NARF_TAIL) {
@@ -120,14 +114,14 @@ uint32_t narf_dirfind(const char *key) {
          ret = header->right;
       }
       else {
-         prv = header->prv;
-         while (prv != NARF_TAIL) {
-            narf_io_read(prv, buffer);
+         prev = header->prev;
+         while (prev != NARF_TAIL) {
+            narf_io_read(prev, buffer);
             if (strncmp(key, header->key, strlen(key))) {
                break;
             }
-            ret = prv;
-            prv = header->prv;
+            ret = prev;
+            prev = header->prev;
          }
          return ret;
       }
@@ -140,25 +134,29 @@ uint32_t narf_dirfind(const char *key) {
 /// @param key The key we're allocating for
 /// @return The new sector
 uint32_t narf_alloc(const char *key, uint32_t size) {
-   uint32_t s = narf_find(key);
+   uint32_t s;
+
+   if (!verify()) return false;
+
+   s = narf_find(key);
 
    if (s != NARF_TAIL) {
       return false;
    }
 
-   s = root.free;
-   ++root.free;
+   s = root.vacant;
+   ++root.vacant;
 
    header->parent = NARF_TAIL;
    header->left   = NARF_TAIL;
    header->right  = NARF_TAIL;
-   header->prv    = NARF_TAIL;
-   header->nxt    = NARF_TAIL;
-   header->start  = root.free;
+   header->prev    = NARF_TAIL;
+   header->next    = NARF_TAIL;
+   header->start  = root.vacant;
    header->length = (size + SECTOR_SIZE - 1) / SECTOR_SIZE;
    header->bytes  = size;
 
-   root.free += header->length;
+   root.vacant += header->length;
 
    strncpy(header->key, key, sizeof(header->key));
    narf_io_write(s, buffer);
@@ -177,42 +175,84 @@ uint32_t narf_alloc(const char *key, uint32_t size) {
 /// @param key The key we're freeing
 /// @return true for success
 bool narf_free(const char *key) {
-   uint32_t sector = narf_find(key);
-   uint32_t prv;
-   uint32_t nxt;
+   uint32_t sector;
+   uint32_t prev;
+   uint32_t next;
+   uint32_t length;
+
+   if (!verify()) return false;
+
+   sector = narf_find(key);
 
    if (sector == NARF_TAIL) {
       return false;
    }
 
    narf_io_read(sector, buffer);
-   prv = header->prv;
-   nxt = header->nxt;
-   header->prv = NARF_TAIL;
-   header->nxt = NARF_TAIL;
+   prev = header->prev;
+   next = header->next;
+   header->prev = NARF_TAIL;
+   header->next = NARF_TAIL;
    header->left = NARF_TAIL;
    header->right = NARF_TAIL;
    header->parent = NARF_TAIL;
    header->bytes = 0;
    narf_io_write(sector, buffer);
 
-   if (nxt != NARF_TAIL) {
-      narf_io_read(nxt, buffer);
-      header->prv = prv;
-      narf_io_write(nxt, buffer);
+   if (next != NARF_TAIL) {
+      narf_io_read(next, buffer);
+      header->prev = prev;
+      narf_io_write(next, buffer);
    }
 
-   if (prv != NARF_TAIL) {
-      narf_io_read(prv, buffer);
-      header->nxt = nxt;
-      narf_io_write(prv, buffer);
+   if (prev != NARF_TAIL) {
+      narf_io_read(prev, buffer);
+      header->next = next;
+      narf_io_write(prev, buffer);
    }
    else {
-      root.first = nxt;
+      root.first = next;
       narf_sync();
    }
 
-   // TODO store them, and the data, in a free chain
+   // record them in the free chain
+   if (root.chain == NARF_TAIL) {
+      narf_io_read(sector, buffer);
+      header->next = root.chain;
+      narf_io_write(sector, buffer);
+      root.chain = sector;
+      narf_sync();
+   }
+   else {
+      // smallest records first
+      narf_io_read(sector, buffer);
+      length = header->length;
+
+      // reuse of prev and next variables here
+      prev = NARF_TAIL;
+      next = root.chain;
+      narf_io_read(next, buffer);
+
+      while (length > header->length && next != NARF_TAIL) {
+         prev = next;
+         next = header->next;
+         if (next != NARF_TAIL) {
+            narf_io_read(next, buffer);
+         }
+      }
+      if (prev == NARF_TAIL) {
+         root.chain = sector;
+         narf_sync();
+      }
+      else {
+         narf_io_read(prev, buffer);
+         header->next = sector;
+         narf_io_write(prev, buffer);
+      }
+      narf_io_read(sector, buffer);
+      header->next = next;
+      narf_io_write(sector, buffer);
+   }
 
    narf_rebalance();
 
@@ -236,13 +276,15 @@ bool narf_rebalance(void) {
    uint32_t numerator;
    uint32_t denominator = 2;
 
-   uint32_t prv;
-   uint32_t nxt;
+   uint32_t prev;
+   uint32_t next;
+
+   if (!verify()) return false;
 
    while (sector != NARF_TAIL) {
       ++count;
       narf_io_read(sector, buffer);
-      sector = header->nxt;
+      sector = header->next;
    }
 
    root.root = NARF_TAIL;
@@ -259,27 +301,27 @@ bool narf_rebalance(void) {
       while (numerator < denominator) {
          narf_io_read(sector, buffer);
          while (sector != NARF_TAIL) {
-            nxt = header->nxt;
+            next = header->next;
             if (spot == target) {
-               prv = header->prv;
+               prev = header->prev;
 
                if (head == sector) {
-                  head = nxt;
+                  head = next;
                }
-               if (prv != NARF_TAIL) {
-                  narf_io_read(prv, buffer);
-                  header->nxt = nxt;
-                  narf_io_write(prv, buffer);
+               if (prev != NARF_TAIL) {
+                  narf_io_read(prev, buffer);
+                  header->next = next;
+                  narf_io_write(prev, buffer);
                }
-               if (nxt != NARF_TAIL) {
-                  narf_io_read(nxt, buffer);
-                  header->prv = prv;
-                  narf_io_write(nxt, buffer);
+               if (next != NARF_TAIL) {
+                  narf_io_read(next, buffer);
+                  header->prev = prev;
+                  narf_io_write(next, buffer);
                }
 
                narf_io_read(sector, buffer);
-               header->prv = NARF_TAIL;
-               header->nxt = NARF_TAIL;
+               header->prev = NARF_TAIL;
+               header->next = NARF_TAIL;
                header->left = NARF_TAIL;
                header->right = NARF_TAIL;
                header->parent = NARF_TAIL;
@@ -292,7 +334,7 @@ bool narf_rebalance(void) {
                target = count * numerator / denominator;
             }
             ++spot;
-            sector = nxt;
+            sector = next;
             if (sector != NARF_TAIL) {
                narf_io_read(sector, buffer);
             }
@@ -307,9 +349,9 @@ bool narf_rebalance(void) {
    sector = head;
    while (sector != NARF_TAIL) {
       narf_io_read(sector, buffer);
-      nxt = header->nxt;
-      header->prv = NARF_TAIL;
-      header->nxt = NARF_TAIL;
+      next = header->next;
+      header->prev = NARF_TAIL;
+      header->next = NARF_TAIL;
       header->left = NARF_TAIL;
       header->right = NARF_TAIL;
       header->parent = NARF_TAIL;
@@ -318,7 +360,7 @@ bool narf_rebalance(void) {
 
       narf_insert(sector, key);
 
-      sector = nxt;
+      sector = next;
    }
 
    return true;
@@ -329,9 +371,12 @@ bool narf_rebalance(void) {
 /// @return true for success
 bool narf_insert(uint32_t sector, const uint8_t *key) {
    uint32_t tmp;
-   uint32_t nxt;
+   uint32_t next;
    uint32_t p;
    int cmp;
+
+   if (!verify()) return false;
+
    if (root.root == NARF_TAIL) {
       root.root = sector;
       root.first = sector;
@@ -348,19 +393,19 @@ bool narf_insert(uint32_t sector, const uint8_t *key) {
             }
             else {
                header->left = sector;
-               tmp = header->prv;
-               header->prv = sector;
+               tmp = header->prev;
+               header->prev = sector;
                narf_io_write(p, buffer);
 
                narf_io_read(sector, buffer);
                header->parent = p;
-               header->prv = tmp;
-               header->nxt = p;
+               header->prev = tmp;
+               header->next = p;
                narf_io_write(sector, buffer);
 
                if (tmp != NARF_TAIL) {
                   narf_io_read(tmp, buffer);
-                  header->nxt = sector;
+                  header->next = sector;
                   narf_io_write(tmp, buffer);
                }
                else {
@@ -377,19 +422,19 @@ bool narf_insert(uint32_t sector, const uint8_t *key) {
             }
             else {
                header->right = sector;
-               tmp = header->nxt;
-               header->nxt = sector;
+               tmp = header->next;
+               header->next = sector;
                narf_io_write(p, buffer);
 
                narf_io_read(sector, buffer);
                header->parent = p;
-               header->nxt = tmp;
-               header->prv = p;
+               header->next = tmp;
+               header->prev = p;
                narf_io_write(sector, buffer);
 
                if (tmp != NARF_TAIL) {
                   narf_io_read(tmp, buffer);
-                  header->prv = sector;
+                  header->prev = sector;
                   narf_io_write(tmp, buffer);
                }
 
@@ -408,6 +453,9 @@ bool narf_insert(uint32_t sector, const uint8_t *key) {
 static void narf_pt(uint32_t sector, int indent) {
    uint32_t l, r;
    char *p;
+
+   if (!verify()) return;
+
    if (sector == NARF_TAIL) {
       printf("%*s\n", indent * 2 + 1, "-");
       return;
@@ -424,12 +472,34 @@ static void narf_pt(uint32_t sector, int indent) {
 void narf_debug(void) {
    uint32_t sector;
 
-   printf("root.signature   = %08x\n", root.signature);
-   printf("root.version     = %08x\n", root.version);
-   printf("root.sector_size = %d\n", root.sector_size);
-   printf("root.free        = %d\n", root.free);
-   printf("root.root        = %d\n", root.root);
-   printf("root.first       = %d\n", root.first);
+   printf("root.signature     = %08x '%4s'\n", root.signature, root.sigbytes);
+   if (root.signature != NARF_SIGNATURE) {
+      printf("bad signature\n");
+      return;
+   }
+
+   printf("root.version       = %08x\n", root.version);
+   if (root.version != NARF_VERSION) {
+      printf("bad version\n");
+      return;
+   }
+
+   printf("root.sector_size   = %d\n", root.sector_size);
+   if (root.sector_size != SECTOR_SIZE) {
+      printf("bad sector size\n");
+      return;
+   }
+
+   printf("root.total_sectors = %d\n", root.total_sectors);
+   if (root.total_sectors < 2) {
+      printf("bad total sectors\n");
+      return;
+   }
+
+   printf("root.vacant        = %d\n", root.vacant);
+   printf("root.chain         = %d\n", root.chain);
+   printf("root.root          = %d\n", root.root);
+   printf("root.first         = %d\n", root.first);
 
    sector = root.first;
 
@@ -440,13 +510,13 @@ void narf_debug(void) {
       printf("key    = '%s'\n", header->key);
       printf("left   = %d\n", header->left);
       printf("right  = %d\n", header->right);
-      printf("prv    = %d\n", header->prv);
-      printf("nxt    = %d\n", header->nxt);
+      printf("prev   = %d\n", header->prev);
+      printf("next   = %d\n", header->next);
       printf("start  = %d\n", header->start);
       printf("length = %d\n", header->length);
       printf("bytes  = %d\n", header->bytes);
 
-      sector = header->nxt;
+      sector = header->next;
    }
 
    narf_pt(root.root, 0);

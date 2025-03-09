@@ -6,6 +6,8 @@
 
 #define ASSIGN =
 
+const char *tf[] = { "false", "true" };
+
 void loop(void) {
    char buffer[1024];
    bool result;
@@ -16,14 +18,21 @@ void loop(void) {
       if (!strncmp(buffer, "exit", 4)) {
          break;
       }
+      else if (!strncmp(buffer, "quit", 4)) {
+         break;
+      }
       else if (!strncmp(buffer, "mkfs", 4)) {
-         printf("narf_mkfs()=%d\n", result ASSIGN narf_mkfs());
+         uint32_t sectors = narf_io_sectors();
+         printf("narf_mkfs(0x%x)=%s\n",
+            sectors, tf[result ASSIGN narf_mkfs(sectors)]);
       }
       else if (!strncmp(buffer, "init", 4)) {
-         printf("narf_init()=%d\n", result ASSIGN narf_init());
+         printf("narf_init()=%s\n",
+            tf[result ASSIGN narf_init()]);
       }
       else if (!strncmp(buffer, "rebalance", 9)) {
-         narf_rebalance();
+         printf("narf_rebalance()=%s\n",
+            tf[result ASSIGN narf_rebalance()]);
       }
 #ifdef NARF_DEBUG
       else if (!strncmp(buffer, "debug", 5)) {
@@ -31,18 +40,21 @@ void loop(void) {
       }
 #endif
       else if (!strncmp(buffer, "sync", 4)) {
-         printf("narf_sync()=%d\n", result ASSIGN narf_sync());
+         printf("narf_sync()=%s\n",
+            tf[result ASSIGN narf_sync()]);
       }
       else if (!strncmp(buffer, "alloc ", 6)) {
          char key[256];
          int size;
          sscanf(buffer, "alloc %s %d", key, &size);
-         printf("narf_alloc(%s,%d)=%d\n", key, size, result ASSIGN narf_alloc(key, size));
+         printf("narf_alloc(%s,%d)=%d\n",
+            key, size, result ASSIGN narf_alloc(key, size));
       }
       else if (!strncmp(buffer, "free ", 5)) {
          char key[256];
          sscanf(buffer, "free %s", key);
-         printf("narf_free(%s)=%d\n", key, result ASSIGN narf_free(key));
+         printf("narf_free(%s)=%s\n",
+            key, tf[result ASSIGN narf_free(key)]);
       }
       else if (!strncmp(buffer, "ls ", 3)) {
          char key[256];
