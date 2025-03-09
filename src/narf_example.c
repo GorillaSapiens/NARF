@@ -17,7 +17,19 @@ void loop(void) {
          break;
       }
       else if (!strncmp(buffer, "mkfs", 4)) {
-         printf("narf_format()=%d\n", result ASSIGN narf_format());
+         printf("narf_mkfs()=%d\n", result ASSIGN narf_mkfs());
+      }
+      else if (!strncmp(buffer, "init", 4)) {
+         printf("narf_init()=%d\n", result ASSIGN narf_init());
+      }
+      else if (!strncmp(buffer, "sync", 4)) {
+         printf("narf_sync()=%d\n", result ASSIGN narf_sync());
+      }
+      else if (!strncmp(buffer, "alloc", 5)) {
+         char key[256];
+         int size;
+         sscanf(buffer, "alloc %s %d", key, &size);
+         printf("narf_alloc(%s,%d)=%d\n", key, size, result ASSIGN narf_alloc(key, size));
       }
       else {
          printf("huh?\n");

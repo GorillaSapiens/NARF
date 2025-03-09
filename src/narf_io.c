@@ -43,6 +43,7 @@ bool narf_io_open(void) {
 }
 
 bool narf_io_close(void) {
+   sync();
    if (munmap(image, BYTES) == -1) {
       perror("munmap");
       exit(-1);

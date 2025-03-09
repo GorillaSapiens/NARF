@@ -1,17 +1,54 @@
 #ifndef _INCLUDE_NARF_FS_H_
 #define _INCLUDE_NARF_FS_H_
 
-/// Format (blank) a file system.  destructive !!!
+/// Create a NARF
 ///
-/// @return true on success
-bool narf_format(void);
+/// @return true for success
+bool narf_mkfs(void);
 
-/// Create a new directory
+/// Initialize a NARF
 ///
-/// @param sector The parent directory
-/// @param name The name of the directory
-/// @return true if successful, false if sector is not a directory
-bool narf_mkdir(uint32_t sector, const char *name);
+/// @return true for success
+bool narf_init(void);
+
+/// sync the NARF to disk
+///
+/// @return true for success
+bool narf_sync(void);
+
+/// Find the sector number matching the key
+///
+/// @param key The key to look for
+/// @return The sector of the key, or NARF_TAIL if not found
+uint32_t narf_find(const char *key);
+
+/// Find the sector number matching the key substring
+///
+/// @param key The key to look for
+/// @return The sector of the key, or NARF_TAIL if not found
+uint32_t narf_dirfind(const char *key);
+
+/// Allocate storage for key
+///
+/// @param key The key we're allocating for
+/// @return The new sector
+uint32_t narf_alloc(const char *key, uint32_t size);
+
+/// Free storage for key
+///
+/// @param key The key we're freeing
+/// @return true for success
+bool narf_free(const char *key);
+
+/// Rebalance the entire tree
+///
+/// @return true for success
+bool narf_rebalance(void);
+
+/// insert sector into the tree
+///
+/// @return true for success
+bool narf_insert(uint32_t sector, const uint8_t *key);
 
 #endif
 
