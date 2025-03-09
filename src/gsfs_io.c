@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -26,7 +27,7 @@ bool gsfs_io_open(void) {
       }
    }
    else {
-      fd = open(FILENAME, O_RDWR | O_CREAT, 0666);
+      fd = open(FILENAME, O_RDWR | O_CREAT, 0766);
       if (fd == -1) {
          perror("create example.gsfs");
          exit(-1);
@@ -55,11 +56,19 @@ uint32_t gsfs_io_sectors(void) {
 }
 
 bool gsfs_io_write(uint32_t sector, uint8_t *data) {
-   return true;
+   bool ret = true;
+   if (NULL == memcpy(image + sector * SECTOR_SIZE, data, SECTOR_SIZE)) {
+      ret = false;
+   }
+   return ret;
 }
 
 bool gsfs_io_read(uint32_t sector, uint8_t *data) {
-   return true;
+   bool ret = true;
+   if (NULL == memcpy(data, image + sector * SECTOR_SIZE, SECTOR_SIZE)) {
+      ret = false;
+   }
+   return ret;
 }
 
 // vim:set ai softtabstop=3 shiftwidth=3 tabstop=3 expandtab: ff=unix

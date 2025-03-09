@@ -28,24 +28,35 @@ typedef struct __attribute__((packed)) {
    GSFS_NodeHeader head;
    uint32_t directory_tree;  // sector containing root of directory tree
    uint32_t free_list;       // list of free sectors
+   uint32_t size;            // number of used sectors
 } GSFS_RootNode;
 
-static_assert(sizeof(GSFS_RootNode) == 20, "GSFS_RootNode wrong size");
+static_assert(sizeof(GSFS_RootNode) == 24, "GSFS_RootNode wrong size");
 
 typedef struct __attribute__((packed)) {
    GSFS_NodeHeader head;
    uint32_t parent;
    uint32_t left;
    uint32_t right;
+   uint32_t children;
 } GSFS_TreeNode;
-static_assert(sizeof(GSFS_TreeNode) == 24, "GSFS_TreeNode wrong size");
+static_assert(sizeof(GSFS_TreeNode) == 28, "GSFS_TreeNode wrong size");
+
+typedef struct __attribute__((packed)) {
+   union {
+      GSFS_NodeHeader head;
+      GSFS_TreeNode tree;
+   };
+   uint8_t name[512 - 28];
+} GSFS_DirNode;
+static_assert(sizeof(GSFS_DirNode) == 512, "GSFS_DirNode wrong size");
 
 typedef struct __attribute__((packed)) {
    GSFS_NodeHeader head;
    uint32_t parent;
    uint32_t child;
 } GSFS_ListNode;
-static_assert(sizeof(GSFS_RootNode) == 20, "GSFS_ListNode wrong size");
+static_assert(sizeof(GSFS_ListNode) == 20, "GSFS_ListNode wrong size");
 
 #endif
 
