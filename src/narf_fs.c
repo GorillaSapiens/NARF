@@ -142,7 +142,17 @@ uint32_t narf_alloc(const char *key, uint32_t size) {
 ///
 /// @param key The key we're freeing
 /// @return true for success
-bool narf_free(const char *key);
+bool narf_free(const char *key) {
+   uint32_t sector = narf_find(key);
+
+   if (sector == NARF_TAIL) {
+      return false;
+   }
+
+   // TODO FIX
+ 
+   return true;
+}
 
 /// Rebalance the entire tree
 ///
