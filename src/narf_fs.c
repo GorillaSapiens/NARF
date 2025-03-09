@@ -9,34 +9,34 @@
 uint8_t buffer[512];
 
 bool narf_format(void) {
-   GSFS_RootNode *p = (GSFS_RootNode *)buffer;
+   NARF_RootNode *p = (NARF_RootNode *)buffer;
    memset(buffer, 0, sizeof(buffer));
-   p->head.signature = GSFS_SIGNATURE;
-   p->head.version   = GSFS_VERSION;
-   p->head.node_type = GSFS_NODE_ROOT;
-   p->directory_tree = GSFS_TAIL;
-   p->free_list      = GSFS_TAIL;
+   p->head.signature = NARF_SIGNATURE;
+   p->head.version   = NARF_VERSION;
+   p->head.node_type = NARF_NODE_ROOT;
+   p->directory_tree = NARF_TAIL;
+   p->free_list      = NARF_TAIL;
    p->size           = 1;
 
    return narf_io_write(0, buffer);
 }
 
 bool narf_check_head(void) {
-   GSFS_NodeHeader *head = (GSFS_NodeHeader *)buffer;
-   return head->signature == GSFS_SIGNATURE &&
-          head->version == GSFS_VERSION;
+   NARF_NodeHeader *head = (NARF_NodeHeader *)buffer;
+   return head->signature == NARF_SIGNATURE &&
+          head->version == NARF_VERSION;
 }
 
 bool narf_mkdir(uint32_t sector, const char *name) {
-   GSFS_RootNode *p = (GSFS_RootNode *)buffer;
+   NARF_RootNode *p = (NARF_RootNode *)buffer;
 again:
    if (!narf_io_read(sector, buffer)) return false;
    if (!narf_check_head()) return false;
 
-   if (p->head.node_type == GSFS_NODE_ROOT) {
+   if (p->head.node_type == NARF_NODE_ROOT) {
       if
    }
-   else if (p->head.node_type == GSFS_NODE_DIR) {
+   else if (p->head.node_type == NARF_NODE_DIR) {
    }
    else {
       return false;

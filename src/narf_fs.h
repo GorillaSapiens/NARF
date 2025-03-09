@@ -1,5 +1,5 @@
-#ifndef _INCLUDE_GSFS_FS_H_
-#define _INCLUDE_GSFS_FS_H_
+#ifndef _INCLUDE_NARF_FS_H_
+#define _INCLUDE_NARF_FS_H_
 
 /// Format (blank) a file system.  destructive !!!
 ///

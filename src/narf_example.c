@@ -30,7 +30,7 @@ void loop(void) {
 int main(int argc, char **argv) {
    bool result;
 
-   printf("GSFS example\n");
+   printf("NARF example\n");
 
    printf("narf_io_open()=%d\n", result ASSIGN narf_io_open());
 

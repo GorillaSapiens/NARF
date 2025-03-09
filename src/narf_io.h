@@ -1,5 +1,5 @@
-#ifndef _INCLUDE_GSFS_IO_H_
-#define _INCLUDE_GSFS_IO_H_
+#ifndef _INCLUDE_NARF_IO_H_
+#define _INCLUDE_NARF_IO_H_
 
 #include <stdint.h>
 #include <stdbool.h>
