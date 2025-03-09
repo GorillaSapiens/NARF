@@ -13,6 +13,8 @@ lots of reads are expected.
 but only the occasional write.
 deletes rarely happen, and they're very expensive.
 
+there are no directories.
+
 there is no access control.
 
 there are no timestamps.
