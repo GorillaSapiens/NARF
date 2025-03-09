@@ -15,7 +15,15 @@
 
 uint8_t buffer[SECTOR_SIZE] = { 0 };
 NARF_Root root = { 0 };
-NARF_Header *header = (NARF_Header *) buffer;
+NARF_Header *node = (NARF_Header *) buffer;
+
+static bool read_buffer(uint32_t sector) {
+   return narf_io_read(sector, buffer);
+}
+
+static bool write_buffer(uint32_t sector) {
+   return narf_io_write(sector, buffer);
+}
 
 static bool verify(void) {
    if (root.signature != NARF_SIGNATURE) return false;
@@ -38,7 +46,7 @@ bool narf_mkfs(uint32_t sectors) {
    root.first         = NARF_END;
    root.chain         = NARF_END;
    memcpy(buffer, &root, sizeof(root));
-   narf_io_write(0, buffer);
+   write_buffer(0);
    return true;
 }
 
@@ -46,7 +54,7 @@ bool narf_mkfs(uint32_t sectors) {
 ///
 /// @return true for success
 bool narf_init(void) {
-   narf_io_read(0, buffer);
+   read_buffer(0);
    memcpy(&root, buffer, sizeof(root));
    return verify();
 }
@@ -58,7 +66,7 @@ bool narf_sync(void) {
    if (!verify()) return false;
    memset(buffer, 0, sizeof(buffer));
    memcpy(buffer, &root, sizeof(root));
-   return narf_io_write(0, buffer);
+   return write_buffer(0);
 }
 
 /// Find the sector number matching the key
@@ -75,13 +83,13 @@ uint32_t narf_find(const char *key) {
       if (ret == NARF_END) {
          return ret;
       }
-      narf_io_read(ret, buffer);
-      cmp = strncmp(key, header->key, sizeof(header->key));
+      read_buffer(ret);
+      cmp = strncmp(key, node->key, sizeof(node->key));
       if (cmp < 0) {
-         ret = header->left;
+         ret = node->left;
       }
       else if (cmp > 0) {
-         ret = header->right;
+         ret = node->right;
       }
       else {
          return ret;
@@ -105,23 +113,23 @@ uint32_t narf_dirfind(const char *key) {
       if (ret == NARF_END) {
          return ret;
       }
-      narf_io_read(ret, buffer);
-      cmp = strncmp(key, header->key, strlen(key));
+      read_buffer(ret);
+      cmp = strncmp(key, node->key, strlen(key));
       if (cmp < 0) {
-         ret = header->left;
+         ret = node->left;
       }
       else if (cmp > 0) {
-         ret = header->right;
+         ret = node->right;
       }
       else {
-         prev = header->prev;
+         prev = node->prev;
          while (prev != NARF_END) {
-            narf_io_read(prev, buffer);
-            if (strncmp(key, header->key, strlen(key))) {
+            read_buffer(prev);
+            if (strncmp(key, node->key, strlen(key))) {
                break;
             }
             ret = prev;
-            prev = header->prev;
+            prev = node->prev;
          }
          return ret;
       }
@@ -148,28 +156,28 @@ static bool narf_insert(uint32_t sector, const uint8_t *key) {
    else {
       p = root.root;
       while (1) {
-         narf_io_read(p, buffer);
-         cmp = strncmp(key, header->key, sizeof(header->key));
+         read_buffer(p);
+         cmp = strncmp(key, node->key, sizeof(node->key));
          if (cmp < 0) {
-            if (header->left != NARF_END) {
-               p = header->left;
+            if (node->left != NARF_END) {
+               p = node->left;
             }
             else {
-               header->left = sector;
-               tmp = header->prev;
-               header->prev = sector;
-               narf_io_write(p, buffer);
+               node->left = sector;
+               tmp = node->prev;
+               node->prev = sector;
+               write_buffer(p);
 
-               narf_io_read(sector, buffer);
-               header->parent = p;
-               header->prev = tmp;
-               header->next = p;
-               narf_io_write(sector, buffer);
+               read_buffer(sector);
+               node->parent = p;
+               node->prev = tmp;
+               node->next = p;
+               write_buffer(sector);
 
                if (tmp != NARF_END) {
-                  narf_io_read(tmp, buffer);
-                  header->next = sector;
-                  narf_io_write(tmp, buffer);
+                  read_buffer(tmp);
+                  node->next = sector;
+                  write_buffer(tmp);
                }
                else {
                   root.first = sector;
@@ -180,25 +188,25 @@ static bool narf_insert(uint32_t sector, const uint8_t *key) {
             }
          }
          else if (cmp > 0) {
-            if (header->right != NARF_END) {
-               p = header->right;
+            if (node->right != NARF_END) {
+               p = node->right;
             }
             else {
-               header->right = sector;
-               tmp = header->next;
-               header->next = sector;
-               narf_io_write(p, buffer);
+               node->right = sector;
+               tmp = node->next;
+               node->next = sector;
+               write_buffer(p);
 
-               narf_io_read(sector, buffer);
-               header->parent = p;
-               header->next = tmp;
-               header->prev = p;
-               narf_io_write(sector, buffer);
+               read_buffer(sector);
+               node->parent = p;
+               node->next = tmp;
+               node->prev = p;
+               write_buffer(sector);
 
                if (tmp != NARF_END) {
-                  narf_io_read(tmp, buffer);
-                  header->prev = sector;
-                  narf_io_write(tmp, buffer);
+                  read_buffer(tmp);
+                  node->prev = sector;
+                  write_buffer(tmp);
                }
 
                break;
@@ -230,23 +238,23 @@ uint32_t narf_alloc(const char *key, uint32_t size) {
    s = root.vacant;
    ++root.vacant;
 
-   header->parent = NARF_END;
-   header->left   = NARF_END;
-   header->right  = NARF_END;
-   header->prev    = NARF_END;
-   header->next    = NARF_END;
-   header->start  = root.vacant;
-   header->length = (size + SECTOR_SIZE - 1) / SECTOR_SIZE;
-   header->bytes  = size;
+   node->parent = NARF_END;
+   node->left   = NARF_END;
+   node->right  = NARF_END;
+   node->prev    = NARF_END;
+   node->next    = NARF_END;
+   node->start  = root.vacant;
+   node->length = (size + SECTOR_SIZE - 1) / SECTOR_SIZE;
+   node->bytes  = size;
 
-   root.vacant += header->length;
+   root.vacant += node->length;
 
-   strncpy(header->key, key, sizeof(header->key));
-   narf_io_write(s, buffer);
+   strncpy(node->key, key, sizeof(node->key));
+   write_buffer(s);
 
 #ifdef NARF_DEBUG
    printf("alloc %08x %08x %d %d\n",
-         s, header->start, header->length, header->bytes);
+         s, node->start, node->length, node->bytes);
 #endif
 
    narf_sync();
@@ -271,27 +279,27 @@ bool narf_free(const char *key) {
       return false;
    }
 
-   narf_io_read(sector, buffer);
-   prev = header->prev;
-   next = header->next;
-   header->prev = NARF_END;
-   header->next = NARF_END;
-   header->left = NARF_END;
-   header->right = NARF_END;
-   header->parent = NARF_END;
-   header->bytes = 0;
-   narf_io_write(sector, buffer);
+   read_buffer(sector);
+   prev = node->prev;
+   next = node->next;
+   node->prev = NARF_END;
+   node->next = NARF_END;
+   node->left = NARF_END;
+   node->right = NARF_END;
+   node->parent = NARF_END;
+   node->bytes = 0;
+   write_buffer(sector);
 
    if (next != NARF_END) {
-      narf_io_read(next, buffer);
-      header->prev = prev;
-      narf_io_write(next, buffer);
+      read_buffer(next);
+      node->prev = prev;
+      write_buffer(next);
    }
 
    if (prev != NARF_END) {
-      narf_io_read(prev, buffer);
-      header->next = next;
-      narf_io_write(prev, buffer);
+      read_buffer(prev);
+      node->next = next;
+      write_buffer(prev);
    }
    else {
       root.first = next;
@@ -300,27 +308,27 @@ bool narf_free(const char *key) {
 
    // record them in the free chain
    if (root.chain == NARF_END) {
-      narf_io_read(sector, buffer);
-      header->next = root.chain;
-      narf_io_write(sector, buffer);
+      read_buffer(sector);
+      node->next = root.chain;
+      write_buffer(sector);
       root.chain = sector;
       narf_sync();
    }
    else {
       // smallest records first
-      narf_io_read(sector, buffer);
-      length = header->length;
+      read_buffer(sector);
+      length = node->length;
 
       // reuse of prev and next variables here
       prev = NARF_END;
       next = root.chain;
-      narf_io_read(next, buffer);
+      read_buffer(next);
 
-      while (length > header->length && next != NARF_END) {
+      while (length > node->length && next != NARF_END) {
          prev = next;
-         next = header->next;
+         next = node->next;
          if (next != NARF_END) {
-            narf_io_read(next, buffer);
+            read_buffer(next);
          }
       }
       if (prev == NARF_END) {
@@ -328,13 +336,13 @@ bool narf_free(const char *key) {
          narf_sync();
       }
       else {
-         narf_io_read(prev, buffer);
-         header->next = sector;
-         narf_io_write(prev, buffer);
+         read_buffer(prev);
+         node->next = sector;
+         write_buffer(prev);
       }
-      narf_io_read(sector, buffer);
-      header->next = next;
-      narf_io_write(sector, buffer);
+      read_buffer(sector);
+      node->next = next;
+      write_buffer(sector);
    }
 
    narf_rebalance();
@@ -366,8 +374,8 @@ bool narf_rebalance(void) {
 
    while (sector != NARF_END) {
       ++count;
-      narf_io_read(sector, buffer);
-      sector = header->next;
+      read_buffer(sector);
+      sector = node->next;
    }
 
    root.root = NARF_END;
@@ -382,34 +390,34 @@ bool narf_rebalance(void) {
       spot = 0;
 
       while (numerator < denominator) {
-         narf_io_read(sector, buffer);
+         read_buffer(sector);
          while (sector != NARF_END) {
-            next = header->next;
+            next = node->next;
             if (spot == target) {
-               prev = header->prev;
+               prev = node->prev;
 
                if (head == sector) {
                   head = next;
                }
                if (prev != NARF_END) {
-                  narf_io_read(prev, buffer);
-                  header->next = next;
-                  narf_io_write(prev, buffer);
+                  read_buffer(prev);
+                  node->next = next;
+                  write_buffer(prev);
                }
                if (next != NARF_END) {
-                  narf_io_read(next, buffer);
-                  header->prev = prev;
-                  narf_io_write(next, buffer);
+                  read_buffer(next);
+                  node->prev = prev;
+                  write_buffer(next);
                }
 
-               narf_io_read(sector, buffer);
-               header->prev = NARF_END;
-               header->next = NARF_END;
-               header->left = NARF_END;
-               header->right = NARF_END;
-               header->parent = NARF_END;
-               strncpy(key, header->key, sizeof(header->key));
-               narf_io_write(sector, buffer);
+               read_buffer(sector);
+               node->prev = NARF_END;
+               node->next = NARF_END;
+               node->left = NARF_END;
+               node->right = NARF_END;
+               node->parent = NARF_END;
+               strncpy(key, node->key, sizeof(node->key));
+               write_buffer(sector);
 
                narf_insert(sector, key);
 
@@ -419,7 +427,7 @@ bool narf_rebalance(void) {
             ++spot;
             sector = next;
             if (sector != NARF_END) {
-               narf_io_read(sector, buffer);
+               read_buffer(sector);
             }
          }
       }
@@ -431,15 +439,15 @@ bool narf_rebalance(void) {
    // now finish the job
    sector = head;
    while (sector != NARF_END) {
-      narf_io_read(sector, buffer);
-      next = header->next;
-      header->prev = NARF_END;
-      header->next = NARF_END;
-      header->left = NARF_END;
-      header->right = NARF_END;
-      header->parent = NARF_END;
-      strncpy(key, header->key, sizeof(header->key));
-      narf_io_write(sector, buffer);
+      read_buffer(sector);
+      next = node->next;
+      node->prev = NARF_END;
+      node->next = NARF_END;
+      node->left = NARF_END;
+      node->right = NARF_END;
+      node->parent = NARF_END;
+      strncpy(key, node->key, sizeof(node->key));
+      write_buffer(sector);
 
       narf_insert(sector, key);
 
@@ -460,10 +468,10 @@ static void narf_pt(uint32_t sector, int indent) {
       printf("%*s\n", indent * 2 + 1, "-");
       return;
    }
-   narf_io_read(sector, buffer);
-   l = header->left;
-   r = header->right;
-   p = strdup(header->key);
+   read_buffer(sector);
+   l = node->left;
+   r = node->right;
+   p = strdup(node->key);
    narf_pt(l, indent + 1);
    printf("%*s\n", indent * 2 + strlen(p), p);
    narf_pt(r, indent + 1);
@@ -502,21 +510,27 @@ void narf_debug(void) {
    printf("root.first         = %d\n", root.first);
 
    sector = root.first;
-
    while (sector != NARF_END) {
       printf("\n");
-      narf_io_read(sector, buffer);
+      read_buffer(sector);
       printf("sector = %d\n", sector);
-      printf("key    = '%s'\n", header->key);
-      printf("left   = %d\n", header->left);
-      printf("right  = %d\n", header->right);
-      printf("prev   = %d\n", header->prev);
-      printf("next   = %d\n", header->next);
-      printf("start  = %d\n", header->start);
-      printf("length = %d\n", header->length);
-      printf("bytes  = %d\n", header->bytes);
+      printf("key    = '%s'\n", node->key);
+      printf("left   = %d\n", node->left);
+      printf("right  = %d\n", node->right);
+      printf("prev   = %d\n", node->prev);
+      printf("next   = %d\n", node->next);
+      printf("start  = %d\n", node->start);
+      printf("length = %d\n", node->length);
+      printf("bytes  = %d\n", node->bytes);
 
-      sector = header->next;
+      sector = node->next;
+   }
+
+   sector = root.chain;
+   while (sector != NARF_END) {
+      read_buffer(sector);
+      printf("%d (%d:%d) -> %d\n", sector, node->start, node->length, node->next);
+      sector = node->next;
    }
 
    narf_pt(root.root, 0);
