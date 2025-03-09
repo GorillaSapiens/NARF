@@ -69,6 +69,40 @@ static bool verify(void) {
    return true;
 }
 
+/// Get the name
+///
+/// returns pointer to static buffer overwritten each call!
+///
+const char *narf_get_name(uint32_t sector) {
+   if (!verify() || sector == END) return NULL;
+   read_buffer(sector);
+   return node->key;
+}
+
+/// Get the data sector
+///
+uint32_t narf_get_data_sector(uint32_t sector) {
+   if (!verify() || sector == END) return END;
+   read_buffer(sector);
+   return node->start;
+}
+
+/// Get the data size in bytes
+///
+uint32_t narf_get_data_size(uint32_t sector) {
+   if (!verify() || sector == END) return 0;
+   read_buffer(sector);
+   return node->bytes;
+}
+
+/// Get the data sector
+///
+uint32_t narf_get_next(uint32_t sector) {
+   if (!verify() || sector == END) return END;
+   read_buffer(sector);
+   return node->next;
+}
+
 /// Create a NARF
 ///
 /// @return true for success

@@ -48,6 +48,24 @@ bool narf_free(const char *key);
 /// @return true for success
 bool narf_rebalance(void);
 
+/// Get the name
+///
+/// returns pointer to static buffer overwritten each call!
+///
+const char *narf_get_name(uint32_t sector);
+
+/// Get the data sector
+///
+uint32_t narf_get_data_sector(uint32_t sector);
+
+/// Get the data size in bytes
+///
+uint32_t narf_get_data_size(uint32_t sector);
+
+/// Get the data sector
+///
+uint32_t narf_get_next(uint32_t sector);
+
 #ifdef NARF_DEBUG
 /// Print some debug info
 void narf_debug(void);
