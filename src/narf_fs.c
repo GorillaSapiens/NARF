@@ -515,6 +515,7 @@ void narf_debug(void) {
       read_buffer(sector);
       printf("sector = %d\n", sector);
       printf("key    = '%s'\n", node->key);
+      printf("parent = %d\n", node->parent);
       printf("left   = %d\n", node->left);
       printf("right  = %d\n", node->right);
       printf("prev   = %d\n", node->prev);
