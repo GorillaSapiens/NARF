@@ -20,6 +20,7 @@ typedef struct __attribute__((packed)) {
 static_assert(sizeof(NARF_Root) == 24, "NARF_Root wrong size");
 
 typedef struct __attribute__((packed)) {
+   uint32_t parent;      // parent sector
    uint32_t left;        // left sibling sector
    uint32_t right;       // right sibling sector
    uint32_t prv;         // next sequential sector
@@ -29,7 +30,7 @@ typedef struct __attribute__((packed)) {
    uint32_t length;      // the length in sectors
    uint32_t bytes;       // size in bytes
 
-   uint8_t key[512 - 7 * sizeof(uint32_t)]; // key
+   uint8_t key[512 - 8 * sizeof(uint32_t)]; // key
 } NARF_Header;
 
 static_assert(sizeof(NARF_Header) == 512, "NARF_Header wrong size");

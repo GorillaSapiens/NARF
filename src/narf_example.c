@@ -22,6 +22,9 @@ void loop(void) {
       else if (!strncmp(buffer, "init", 4)) {
          printf("narf_init()=%d\n", result ASSIGN narf_init());
       }
+      else if (!strncmp(buffer, "debug", 5)) {
+         narf_debug();
+      }
       else if (!strncmp(buffer, "sync", 4)) {
          printf("narf_sync()=%d\n", result ASSIGN narf_sync());
       }
@@ -30,6 +33,11 @@ void loop(void) {
          int size;
          sscanf(buffer, "alloc %s %d", key, &size);
          printf("narf_alloc(%s,%d)=%d\n", key, size, result ASSIGN narf_alloc(key, size));
+      }
+      else if (!strncmp(buffer, "free", 4)) {
+         char key[256];
+         sscanf(buffer, "free %s", key);
+         printf("narf_free(%s)=%d\n", key, result ASSIGN narf_free(key));
       }
       else {
          printf("huh?\n");

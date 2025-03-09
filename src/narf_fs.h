@@ -50,6 +50,8 @@ bool narf_rebalance(void);
 /// @return true for success
 bool narf_insert(uint32_t sector, const uint8_t *key);
 
+void narf_debug(void);
+
 #endif
 
 // vim:set ai softtabstop=3 shiftwidth=3 tabstop=3 expandtab: ff=unix

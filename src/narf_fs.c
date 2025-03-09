@@ -8,6 +8,7 @@
 
 #define DEBUG
 #include <stdio.h>
+#include <math.h>
 
 #define SECTOR_SIZE 512
 
@@ -116,6 +117,7 @@ uint32_t narf_alloc(const char *key, uint32_t size) {
    s = root.free;
    ++root.free;
 
+   header->parent = NARF_TAIL;
    header->left   = NARF_TAIL;
    header->right  = NARF_TAIL;
    header->prv    = NARF_TAIL;
@@ -131,11 +133,62 @@ uint32_t narf_alloc(const char *key, uint32_t size) {
 
 #ifdef DEBUG
    printf("alloc %08x %08x %d %d\n",
-      s, header->start, header->length, header->bytes);
+         s, header->start, header->length, header->bytes);
 #endif
 
    narf_sync();
    narf_insert(s, key);
+}
+
+bool narf_pivotdown(uint32_t sector) {
+   uint32_t parent;
+   uint32_t right;
+   uint32_t beta;
+
+   narf_io_read(sector, buffer);
+   while (header->left != NARF_TAIL && header->right != NARF_TAIL) {
+
+      parent = header->parent;
+      right = header->right;
+      narf_io_read(right, buffer);
+      beta = header->left;
+
+      if (parent == NARF_TAIL) {
+         // we were root
+         root.root = right;
+         narf_sync();
+      }
+      else {
+         narf_io_read(parent, buffer);
+         if (header->left == sector) {
+            header->left = right;
+         }
+         else if (header->right == sector) {
+            header->right = right;
+         }
+         else {
+            // this should never happen
+         }
+         narf_io_write(parent, buffer);
+      }
+
+      narf_io_read(right, buffer);
+      header->parent = parent;
+      header->left = sector;
+      narf_io_write(right, buffer);
+
+      if (beta != NARF_TAIL) {
+         narf_io_read(beta, buffer);
+         header->parent = sector;
+         narf_io_write(beta, buffer);
+      }
+
+      // must be last
+      narf_io_read(sector, buffer);
+      header->parent = right;
+      header->right = beta;
+      narf_io_write(sector, buffer);
+   }
 }
 
 /// Free storage for key
@@ -144,13 +197,76 @@ uint32_t narf_alloc(const char *key, uint32_t size) {
 /// @return true for success
 bool narf_free(const char *key) {
    uint32_t sector = narf_find(key);
+   uint32_t prv;
+   uint32_t nxt;
+   uint32_t start;
+   uint32_t length;
+   uint32_t parent;
+   uint32_t left;
+   uint32_t right;
 
    if (sector == NARF_TAIL) {
       return false;
    }
 
-   // TODO FIX
- 
+   narf_pivotdown(sector);
+
+   narf_io_read(sector, buffer);
+   header->bytes = 0;
+   parent = header->parent;
+   left = header->left;
+   right = header->right;
+   prv = header->prv;
+   nxt = header->nxt;
+   start = header->start;
+   length = header->length;
+   narf_io_write(sector, buffer);
+
+   if (prv != NARF_TAIL) {
+      narf_io_read(prv, buffer);
+      header->nxt = nxt;
+      narf_io_write(prv,buffer);
+   }
+   else {
+      root.first = nxt;
+      narf_sync();
+   }
+
+   if (nxt != NARF_TAIL) {
+      narf_io_read(nxt, buffer);
+      header->prv = prv;
+      narf_io_write(nxt, buffer);
+   }
+
+   if (left == NARF_TAIL || right == NARF_TAIL) {
+      // easy case
+      if (left == NARF_TAIL) {
+         left = right;
+      }
+
+      narf_io_read(left, buffer);
+      header->parent = parent;
+      narf_io_write(left, buffer);
+
+      narf_io_read(parent, buffer);
+      if (header->left == sector) {
+         header->left = left;
+      }
+      else if (header->right == sector) {
+         header->right = left;
+      }
+      else {
+         // this should never happen
+      }
+      narf_io_write(parent, buffer);
+   }
+   else {
+      // this should never happen
+      // because we've already pivoted down...
+   }
+
+   // TODO store them, and the data, in a free chain
+
    return true;
 }
 
@@ -169,6 +285,7 @@ bool narf_insert(uint32_t sector, const uint8_t *key) {
    int cmp;
    if (root.root == NARF_TAIL) {
       root.root = sector;
+      root.first = sector;
       narf_sync();
    }
    else {
@@ -187,6 +304,7 @@ bool narf_insert(uint32_t sector, const uint8_t *key) {
                narf_io_write(p, buffer);
 
                narf_io_read(sector, buffer);
+               header->parent = p;
                header->prv = tmp;
                header->nxt = p;
                narf_io_write(sector, buffer);
@@ -211,9 +329,11 @@ bool narf_insert(uint32_t sector, const uint8_t *key) {
             else {
                header->right = sector;
                tmp = header->nxt;
+               header->nxt = sector;
                narf_io_write(p, buffer);
 
                narf_io_read(sector, buffer);
+               header->parent = p;
                header->nxt = tmp;
                header->prv = p;
                narf_io_write(sector, buffer);
@@ -233,6 +353,50 @@ bool narf_insert(uint32_t sector, const uint8_t *key) {
       }
    }
    return true;
+}
+
+void narf_pt(uint32_t sector, int indent) {
+   uint32_t l, r;
+   char *p;
+   if (sector == NARF_TAIL) return;
+   narf_io_read(sector, buffer);
+   l = header->left;
+   r = header->right;
+   p = strdup(header->key);
+   narf_pt(l, indent + 1);
+   printf("%*s\n", indent * 2, p);
+   narf_pt(r, indent + 1);
+}
+
+void narf_debug(void) {
+   uint32_t sector;
+
+   printf("root.signature   = %08x\n", root.signature);
+   printf("root.version     = %08x\n", root.version);
+   printf("root.sector_size = %d\n", root.sector_size);
+   printf("root.free        = %d\n", root.free);
+   printf("root.root        = %d\n", root.root);
+   printf("root.first       = %d\n", root.first);
+
+   sector = root.first;
+
+   while (sector != NARF_TAIL) {
+      printf("\n");
+      narf_io_read(sector, buffer);
+      printf("sector = %d\n", sector);
+      printf("key    = '%s'\n", header->key);
+      printf("left   = %d\n", header->left);
+      printf("right  = %d\n", header->right);
+      printf("prv    = %d\n", header->prv);
+      printf("nxt    = %d\n", header->nxt);
+      printf("start  = %d\n", header->start);
+      printf("length = %d\n", header->length);
+      printf("bytes  = %d\n", header->bytes);
+
+      sector = header->nxt;
+   }
+
+   narf_pt(root.root, 0);
 }
 
 // vim:set ai softtabstop=3 shiftwidth=3 tabstop=3 expandtab: ff=unix
