@@ -22,6 +22,9 @@ void loop(void) {
       else if (!strncmp(buffer, "init", 4)) {
          printf("narf_init()=%d\n", result ASSIGN narf_init());
       }
+      else if (!strncmp(buffer, "rebalance", 9)) {
+         narf_rebalance();
+      }
       else if (!strncmp(buffer, "debug", 5)) {
          narf_debug();
       }
