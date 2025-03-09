@@ -7,6 +7,7 @@
 #include "narf_data.h"
 
 #ifdef NARF_DEBUG
+#include <stdlib.h>
 #include <stdio.h>
 #include <math.h>
 #endif
@@ -220,12 +221,78 @@ static bool narf_insert(uint32_t sector, const uint8_t *key) {
    return true;
 }
 
+/// add a sector to the free chain
+///
+/// @param sector The sector to add
+void narf_chain(uint32_t sector) {
+   uint32_t prev;
+   uint32_t next;
+   uint32_t length;
+
+   // reset fields
+   read_buffer(sector);
+   node->prev = NARF_END;
+   node->next = NARF_END;
+   node->left = NARF_END;
+   node->right = NARF_END;
+   node->parent = NARF_END;
+   node->bytes = 0;
+   // do NOT reset "start" and "length"
+   write_buffer(sector);
+
+   // record them in the free chain
+   if (root.chain == NARF_END) {
+      // done above // read_buffer(sector);
+      node->next = root.chain;
+      write_buffer(sector);
+
+      root.chain = sector;
+      narf_sync();
+   }
+   else {
+      // smallest records first
+      // done above // read_buffer(sector);
+      length = node->length;
+
+      prev = NARF_END;
+      next = root.chain;
+      read_buffer(next);
+
+      while (length > node->length && next != NARF_END) {
+         prev = next;
+         next = node->next;
+         if (next != NARF_END) {
+            read_buffer(next);
+         }
+      }
+      if (prev == NARF_END) {
+         root.chain = sector;
+         narf_sync();
+      }
+      else {
+         read_buffer(prev);
+         node->next = sector;
+         write_buffer(prev);
+      }
+      read_buffer(sector);
+      node->next = next;
+      write_buffer(sector);
+   }
+}
+
 /// Allocate storage for key
 ///
 /// @param key The key we're allocating for
 /// @return The new sector
 uint32_t narf_alloc(const char *key, uint32_t size) {
    uint32_t s;
+   uint32_t prev;
+   uint32_t next;
+
+   uint32_t length;
+   uint32_t excess;
+
+   length = (size + SECTOR_SIZE - 1) / SECTOR_SIZE;
 
    if (!verify()) return false;
 
@@ -235,20 +302,67 @@ uint32_t narf_alloc(const char *key, uint32_t size) {
       return false;
    }
 
-   s = root.vacant;
-   ++root.vacant;
+   // first check if we can allocate from the chain
+   prev = NARF_END;
+   next = root.chain;
+   while(next != NARF_END) {
+      read_buffer(next);
+      if (node->length >= length) {
+         // this will do nicely
+         s = next;
+         next = node->next;
 
+         // pull it out
+         if (prev == NARF_END) {
+            root.chain = next;
+            narf_sync();
+         }
+         else {
+            read_buffer(prev);
+            node->next = next;
+            write_buffer(prev);
+         }
+
+         read_buffer(s);
+         if (node->length > length) {
+            // we need to trim the excess.
+            excess = node->length - length;
+            prev = node->start + length;
+
+            node->length = length;
+            write_buffer(s);
+
+            read_buffer(prev);
+            node->start = prev + 1;
+            node->length = excess - 1;
+            write_buffer(prev);
+
+            narf_chain(prev);
+
+            read_buffer(s);
+         }
+         break;
+      }
+      prev = next;
+      next = node->next;
+   }
+
+   if (s == NARF_END) {
+      // nothing on the chain was suitable
+      s = root.vacant;
+      ++root.vacant;
+      node->start  = root.vacant;
+      node->length = length;
+      root.vacant += length;
+   }
+
+   // reset fields except start and length
    node->parent = NARF_END;
    node->left   = NARF_END;
    node->right  = NARF_END;
    node->prev    = NARF_END;
    node->next    = NARF_END;
-   node->start  = root.vacant;
-   node->length = (size + SECTOR_SIZE - 1) / SECTOR_SIZE;
    node->bytes  = size;
-
-   root.vacant += node->length;
-
    strncpy(node->key, key, sizeof(node->key));
    write_buffer(s);
 
@@ -282,12 +396,6 @@ bool narf_free(const char *key) {
    read_buffer(sector);
    prev = node->prev;
    next = node->next;
-   node->prev = NARF_END;
-   node->next = NARF_END;
-   node->left = NARF_END;
-   node->right = NARF_END;
-   node->parent = NARF_END;
-   node->bytes = 0;
    write_buffer(sector);
 
    if (next != NARF_END) {
@@ -306,44 +414,7 @@ bool narf_free(const char *key) {
       narf_sync();
    }
 
-   // record them in the free chain
-   if (root.chain == NARF_END) {
-      read_buffer(sector);
-      node->next = root.chain;
-      write_buffer(sector);
-      root.chain = sector;
-      narf_sync();
-   }
-   else {
-      // smallest records first
-      read_buffer(sector);
-      length = node->length;
-
-      // reuse of prev and next variables here
-      prev = NARF_END;
-      next = root.chain;
-      read_buffer(next);
-
-      while (length > node->length && next != NARF_END) {
-         prev = next;
-         next = node->next;
-         if (next != NARF_END) {
-            read_buffer(next);
-         }
-      }
-      if (prev == NARF_END) {
-         root.chain = sector;
-         narf_sync();
-      }
-      else {
-         read_buffer(prev);
-         node->next = sector;
-         write_buffer(prev);
-      }
-      read_buffer(sector);
-      node->next = next;
-      write_buffer(sector);
-   }
+   narf_chain(sector);
 
    narf_rebalance();
 
@@ -458,23 +529,40 @@ bool narf_rebalance(void) {
 }
 
 #ifdef NARF_DEBUG
-static void narf_pt(uint32_t sector, int indent) {
+static void narf_pt(uint32_t sector, int indent, uint32_t pattern) {
    uint32_t l, r;
+   int i;
    char *p;
 
    if (!verify()) return;
 
+   if (sector != NARF_END) {
+      read_buffer(sector);
+      l = node->left;
+      r = node->right;
+      p = strdup(node->key);
+      narf_pt(l, indent + 1, pattern);
+   }
+
+   for (i = 0; i < indent; i++) {
+      if (pattern & (1 << i)) {
+         printf("|  ");
+      }
+      else {
+         printf("   ");
+      }
+   }
+
    if (sector == NARF_END) {
-      printf("%*s\n", indent * 2 + 1, "-");
+      printf("+- (nil)\n");
       return;
    }
-   read_buffer(sector);
-   l = node->left;
-   r = node->right;
-   p = strdup(node->key);
-   narf_pt(l, indent + 1);
-   printf("%*s\n", indent * 2 + strlen(p), p);
-   narf_pt(r, indent + 1);
+   else {
+      printf("+- %s [%d]\n", p, sector);
+      free(p);
+   }
+
+   narf_pt(r, indent + 1, (pattern ^ (3 << (indent))) & ~1);
 }
 
 void narf_debug(void) {
@@ -527,6 +615,7 @@ void narf_debug(void) {
       sector = node->next;
    }
 
+   printf("\nfreechain:\n");
    sector = root.chain;
    while (sector != NARF_END) {
       read_buffer(sector);
@@ -534,7 +623,7 @@ void narf_debug(void) {
       sector = node->next;
    }
 
-   narf_pt(root.root, 0);
+   narf_pt(root.root, 0, 0);
 }
 #endif
 
