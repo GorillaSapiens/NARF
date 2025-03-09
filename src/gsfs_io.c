@@ -6,11 +6,11 @@
 #include <errno.h>
 #include <sys/mman.h>
 
-#include "gsfs_io.h"
+#include "narf_io.h"
 
 // This is an example implementation using mmap'd files.
 
-#define FILENAME "example.gsfs"
+#define FILENAME "example.narf"
 #define SECTOR_SIZE 512
 #define BYTES (1024*1024*1024) // 1 Gig
 #define SECTORS (BYTES / SECTOR_SIZE)
@@ -18,18 +18,18 @@
 static uint8_t *image;
 static int fd;
 
-bool gsfs_io_open(void) {
+bool narf_io_open(void) {
    if (access(FILENAME, F_OK) == 0) {
       fd = open(FILENAME, O_RDWR, 0);
       if (fd == -1) {
-         perror("open example.gsfs");
+         perror("open example.narf");
          exit(-1);
       }
    }
    else {
       fd = open(FILENAME, O_RDWR | O_CREAT, 0766);
       if (fd == -1) {
-         perror("create example.gsfs");
+         perror("create example.narf");
          exit(-1);
       }
    }
@@ -42,7 +42,7 @@ bool gsfs_io_open(void) {
    return true;
 }
 
-bool gsfs_io_close(void) {
+bool narf_io_close(void) {
    if (munmap(image, BYTES) == -1) {
       perror("munmap");
       exit(-1);
@@ -51,11 +51,11 @@ bool gsfs_io_close(void) {
    return true;
 }
 
-uint32_t gsfs_io_sectors(void) {
+uint32_t narf_io_sectors(void) {
    return SECTORS;
 }
 
-bool gsfs_io_write(uint32_t sector, uint8_t *data) {
+bool narf_io_write(uint32_t sector, uint8_t *data) {
    bool ret = true;
    if (NULL == memcpy(image + sector * SECTOR_SIZE, data, SECTOR_SIZE)) {
       ret = false;
@@ -63,7 +63,7 @@ bool gsfs_io_write(uint32_t sector, uint8_t *data) {
    return ret;
 }
 
-bool gsfs_io_read(uint32_t sector, uint8_t *data) {
+bool narf_io_read(uint32_t sector, uint8_t *data) {
    bool ret = true;
    if (NULL == memcpy(data, image + sector * SECTOR_SIZE, SECTOR_SIZE)) {
       ret = false;

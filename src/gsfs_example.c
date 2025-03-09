@@ -1,8 +1,8 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "gsfs_io.h"
-#include "gsfs_fs.h"
+#include "narf_io.h"
+#include "narf_fs.h"
 
 #define ASSIGN =
 
@@ -17,7 +17,7 @@ void loop(void) {
          break;
       }
       else if (!strncmp(buffer, "mkfs", 4)) {
-         printf("gsfs_format()=%d\n", result ASSIGN gsfs_format());
+         printf("narf_format()=%d\n", result ASSIGN narf_format());
       }
       else {
          printf("huh?\n");
@@ -32,14 +32,14 @@ int main(int argc, char **argv) {
 
    printf("GSFS example\n");
 
-   printf("gsfs_io_open()=%d\n", result ASSIGN gsfs_io_open());
+   printf("narf_io_open()=%d\n", result ASSIGN narf_io_open());
 
    if (result) {
-      printf("gsfs_io_sectors()=%08X\n", gsfs_io_sectors());
+      printf("narf_io_sectors()=%08X\n", narf_io_sectors());
 
       loop();
 
-      printf("gsfs_io_close()=%d\n", result ASSIGN gsfs_io_close());
+      printf("narf_io_close()=%d\n", result ASSIGN narf_io_close());
    }
 }
 

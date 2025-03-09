@@ -4,21 +4,21 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-/// Initialize the gsfs_io layer
+/// Initialize the narf_io layer
 ///
 /// This is typically implemented by you for yor
 /// hardware.
 ///
 /// @return true on success
-bool gsfs_io_open(void);
+bool narf_io_open(void);
 
-/// Deinitialize the gsfs_io layer
+/// Deinitialize the narf_io layer
 ///
 /// This is typically implemented by you for yor
 /// hardware.
 ///
 /// @return true on success
-bool gsfs_io_close(void);
+bool narf_io_close(void);
 
 /// Get the size of the underlying hardware device in sectors
 ///
@@ -26,7 +26,7 @@ bool gsfs_io_close(void);
 /// hardware.
 ///
 /// @return the number of sectors supported by the device
-uint32_t gsfs_io_sectors(void);
+uint32_t narf_io_sectors(void);
 
 /// Write a sector to the disk
 /// 
@@ -36,7 +36,7 @@ uint32_t gsfs_io_sectors(void);
 /// @param sector The address of the sector to access
 /// @param data Pointer to 512 bytes of data to write
 /// @return true on success
-bool gsfs_io_write(uint32_t sector, uint8_t *data);
+bool narf_io_write(uint32_t sector, uint8_t *data);
 
 /// Read a sector from the disk
 /// 
@@ -46,7 +46,7 @@ bool gsfs_io_write(uint32_t sector, uint8_t *data);
 /// @param sector The address of the sector to access
 /// @param data Pointer to 512 bytes ed buffer
 /// @return true on success
-bool gsfs_io_read(uint32_t sector, uint8_t *data);
+bool narf_io_read(uint32_t sector, uint8_t *data);
 
 #endif
 
