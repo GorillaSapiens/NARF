@@ -127,6 +127,9 @@ bool narf_mkfs(uint32_t sectors) {
 bool narf_init(void) {
    read_buffer(0);
    memcpy(&root, buffer, sizeof(root));
+#ifdef NARF_DEBUG
+   printf("keysize %ld\n", sizeof(node->key));
+#endif
    return verify();
 }
 
