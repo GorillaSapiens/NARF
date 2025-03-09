@@ -25,9 +25,11 @@ void loop(void) {
       else if (!strncmp(buffer, "rebalance", 9)) {
          narf_rebalance();
       }
+#if 0
       else if (!strncmp(buffer, "debug", 5)) {
          narf_debug();
       }
+#endif
       else if (!strncmp(buffer, "sync", 4)) {
          printf("narf_sync()=%d\n", result ASSIGN narf_sync());
       }

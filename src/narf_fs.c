@@ -6,9 +6,9 @@
 #include "narf_fs.h"
 #include "narf_data.h"
 
-#define DEBUG
-#include <stdio.h>
-#include <math.h>
+//#define DEBUG
+//#include <stdio.h>
+//#include <math.h>
 
 #define SECTOR_SIZE 512
 
@@ -138,57 +138,6 @@ uint32_t narf_alloc(const char *key, uint32_t size) {
 
    narf_sync();
    narf_insert(s, key);
-}
-
-bool narf_pivotdown(uint32_t sector) {
-   uint32_t parent;
-   uint32_t right;
-   uint32_t beta;
-
-   narf_io_read(sector, buffer);
-   while (header->left != NARF_TAIL && header->right != NARF_TAIL) {
-
-      parent = header->parent;
-      right = header->right;
-      narf_io_read(right, buffer);
-      beta = header->left;
-
-      if (parent == NARF_TAIL) {
-         // we were root
-         root.root = right;
-         narf_sync();
-      }
-      else {
-         narf_io_read(parent, buffer);
-         if (header->left == sector) {
-            header->left = right;
-         }
-         else if (header->right == sector) {
-            header->right = right;
-         }
-         else {
-            // this should never happen
-         }
-         narf_io_write(parent, buffer);
-      }
-
-      narf_io_read(right, buffer);
-      header->parent = parent;
-      header->left = sector;
-      narf_io_write(right, buffer);
-
-      if (beta != NARF_TAIL) {
-         narf_io_read(beta, buffer);
-         header->parent = sector;
-         narf_io_write(beta, buffer);
-      }
-
-      // must be last
-      narf_io_read(sector, buffer);
-      header->parent = right;
-      header->right = beta;
-      narf_io_write(sector, buffer);
-   }
 }
 
 /// Free storage for key
@@ -423,7 +372,8 @@ bool narf_insert(uint32_t sector, const uint8_t *key) {
    return true;
 }
 
-void narf_pt(uint32_t sector, int indent) {
+#ifdef DEBUG
+static void narf_pt(uint32_t sector, int indent) {
    uint32_t l, r;
    char *p;
    if (sector == NARF_TAIL) {
@@ -469,5 +419,6 @@ void narf_debug(void) {
 
    narf_pt(root.root, 0);
 }
+#endif
 
 // vim:set ai softtabstop=3 shiftwidth=3 tabstop=3 expandtab: ff=unix
