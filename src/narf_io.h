@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-//! Initialize the narf_io layer
+//! @brief Initialize the narf_io layer
 //!
 //! This is typically implemented by you for yor
 //! hardware.
@@ -12,7 +12,7 @@
 //! @return true on success
 bool narf_io_open(void);
 
-//! Deinitialize the narf_io layer
+//! @brief Deinitialize the narf_io layer
 //!
 //! This is typically implemented by you for yor
 //! hardware.
@@ -20,7 +20,7 @@ bool narf_io_open(void);
 //! @return true on success
 bool narf_io_close(void);
 
-//! Get the size of the underlying hardware device in sectors
+//! @brief Get the size of the underlying hardware device in sectors
 //!
 //! This is typically implemented by you for yor
 //! hardware.
@@ -28,7 +28,7 @@ bool narf_io_close(void);
 //! @return the number of sectors supported by the device
 uint32_t narf_io_sectors(void);
 
-//! Write a sector to the disk
+//! @brief Write a sector to the disk
 //! 
 //! This is typically implemented by you for your
 //! hardware.
@@ -38,7 +38,7 @@ uint32_t narf_io_sectors(void);
 //! @return true on success
 bool narf_io_write(uint32_t sector, uint8_t *data);
 
-//! Read a sector from the disk
+//! @brief Read a sector from the disk
 //! 
 //! This is typically implemented by you for your
 //! hardware.

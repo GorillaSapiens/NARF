@@ -3,33 +3,48 @@
 
 #define NARF_DEBUG
 
-//! Create a NARF
+//! @brief Create a NARF
+//!
+//! This should be used on blank media to set
+//! the base data structure.  This is a destructive
+//! operation, and wil overwrite any data already
+//! present.
 //!
 //! @param sectors The total size in sectors
 //! @return true for success
 bool narf_mkfs(uint32_t sectors);
 
-//! Initialize a NARF
+//! @brief Initialize a NARF
+//!
+//! This should be used on media that already has
+//! a NARF, usually created by narf_mkfs()
 //!
 //! @return true for success
 bool narf_init(void);
 
-//! sync the NARF to disk
+//! @brief Sync the NARF to disk
+//!
+//! Flushes any in memory informaion out to the device.
 //!
 //! @return true for success
 bool narf_sync(void);
 
-//! Find the sector number matching the key
+//! @brief Find the sector number matching the key
+//!
+//! Given a key, find the sector corresponding to the key.
 //!
 //! @param key The key to look for
 //! @return The sector of the key, or -1 if not found
 uint32_t narf_find(const char *key);
 
-//! Get the first sector in directory
+//! @Get the first sector in directory
 //!
 //! Returns the sector of the first key in order sequence
 //! whose key starts with "dirname" and does not contain "sep"
-//! in the remainder of the key.
+//! in the remainder of the key, except at the end.
+//!
+//! This allows you to treat keys as if they were full
+//! paths in a real file system.
 //!
 //! For rational use, dirname should end with sep.
 //!
@@ -38,11 +53,14 @@ uint32_t narf_find(const char *key);
 //! @return The sector of the key, or -1 if not found
 uint32_t narf_dirfirst(const char *dirname, const char *sep);
 
-//! Get the next sector in directory
+//! @brief Get the next sector in directory
 //!
 //! Returns the sector of the next key in order sequence
 //! whose key starts with "dirname" and does not contain "sep"
-//! in the remainder the key.
+//! in the remainder the key, except at the end.
+//!
+//! This allows you to treat keys as if they were full
+//! paths in a real file system.
 //!
 //! For rational use, dirname should end with sep.
 //!
@@ -52,43 +70,63 @@ uint32_t narf_dirfirst(const char *dirname, const char *sep);
 //! @return The sector of the key, or -1 if not found
 uint32_t narf_dirnext(const char *dirname, const char *sep, uint32_t sector);
 
-//! Allocate storage for key
+//! @brief Allocate storage for key
+//!
+//! Create and allocate storage for a key.
 //!
 //! @param key The key we're allocating for
+//! @param size The size in bytes to reserve for the nes data
 //! @return The new sector
 uint32_t narf_alloc(const char *key, uint32_t size);
 
-//! Free storage for key
+//! @brief Free storage for key
+//!
+//! Frees up (deletes) space allocated by narf_alloc(),
+//! including the key itself.
 //!
 //! @param key The key we're freeing
 //! @return true for success
 bool narf_free(const char *key);
 
-//! Rebalance the entire tree
+//! @brief Rebalance the entire tree
+//!
+//! Use this after a large number of writes cause
+//! the NARF to become unbalanced.  This
+//! is called automatically by narf_free(), as
+//! freeing a node is a complex process.
 //!
 //! @return true for success
 bool narf_rebalance(void);
 
-//! Get the key
+//! @brief Get the key corresponding to a sector
 //!
-//! returns pointer to static buffer overwritten each call!
-//!
+//! @return pointer to static buffer overwritten each call!
 const char *narf_get_key(uint32_t sector);
 
-//! Get the data sector
+//! @brief Get the data sector reserved for this sector
 //!
+//! Sector is the value returned by narf_alloc(), narf_find(), etc...
+//!
+//! @param sector The NARF sector
+//! @return a sector number or -1
 uint32_t narf_get_data_sector(uint32_t sector);
 
-//! Get the data size in bytes
+//! @brief Get the data size in bytes reserved for this sector
 //!
+//! Sector is the value returned by narf_alloc(), narf_find(), etc...
+//!
+//! @param sector The NARF sector
+//! @return the size in bytes
 uint32_t narf_get_data_size(uint32_t sector);
 
-//! Get the next sector
+//! @brief Get the next sector in order after the given sector
 //!
+//! @param sector The NARF sector
+//! @return a NARF sector continaing the next key
 uint32_t narf_get_next(uint32_t sector);
 
 #ifdef NARF_DEBUG
-//! Print some debug info
+//! @brief Print some debug info
 void narf_debug(void);
 #endif
 
