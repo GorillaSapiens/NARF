@@ -57,9 +57,17 @@ void loop(void) {
             key, tf[result ASSIGN narf_free(key)]);
       }
       else if (!strncmp(buffer, "ls ", 3)) {
+         uint32_t sector;
          char key[256];
          sscanf(buffer, "ls %s", key);
-         printf("narf_dirfind(%s)=%d\n", key, narf_dirfind(key));
+
+         printf("\n");
+         for (sector = narf_dirfirst(key, "/");
+              sector != -1;
+              sector = narf_dirnext(key, "/", sector)) {
+            printf("%d %s\n", sector, narf_get_key(sector));
+         }
+         printf("\n");
       }
       else if (!strncmp(buffer, "cat ", 4)) {
          char key[256];

@@ -25,11 +25,32 @@ bool narf_sync(void);
 /// @return The sector of the key, or -1 if not found
 uint32_t narf_find(const char *key);
 
-/// Find the sector number matching the key substring
+/// Get the first sector in directory
 ///
-/// @param key The key to look for
+/// Returns the sector of the first key in order sequence
+/// whose key starts with "dirname" and does not contain "sep"
+/// in the remainder of the key.
+///
+/// For rational use, dirname should end with sep.
+///
+/// @param dirname Directory name with trailing seperator
+/// @param sep Directory seperator
 /// @return The sector of the key, or -1 if not found
-uint32_t narf_dirfind(const char *key);
+uint32_t narf_dirfirst(const char *dirname, const char *sep);
+
+/// Get the next sector in directory
+///
+/// Returns the sector of the next key in order sequence
+/// whose key starts with "dirname" and does not contain "sep"
+/// in the remainder the key.
+///
+/// For rational use, dirname should end with sep.
+///
+/// @param dirname Directory name with trailing seperator
+/// @param sep Directory seperator
+/// @param the previous sector
+/// @return The sector of the key, or -1 if not found
+uint32_t narf_dirnext(const char *dirname, const char *sep, uint32_t sector);
 
 /// Allocate storage for key
 ///
@@ -48,11 +69,11 @@ bool narf_free(const char *key);
 /// @return true for success
 bool narf_rebalance(void);
 
-/// Get the name
+/// Get the key
 ///
 /// returns pointer to static buffer overwritten each call!
 ///
-const char *narf_get_name(uint32_t sector);
+const char *narf_get_key(uint32_t sector);
 
 /// Get the data sector
 ///
@@ -62,7 +83,7 @@ uint32_t narf_get_data_sector(uint32_t sector);
 ///
 uint32_t narf_get_data_size(uint32_t sector);
 
-/// Get the data sector
+/// Get the next sector
 ///
 uint32_t narf_get_next(uint32_t sector);
 

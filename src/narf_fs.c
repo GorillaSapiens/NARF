@@ -45,7 +45,7 @@ typedef struct __attribute__((packed)) {
    uint32_t length;      // data length in sectors
    uint32_t bytes;       // data size in bytes
 
-   uint8_t key[512 - 8 * sizeof(uint32_t)]; // key
+   char key[512 - 8 * sizeof(uint32_t)]; // key
 } Header;
 
 static_assert(sizeof(Header) == 512, "Header wrong size");
@@ -69,11 +69,11 @@ static bool verify(void) {
    return true;
 }
 
-/// Get the name
+/// Get the key
 ///
 /// returns pointer to static buffer overwritten each call!
 ///
-const char *narf_get_name(uint32_t sector) {
+const char *narf_get_key(uint32_t sector) {
    if (!verify() || sector == END) return NULL;
    read_buffer(sector);
    return node->key;
@@ -172,51 +172,127 @@ uint32_t narf_find(const char *key) {
    // TODO FIX detect endless loops???
 }
 
-/// Find the sector number matching the key substring
+/// Get the first sector in directory
 ///
-/// @param key The key to look for
-/// @return The sector of the key, or END if not found
-uint32_t narf_dirfind(const char *key) {
-   uint32_t ret = root.root;
-   uint32_t prev;
+/// Returns the sector of the first key in order sequence
+/// whose key starts with "dirname" and does not contain "sep"
+/// in the remainder of the key.
+///
+/// For rational use, dirname should end with sep.
+///
+/// @param dirname Directory name with trailing seperator
+/// @param sep Directory seperator
+/// @return The sector of the key, or -1 if not found
+uint32_t narf_dirfirst(const char *dirname, const char *sep) {
+   uint32_t ret;
    int cmp;
 
    if (!verify()) return false;
 
+   if (root.root == END) return END;
+
+   ret = root.root;
+
    while(1) {
-      if (ret == END) {
-         return ret;
-      }
       read_buffer(ret);
-      cmp = strncmp(key, node->key, strlen(key));
+      cmp = strncmp(dirname, node->key, sizeof(node->key));
       if (cmp < 0) {
-         ret = node->left;
-      }
-      else if (cmp > 0) {
-         ret = node->right;
-      }
-      else {
-         prev = node->prev;
-         while (prev != END) {
-            read_buffer(prev);
-            if (strncmp(key, node->key, strlen(key))) {
+         if (node->left != END) {
+            ret = node->left;
+         }
+         else {
+            // the current node comes AFTER us
+            if (node->prev != END) {
+               ret = node->prev;
                break;
             }
-            ret = prev;
-            prev = node->prev;
+            else {
+               return END;
+            }
          }
+      }
+      else if (cmp > 0) {
+         if (node->right != END) {
+            ret = node->right;
+         }
+         else {
+            // the current node comes BEFORE us
+            // awesome
+            break;
+         }
+      }
+      else {
+         // BAZINGA !!!
+         // an exact match
          return ret;
       }
    }
-   // TODO FIX detect endless loops???
+
+   return narf_dirnext(dirname, sep, ret);
+}
+
+/// Get the next sector in directory
+///
+/// Returns the sector of the next key in order sequence
+/// whose key starts with "dirname" and does not contain "sep"
+/// in the remainder the key.
+///
+/// For rational use, dirname should end with sep.
+///
+/// @param dirname Directory name with trailing seperator
+/// @param sep Directory seperator
+/// @param the previous sector
+/// @return The sector of the key, or -1 if not found
+uint32_t narf_dirnext(const char *dirname, const char *sep, uint32_t sector) {
+   uint32_t dirname_len;
+   uint32_t sep_len;
+   char *p;
+
+   if (!verify()) return false;
+
+   read_buffer(sector);
+   sector = node->next;
+   if (sector == END) {
+      return END;
+   }
+
+   read_buffer(sector);
+
+   // at this point, "sector" is (probably) valid,
+   // it is in the buffer,
+   // and it is the first node after us.
+   
+   dirname_len = strlen(dirname);
+   if (strncmp(dirname, node->key, dirname_len)) {
+      // not a match at all!
+      return END;
+   }
+
+   sep_len = strlen(sep);
+   while (!strncmp(dirname, node->key, dirname_len)) {
+      // beginning matches
+      p = strstr(node->key + dirname_len, sep);
+      if (p == NULL || p[sep_len] == 0) {
+         // no sep, or only one sep at end
+         return sector;
+      }
+      sector = node->next;
+      if (sector != END) {
+         read_buffer(sector);
+      }
+      else {
+         break;
+      }
+   }
+
+   return END;
 }
 
 /// insert sector into the tree
 ///
 /// @return true for success
-static bool narf_insert(uint32_t sector, const uint8_t *key) {
+static bool narf_insert(uint32_t sector, const char *key) {
    uint32_t tmp;
-   uint32_t next;
    uint32_t p;
    int cmp;
 
@@ -446,6 +522,8 @@ uint32_t narf_alloc(const char *key, uint32_t size) {
 
    narf_sync();
    narf_insert(s, key);
+
+   return s;
 }
 
 /// Free storage for key
@@ -458,7 +536,6 @@ bool narf_free(const char *key) {
    uint32_t sector;
    uint32_t prev;
    uint32_t next;
-   uint32_t length;
 
    if (!verify()) return false;
 
@@ -502,7 +579,7 @@ bool narf_free(const char *key) {
 ///
 /// @return true for success
 bool narf_rebalance(void) {
-   static uint8_t key[SECTOR_SIZE]; // EXPENSIVE !!!
+   static char key[sizeof(((Header *) 0)->key)]; // EXPENSIVE !!!
    uint32_t head = root.first;
 
    uint32_t sector = root.first;
