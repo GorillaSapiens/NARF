@@ -22,7 +22,7 @@ bool narf_io_open(void) {
 
    errno = 0;
    if (access(FILENAME, F_OK) != 0) {
-      if (system("dd if=/dev/zero of=example.narf bs=1K count=1M")) {
+      if (system("dd if=/dev/zero of=" FILENAME " bs=1K count=1M")) {
          if (errno) {
             perror("system dd [...]");
          }
@@ -33,7 +33,7 @@ bool narf_io_open(void) {
 
    errno = 0;
    struct stat st;
-   if (stat("example.narf", &st) == 0) {
+   if (stat(FILENAME, &st) == 0) {
       total_bytes = st.st_size;
    }
    else {
