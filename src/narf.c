@@ -12,10 +12,10 @@
 #include <math.h>
 #endif
 
-#define SIGNATURE 0x4652414E // FRAN
+#define SIGNATURE 0x4652414E // FRAN => NARF
 #define VERSION 0x00000000
 
-#define END 0xFFFFFFFF
+#define END INVALID_NAF // i hate typing
 
 #define SECTOR_SIZE 512
 

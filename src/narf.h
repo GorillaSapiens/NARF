@@ -19,7 +19,7 @@
 //! containing data.
 typedef uint32_t NAF;
 
-//! @define An invalid NAF
+//! @brief An invalid NAF
 //!
 //! This usually indicates an error.
 #define INVALID_NAF ((NAF) -1)
@@ -110,7 +110,7 @@ NAF narf_dirnext(const char *dirname,
 
 //! @brief Allocate storage for key
 //! @see narf_free()
-//! @see nart_rebalance()
+//! @see narf_rebalance()
 //!
 //! Create and allocate storage for a key.
 //!
@@ -127,7 +127,7 @@ NAF narf_alloc(const char *key,
 
 //! @brief Free storage for key
 //! @see narf_alloc()
-//! @see nart_rebalance()
+//! @see narf_rebalance()
 //!
 //! Frees up (deletes) space allocated by narf_alloc(),
 //! including the key itself.
