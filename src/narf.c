@@ -37,19 +37,19 @@ typedef struct PACKED {
    uint32_t version;       // VERSION
    uint32_t sector_size;   // sector size in bytes
    uint32_t total_sectors; // total size of storage in sectors
-   uint32_t root;          // sector of root node
-   uint32_t first;         // sector of root node
-   uint32_t chain;         // previously allocated but free now
-   uint32_t vacant;        // number of first unallocated
+   NAF root;               // sector of root node
+   NAF first;              // sector of first node in key order
+   NAF chain;              // previously allocated but free now
+   uint32_t vacant;        // number of first unallocated sector
 } Root;
 static_assert(sizeof(Root) == 8 * sizeof(uint32_t), "Root wrong size");
 
 typedef struct PACKED {
-   uint32_t parent;      // parent sector
-   uint32_t left;        // left sibling sector
-   uint32_t right;       // right sibling sector
-   uint32_t prev;        // previous ordered sector
-   uint32_t next;        // next ordered sector
+   NAF parent;      // parent NAF
+   NAF left;        // left sibling NAF
+   NAF right;       // right sibling NAF
+   NAF prev;        // previous ordered NAF
+   NAF next;        // next ordered NAF
 
    uint32_t start;       // data start sector
    uint32_t length;      // data length in sectors
