@@ -12,6 +12,12 @@
 #include <math.h>
 #endif
 
+#ifdef __GNUC__
+#define PACKED __attribute__((packed))
+#else
+#define PACKED
+#endif
+
 #define SIGNATURE 0x4652414E // FRAN => NARF
 #define VERSION 0x00000000
 
@@ -23,7 +29,7 @@
 // tree with 2^32 nodes.
 #define FORCE_REBALANCE 48
 
-typedef struct __attribute__((packed)) {
+typedef struct PACKED {
    union {
       uint32_t signature;  // SIGNATURE
       uint8_t sigbytes[4];
@@ -38,7 +44,7 @@ typedef struct __attribute__((packed)) {
 } Root;
 static_assert(sizeof(Root) == 8 * sizeof(uint32_t), "Root wrong size");
 
-typedef struct __attribute__((packed)) {
+typedef struct PACKED {
    uint32_t parent;      // parent sector
    uint32_t left;        // left sibling sector
    uint32_t right;       // right sibling sector

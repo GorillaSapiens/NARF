@@ -5,7 +5,7 @@
 #include <stdbool.h>
 
 // define this for debug functions
-#define NARF_DEBUG
+//#define NARF_DEBUG
 
 //! @brief Type for NARF entries
 //!
