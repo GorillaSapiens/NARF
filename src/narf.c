@@ -3,8 +3,8 @@
 #include <stdbool.h>
 #include <string.h>
 
+#include "narf.h"
 #include "narf_io.h"
-#include "narf_fs.h"
 
 #ifdef NARF_DEBUG
 #include <stdlib.h>

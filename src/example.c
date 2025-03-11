@@ -1,8 +1,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "narf.h"
 #include "narf_io.h"
-#include "narf_fs.h"
 
 #define ASSIGN =
 

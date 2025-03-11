@@ -1,6 +1,9 @@
 #ifndef _INCLUDE_NARF_FS_H_
 #define _INCLUDE_NARF_FS_H_
 
+#include <stdint.h>
+#include <stdbool.h>
+
 #define NARF_DEBUG
 
 //! @brief Create a NARF
