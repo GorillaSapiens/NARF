@@ -61,10 +61,12 @@ void loop(void) {
       }
       else if (!strncmp(buffer, "slurp ",6)) {
          char p[512];
-         FILE *f = fopen(p, "r");
+         FILE *f;
          NAF result;
 
          sscanf(buffer, "slurp %s", p);
+         f = fopen(p, "r");
+
          if (f) {
             while (fgets(p, sizeof(p), f)) {
                p[strlen(p) - 1] = 0;
