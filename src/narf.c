@@ -29,6 +29,10 @@
 // tree with 2^32 nodes.
 #define FORCE_REBALANCE 32
 
+//! @brief The Root structure for our Not A Real Filesystem
+//!
+//! it is kept in memory, and flushed out with narf_sync().
+//! it is intentionally small.
 typedef struct PACKED {
    union {
       uint32_t signature;  // SIGNATURE
@@ -45,6 +49,7 @@ typedef struct PACKED {
 } Root;
 static_assert(sizeof(Root) == 9 * sizeof(uint32_t), "Root wrong size");
 
+// TODO FIX is "Header" really still an appropriate name for this?
 typedef struct PACKED {
    NAF parent;      // parent NAF
    NAF left;        // left sibling NAF
@@ -58,7 +63,6 @@ typedef struct PACKED {
 
    char key[512 - 8 * sizeof(uint32_t)]; // key
 } Header;
-
 static_assert(sizeof(Header) == 512, "Header wrong size");
 
 uint8_t buffer[SECTOR_SIZE] = { 0 };
