@@ -14,8 +14,8 @@
 
 **Brain:** *sigh* No, Pinky, it means we avoid the bloated complexity
            of traditional filesystems while still organizing data
-           efficiently. Now, prepare the code—tonight, we revolutionize
-           embedded storage!
+           efficiently. Now, prepare the code — tonight, we
+           revolutionize embedded storage!
 
 **Pinky:** NARF! Zort! Poit!
 
