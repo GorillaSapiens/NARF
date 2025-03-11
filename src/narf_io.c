@@ -18,7 +18,13 @@ static uint8_t *image = NULL;
 static int fd = -1;
 static size_t total_bytes = 0;
 
+//! @see narf_io.h
 bool narf_io_open(void) {
+
+   // if we're already open, just return true
+   if (fd != -1) {
+      return true;
+   }
 
    errno = 0;
    if (access(FILENAME, F_OK) != 0) {
@@ -61,6 +67,7 @@ bool narf_io_open(void) {
    return true;
 }
 
+//! @see narf_io.h
 bool narf_io_close(void) {
    bool ret = true;
 
@@ -73,13 +80,21 @@ bool narf_io_close(void) {
       perror("close");
       ret = false;
    }
+
+   // reset file scope static variables
+   image = NULL;
+   fd = -1;
+   total_bytes = 0;
+
    return ret;
 }
 
+//! @see narf_io.h
 uint32_t narf_io_sectors(void) {
    return total_bytes / SECTOR_SIZE;
 }
 
+//! @see narf_io.h
 bool narf_io_write(uint32_t sector, uint8_t *data) {
    bool ret = true;
    if (NULL == memcpy(image + sector * SECTOR_SIZE, data, SECTOR_SIZE)) {
@@ -88,6 +103,7 @@ bool narf_io_write(uint32_t sector, uint8_t *data) {
    return ret;
 }
 
+//! @see narf_io.h
 bool narf_io_read(uint32_t sector, uint8_t *data) {
    bool ret = true;
    if (NULL == memcpy(data, image + sector * SECTOR_SIZE, SECTOR_SIZE)) {

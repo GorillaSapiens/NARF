@@ -10,7 +10,6 @@ const char *tf[] = { "false", "true" };
 
 void loop(void) {
    char buffer[1024];
-   bool result;
 
    printf("#>");
    while(gets(buffer)) {
@@ -23,14 +22,20 @@ void loop(void) {
       }
       else if (!strncmp(buffer, "mkfs", 4)) {
          uint32_t sectors = narf_io_sectors();
+         bool result;
+
          printf("narf_mkfs(0x%x)=%s\n",
             sectors, tf[result ASSIGN narf_mkfs(sectors)]);
       }
       else if (!strncmp(buffer, "init", 4)) {
+         bool result;
+
          printf("narf_init()=%s\n",
             tf[result ASSIGN narf_init()]);
       }
       else if (!strncmp(buffer, "rebalance", 9)) {
+         bool result;
+
          printf("narf_rebalance()=%s\n",
             tf[result ASSIGN narf_rebalance()]);
       }
@@ -40,20 +45,26 @@ void loop(void) {
       }
 #endif
       else if (!strncmp(buffer, "sync", 4)) {
+         bool result;
+
          printf("narf_sync()=%s\n",
             tf[result ASSIGN narf_sync()]);
       }
       else if (!strncmp(buffer, "alloc ", 6)) {
          char key[256];
          int size;
+         NAF result;
+
          sscanf(buffer, "alloc %s %d", key, &size);
          printf("narf_alloc(%s,%d)=%d\n",
             key, size, result ASSIGN narf_alloc(key, size));
       }
       else if (!strncmp(buffer, "slurp ",6)) {
          char p[512];
-         sscanf(buffer, "slurp %s", p);
          FILE *f = fopen(p, "r");
+         NAF result;
+
+         sscanf(buffer, "slurp %s", p);
          if (f) {
             while (fgets(p, sizeof(p), f)) {
                p[strlen(p) - 1] = 0;
@@ -65,6 +76,8 @@ void loop(void) {
       }
       else if (!strncmp(buffer, "free ", 5)) {
          char key[256];
+         bool result;
+
          sscanf(buffer, "free %s", key);
          printf("narf_free(%s)=%s\n",
             key, tf[result ASSIGN narf_free(key)]);
@@ -78,7 +91,7 @@ void loop(void) {
          for (sector = narf_dirfirst(key, "/");
               sector != -1;
               sector = narf_dirnext(key, "/", sector)) {
-            printf("%d %s\n", sector, narf_get_key(sector));
+            printf("%d %s\n", sector, narf_key(sector));
          }
          printf("\n");
       }
@@ -106,6 +119,9 @@ int main(int argc, char **argv) {
       printf("narf_io_sectors()=%08X\n", narf_io_sectors());
 
       loop();
+
+      // always sync() before closing the io layer
+      printf("narf_sync()=%d\n", result ASSIGN narf_sync());
 
       printf("narf_io_close()=%d\n", result ASSIGN narf_io_close());
    }

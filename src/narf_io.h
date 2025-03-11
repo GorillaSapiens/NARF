@@ -6,6 +6,7 @@
 
 //! @brief Initialize the narf_io layer
 //!
+//! Used
 //! This is typically implemented by you for yor
 //! hardware.
 //!
