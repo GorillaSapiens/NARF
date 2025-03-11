@@ -13,7 +13,9 @@ lots of reads are expected.
 but only the occasional write.
 deletes rarely happen, and they're very expensive.
 
-while there are some convenience functions that treat keys like file pahts, there are no real directories.
+while there are some convenience functions that treat keys like file paths, there are no real directories.
+
+it is not thread safe.
 
 there is no access control.
 

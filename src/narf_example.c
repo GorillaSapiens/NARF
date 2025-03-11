@@ -50,6 +50,19 @@ void loop(void) {
          printf("narf_alloc(%s,%d)=%d\n",
             key, size, result ASSIGN narf_alloc(key, size));
       }
+      else if (!strncmp(buffer, "slurp ",6)) {
+         char p[512];
+         sscanf(buffer, "slurp %s", p);
+         FILE *f = fopen(p, "r");
+         if (f) {
+            while (fgets(p, sizeof(p), f)) {
+               p[strlen(p) - 1] = 0;
+               printf("narf_alloc(%s,%d)=%d\n",
+                  p, 1, result ASSIGN narf_alloc(p, 1));
+            }
+            fclose(f);
+         }
+      }
       else if (!strncmp(buffer, "free ", 5)) {
          char key[256];
          sscanf(buffer, "free %s", key);

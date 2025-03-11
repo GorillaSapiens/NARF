@@ -72,7 +72,9 @@ uint32_t narf_dirnext(const char *dirname, const char *sep, uint32_t sector);
 
 //! @brief Allocate storage for key
 //!
-//! Create and allocate storage for a key.
+//! Create and allocate storage for a key.  If the insertion
+//! depth exceeds 48, a rebalance is performed (this is 1.5
+//! times the ideal height of a tree with 2^32 nodes)
 //!
 //! @param key The key we're allocating for
 //! @param size The size in bytes to reserve for the nes data

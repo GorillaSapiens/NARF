@@ -19,6 +19,10 @@
 
 #define SECTOR_SIZE 512
 
+// 48 is 1.5 times the ideal height of a binary
+// tree with 2^32 nodes.
+#define FORCE_REBALANCE 48
+
 typedef struct __attribute__((packed)) {
    union {
       uint32_t signature;  // SIGNATURE
@@ -54,14 +58,27 @@ uint8_t buffer[SECTOR_SIZE] = { 0 };
 Root root = { 0 };
 Header *node = (Header *) buffer;
 
+//! @brief Read a sector into our buffer
+//!
+//! @param sector The sector to read
+//! @return true on success
 static bool read_buffer(uint32_t sector) {
    return narf_io_read(sector, buffer);
 }
 
+//! @brief Write a sector from buffer to disk
+//!
+//! @param sector The sector to write
+//! @return true on success
 static bool write_buffer(uint32_t sector) {
    return narf_io_write(sector, buffer);
 }
 
+//! @brief Verify we're working with a valid filesystem
+//!
+//! determines if init() or mkfs() was called and filesystem is valid
+//!
+//! @return true on success
 static bool verify(void) {
    if (root.signature != SIGNATURE) return false;
    if (root.version != VERSION) return false;
@@ -69,43 +86,50 @@ static bool verify(void) {
    return true;
 }
 
-/// Get the key
-///
-/// returns pointer to static buffer overwritten each call!
-///
+//! @brief Get the key associated with the sector
+//!
+//! returns a pointer to static buffer overwritten
+//! each call!
+//!
+//! @returns the key
 const char *narf_get_key(uint32_t sector) {
    if (!verify() || sector == END) return NULL;
    read_buffer(sector);
    return node->key;
 }
 
-/// Get the data sector
-///
+//! @brief Get the data sector
+//!
+//! @returns the first sector of data
 uint32_t narf_get_data_sector(uint32_t sector) {
    if (!verify() || sector == END) return END;
    read_buffer(sector);
    return node->start;
 }
 
-/// Get the data size in bytes
-///
+//! @brief Get the data size in bytes
+//!
+//! @returns the data size, or 0 for failure
 uint32_t narf_get_data_size(uint32_t sector) {
    if (!verify() || sector == END) return 0;
    read_buffer(sector);
    return node->bytes;
 }
 
-/// Get the data sector
-///
+//! @brief Get the next sector
+//!
+//! @returns the next sector in key order
 uint32_t narf_get_next(uint32_t sector) {
    if (!verify() || sector == END) return END;
    read_buffer(sector);
    return node->next;
 }
 
-/// Create a NARF
-///
-/// @return true for success
+//! @brief Create a NARF
+//!
+//! Create a new blank NARF.  this is a destructive process
+//!
+//! @return true for success
 bool narf_mkfs(uint32_t sectors) {
    memset(buffer, 0, sizeof(buffer));
    root.signature     = SIGNATURE;
@@ -121,9 +145,11 @@ bool narf_mkfs(uint32_t sectors) {
    return true;
 }
 
-/// Initialize a NARF
-///
-/// @return true for success
+//! @brief Initialize a NARF
+//!
+//! Read an existing NARF header from disk
+//!
+//! @return true for success
 bool narf_init(void) {
    read_buffer(0);
    memcpy(&root, buffer, sizeof(root));
@@ -133,9 +159,11 @@ bool narf_init(void) {
    return verify();
 }
 
-/// Sync the narf to disk
-///
-/// @return true for success
+//! @brief Sync the narf to disk
+//!
+//! Syncs the root sector to disk
+//!
+//! @return true for success
 bool narf_sync(void) {
    if (!verify()) return false;
    memset(buffer, 0, sizeof(buffer));
@@ -143,10 +171,10 @@ bool narf_sync(void) {
    return write_buffer(0);
 }
 
-/// Find the sector number matching the key
-///
-/// @param key The key to look for
-/// @return The sector of the key, or END if not found
+//! @brief Find the sector number matching the key
+//!
+//! @param key The key to look for
+//! @return The sector of the key, or END if not found
 uint32_t narf_find(const char *key) {
    uint32_t ret = root.root;
    int cmp;
@@ -172,17 +200,17 @@ uint32_t narf_find(const char *key) {
    // TODO FIX detect endless loops???
 }
 
-/// Get the first sector in directory
-///
-/// Returns the sector of the first key in order sequence
-/// whose key starts with "dirname" and does not contain "sep"
-/// in the remainder of the key.
-///
-/// For rational use, dirname should end with sep.
-///
-/// @param dirname Directory name with trailing seperator
-/// @param sep Directory seperator
-/// @return The sector of the key, or -1 if not found
+//! @brief Get the first sector in directory
+//!
+//! Returns the sector of the first key in order sequence
+//! whose key starts with "dirname" and does not contain "sep"
+//! in the remainder of the key.
+//!
+//! For rational use, dirname should end with sep.
+//!
+//! @param dirname Directory name with trailing seperator
+//! @param sep Directory seperator
+//! @return The sector of the key, or -1 if not found
 uint32_t narf_dirfirst(const char *dirname, const char *sep) {
    uint32_t ret;
    int cmp;
@@ -207,7 +235,7 @@ uint32_t narf_dirfirst(const char *dirname, const char *sep) {
                break;
             }
             else {
-               return END;
+               return narf_dirnext(dirname, sep, END);
             }
          }
       }
@@ -231,18 +259,18 @@ uint32_t narf_dirfirst(const char *dirname, const char *sep) {
    return narf_dirnext(dirname, sep, ret);
 }
 
-/// Get the next sector in directory
-///
-/// Returns the sector of the next key in order sequence
-/// whose key starts with "dirname" and does not contain "sep"
-/// in the remainder the key.
-///
-/// For rational use, dirname should end with sep.
-///
-/// @param dirname Directory name with trailing seperator
-/// @param sep Directory seperator
-/// @param the previous sector
-/// @return The sector of the key, or -1 if not found
+//! @brief Get the next sector in directory
+//!
+//! Returns the sector of the next key in order sequence
+//! whose key starts with "dirname" and does not contain "sep"
+//! in the remainder the key.
+//!
+//! For rational use, dirname should end with sep.
+//!
+//! @param dirname Directory name with trailing seperator
+//! @param sep Directory seperator
+//! @param the previous sector
+//! @return The sector of the key, or -1 if not found
 uint32_t narf_dirnext(const char *dirname, const char *sep, uint32_t sector) {
    uint32_t dirname_len;
    uint32_t sep_len;
@@ -250,8 +278,14 @@ uint32_t narf_dirnext(const char *dirname, const char *sep, uint32_t sector) {
 
    if (!verify()) return false;
 
-   read_buffer(sector);
-   sector = node->next;
+   if (sector != END) {
+      read_buffer(sector);
+      sector = node->next;
+   }
+   else {
+      sector = root.first;
+   }
+
    if (sector == END) {
       return END;
    }
@@ -288,13 +322,18 @@ uint32_t narf_dirnext(const char *dirname, const char *sep, uint32_t sector) {
    return END;
 }
 
-/// insert sector into the tree
-///
-/// @return true for success
+//! @brief Insert sector into the tree and list.
+//!
+//! Forces rebalance if tree is too tall.
+//!
+//! @return true for success
 static bool narf_insert(uint32_t sector, const char *key) {
    uint32_t tmp;
    uint32_t p;
    int cmp;
+   int height;
+
+   height = 0;
 
    if (!verify()) return false;
 
@@ -311,6 +350,7 @@ static bool narf_insert(uint32_t sector, const char *key) {
          if (cmp < 0) {
             if (node->left != END) {
                p = node->left;
+               ++height;
             }
             else {
                node->left = sector;
@@ -340,6 +380,7 @@ static bool narf_insert(uint32_t sector, const char *key) {
          else if (cmp > 0) {
             if (node->right != END) {
                p = node->right;
+               ++height;
             }
             else {
                node->right = sector;
@@ -367,12 +408,17 @@ static bool narf_insert(uint32_t sector, const char *key) {
          }
       }
    }
+
+   if (height > FORCE_REBALANCE) {
+      narf_rebalance();
+   }
+
    return true;
 }
 
-/// add a sector to the free chain
-///
-/// @param sector The sector to add
+//! @brief add a sector to the free chain
+//!
+//! @param sector The sector to add
 void narf_chain(uint32_t sector) {
    uint32_t prev;
    uint32_t next;
@@ -429,10 +475,10 @@ void narf_chain(uint32_t sector) {
    }
 }
 
-/// Allocate storage for key
-///
-/// @param key The key we're allocating for
-/// @return The new sector
+//! @brief Allocate storage for key
+//!
+//! @param key The key we're allocating for
+//! @return The new sector
 uint32_t narf_alloc(const char *key, uint32_t size) {
    uint32_t s;
    uint32_t prev;
@@ -526,12 +572,12 @@ uint32_t narf_alloc(const char *key, uint32_t size) {
    return s;
 }
 
-/// Free storage for key
-///
-/// EXPENSIVE !!!
-///
-/// @param key The key we're freeing
-/// @return true for success
+//! @brief Free storage for key
+//!
+//! EXPENSIVE !!!
+//!
+//! @param key The key we're freeing
+//! @return true for success
 bool narf_free(const char *key) {
    uint32_t sector;
    uint32_t prev;
@@ -573,11 +619,11 @@ bool narf_free(const char *key) {
    return true;
 }
 
-/// Rebalance the entire tree
-///
-/// EXPENSIVE !!!
-///
-/// @return true for success
+//! @brief Rebalance the entire tree
+//!
+//! EXPENSIVE !!!
+//!
+//! @return true for success
 bool narf_rebalance(void) {
    static char key[sizeof(((Header *) 0)->key)]; // EXPENSIVE !!!
    uint32_t head = root.first;
@@ -612,7 +658,7 @@ bool narf_rebalance(void) {
       target = count * numerator / denominator;
       spot = 0;
 
-      while (numerator < denominator) {
+      while (numerator < denominator && sector != END) {
          read_buffer(sector);
          while (sector != END) {
             next = node->next;
