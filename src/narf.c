@@ -39,10 +39,11 @@ typedef struct PACKED {
    uint32_t total_sectors; // total size of storage in sectors
    NAF root;               // sector of root node
    NAF first;              // sector of first node in key order
+   NAF last;               // sector of last node in key order
    NAF chain;              // previously allocated but free now
    uint32_t vacant;        // number of first unallocated sector
 } Root;
-static_assert(sizeof(Root) == 8 * sizeof(uint32_t), "Root wrong size");
+static_assert(sizeof(Root) == 9 * sizeof(uint32_t), "Root wrong size");
 
 typedef struct PACKED {
    NAF parent;      // parent NAF
@@ -157,8 +158,8 @@ static void narf_chain(NAF naf) {
 //!
 //! @return true for success
 static bool narf_insert(NAF naf, const char *key) {
-   uint32_t tmp;
-   uint32_t p;
+   NAF tmp;
+   NAF p;
    int cmp;
    int height;
 
@@ -182,6 +183,7 @@ static bool narf_insert(NAF naf, const char *key) {
                ++height;
             }
             else {
+               // we are the new left of p
                node->left = naf;
                tmp = node->prev;
                node->prev = naf;
@@ -212,6 +214,7 @@ static bool narf_insert(NAF naf, const char *key) {
                ++height;
             }
             else {
+               // we are the new right of p
                node->right = naf;
                tmp = node->next;
                node->next = naf;
@@ -227,6 +230,10 @@ static bool narf_insert(NAF naf, const char *key) {
                   read_buffer(tmp);
                   node->prev = naf;
                   write_buffer(tmp);
+               }
+               else {
+                  root.last = naf;
+                  narf_sync();
                }
 
                break;
@@ -257,9 +264,14 @@ bool narf_mkfs(uint32_t sectors) {
    root.vacant        = 1;
    root.root          = END;
    root.first         = END;
+   root.last          = END;
    root.chain         = END;
    memcpy(buffer, &root, sizeof(root));
    write_buffer(0);
+
+#ifdef NARF_DEBUG
+   printf("keysize %ld\n", sizeof(node->key));
+#endif
 
    return true;
 }
@@ -570,6 +582,7 @@ bool narf_rebalance(void) {
 
    root.root = END;
    root.first = END;
+   root.last = END;
    narf_sync();
 
    while (denominator < count) {
@@ -679,6 +692,19 @@ NAF narf_next(NAF naf) {
    if (!verify() || naf == END) return END;
    read_buffer(naf);
    return node->next;
+}
+
+//! @see narf.h
+NAF narf_last(void) {
+   if (!verify()) return END;
+   return root.last;
+}
+
+//! @see narf.h
+NAF narf_previous(NAF naf) {
+   if (!verify() || naf == END) return END;
+   read_buffer(naf);
+   return node->prev;
 }
 
 #ifdef NARF_DEBUG

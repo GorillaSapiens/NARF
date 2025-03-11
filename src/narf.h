@@ -178,6 +178,8 @@ uint32_t narf_size(NAF naf);
 
 //! @brief Get the first NAF in key order
 //! @see narf_next()
+//! @see narf_last()
+//! @see narf_previous()
 //!
 //! This is useful if you need to traverse all
 //! NAFs in key order.
@@ -187,6 +189,8 @@ NAF narf_first(void);
 
 //! @brief Get the next NAF in key order
 //! @see narf_first()
+//! @see narf_last()
+//! @see narf_previous()
 //!
 //! This is useful if you need to traverse all
 //! NAFs in key order.
@@ -194,6 +198,29 @@ NAF narf_first(void);
 //! @param naf the current NAF
 //! @return the NAF after the current, in key order
 NAF narf_next(NAF naf);
+
+//! @brief Get the last NAF in key order
+//! @see narf_previous()
+//! @see narf_first()
+//! @see narf_next()
+//!
+//! This is useful if you need to traverse all
+//! NAFs in reverse key order.
+//!
+//! @return the last NAF in key order
+NAF narf_last(void);
+
+//! @brief Get the previous NAF in key order
+//! @see narf_last()
+//! @see narf_last()
+//! @see narf_previous()
+//!
+//! This is useful if you need to traverse all
+//! NAFs in reverse key order.
+//!
+//! @param naf the current NAF
+//! @return the NAF before the current, in key order
+NAF narf_previous(NAF naf);
 
 #ifdef NARF_DEBUG
 //! @brief Print some debug info

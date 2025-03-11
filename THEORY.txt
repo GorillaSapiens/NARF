@@ -1,0 +1,40 @@
+NARF
+====
+
+Not A Real Filesystem
+
+yes, i really wrote it all in one night. i just needed something i could
+use in a small embedded system project i was working on, and FAT32 took
+up way more space than i was happy with.
+
+we assume there's storage media, and it is organized in sectors of 512
+bytes that we can access with linear addressing.  you the developer need
+to supply the functions described in narf_io.h.  this is the hardware
+abstraction layer used by NARF.  these are straightforward and pretty
+much what you would expect to read and write data, and get the total
+size of the media in sectors.
+
+bool narf_io_open(void);
+bool narf_io_close(void);
+uint32_t narf_io_sectors(void);
+bool narf_io_write(uint32_t sector, uint8_t *data);
+bool narf_io_read(uint32_t sector, uint8_t *data);
+
+see narf_io.h for details.
+
+on the media, we maintain a mapping from KEYS (expressed as C strings)
+to DATA SIZE and DATA LOCATION.  an entry in this mapping is called a NAF.
+a NAF is Not A File.  the size of the key is limited to about 480 bytes,
+which is longer than total path length limits on some real file systems.
+any character is allowed in a key, except '\0', for obvious reasons.
+
+the mapping is stored in what is often called a threaded binary tree.
+each NAF in the tree contains "left" and "right" pointers of the binary
+tree, as well as "previous" and "next" pointers of a doubly linked list.
+this gives O(log₂N) searching and O(N) in-order traversal.  ordering is
+done by "strcmp" on keys.
+
+the first sector, sector 0, is reserved for holding pointers to the root
+of the tree, and the beginning of the linked list.
+
+[TODO: explain dirfirst() and dirnext()]
