@@ -10,6 +10,7 @@
 #include "narf_io.h"
 
 // This is an example implementation using mmap'd files.
+// Substitute your own implementation for your hardware.
 
 #define FILENAME "example.narf"
 #define SECTOR_SIZE 512
