@@ -25,9 +25,9 @@
 
 #define SECTOR_SIZE 512
 
-// 48 is 1.5 times the ideal height of a binary
+// 32 is the ideal height of a binary
 // tree with 2^32 nodes.
-#define FORCE_REBALANCE 48
+#define FORCE_REBALANCE 32
 
 typedef struct PACKED {
    union {
