@@ -29,6 +29,8 @@
 // tree with 2^32 nodes.
 #define FORCE_REBALANCE 32
 
+//#define SMART_FREE
+
 //! @brief The Root structure for our Not A Real Filesystem
 //!
 //! it is kept in memory, and flushed out with narf_sync().
@@ -96,6 +98,124 @@ static bool verify(void) {
    if (root.sector_size != SECTOR_SIZE) return false;
    return true;
 }
+
+#ifdef NARF_DEBUG
+//! @brief Helper used to pretty print the NARF tree.
+//!
+//! @param sector The current sector being printed
+//! @param indent The number of levels to indent
+//! @param pattern Bitfield indicating tree limbs to print
+static void narf_pt(uint32_t sector, int indent, uint32_t pattern) {
+   uint32_t l, r;
+   int i;
+   char *p;
+   char c;
+
+   if (!verify()) return;
+
+   if (sector != END) {
+      read_buffer(sector);
+      l = node->left;
+      r = node->right;
+      p = strdup(node->key);
+      narf_pt(l, indent + 1, pattern);
+   }
+
+   for (i = 0; i < indent; i++) {
+      if (pattern & (1 << i)) {
+         printf("|  ");
+      }
+      else {
+         printf("   ");
+      }
+   }
+
+   if (indent) {
+      if (pattern & (1 << indent)) {
+         c = '\\';
+      }
+      else {
+         c = '/';
+      }
+   }
+   else {
+      c = '=';
+   }
+
+   if (sector == END) {
+      printf("%c- (nil)\n", c);
+      return;
+   }
+   else {
+      printf("%c- %s [%d]\n", c, p, sector);
+      free(p);
+   }
+
+   narf_pt(r, indent + 1, (pattern ^ (3 << (indent))) & ~1);
+}
+
+//! see narf.h
+void narf_debug(void) {
+   uint32_t sector;
+
+   printf("root.signature     = %08x '%4s'\n", root.signature, root.sigbytes);
+   if (root.signature != SIGNATURE) {
+      printf("bad signature\n");
+      return;
+   }
+
+   printf("root.version       = %08x\n", root.version);
+   if (root.version != VERSION) {
+      printf("bad version\n");
+      return;
+   }
+
+   printf("root.sector_size   = %d\n", root.sector_size);
+   if (root.sector_size != SECTOR_SIZE) {
+      printf("bad sector size\n");
+      return;
+   }
+
+   printf("root.total_sectors = %d\n", root.total_sectors);
+   if (root.total_sectors < 2) {
+      printf("bad total sectors\n");
+      return;
+   }
+
+   printf("root.vacant        = %d\n", root.vacant);
+   printf("root.chain         = %d\n", root.chain);
+   printf("root.root          = %d\n", root.root);
+   printf("root.first         = %d\n", root.first);
+
+   sector = root.first;
+   while (sector != END) {
+      printf("\n");
+      read_buffer(sector);
+      printf("sector = %d\n", sector);
+      printf("key    = '%s'\n", node->key);
+      printf("parent = %d\n", node->parent);
+      printf("left   = %d\n", node->left);
+      printf("right  = %d\n", node->right);
+      printf("prev   = %d\n", node->prev);
+      printf("next   = %d\n", node->next);
+      printf("start  = %d\n", node->start);
+      printf("length = %d\n", node->length);
+      printf("bytes  = %d\n", node->bytes);
+
+      sector = node->next;
+   }
+
+   printf("\nfreechain:\n");
+   sector = root.chain;
+   while (sector != END) {
+      read_buffer(sector);
+      printf("%d (%d:%d) -> %d\n", sector, node->start, node->length, node->next);
+      sector = node->next;
+   }
+
+   narf_pt(root.root, 0, 0);
+}
+#endif
 
 //! @brief add a naf to the free chain
 //!
@@ -519,6 +639,43 @@ NAF narf_alloc(const char *key, uint32_t size) {
    return naf;
 }
 
+#ifdef SMART_FREE
+//! @brief A helper function used by narf_free()
+//! @see narf_free()
+//!
+//! replaces references to naf in parent with child
+//!
+//! @param parent The parent of naf
+//! @param naf The naf we're skipping
+//! @param child The new child
+static void skip_naf(NAF parent, NAF naf, NAF child) {
+   if (child != END) {
+      read_buffer(child);
+      node->parent = parent;
+      write_buffer(child);
+   }
+
+   if (parent != END) {
+      read_buffer(parent);
+      if (node->left == naf) {
+         node->left = child;
+      }
+      else if (node->right == naf) {
+         node->right = child;
+      }
+      else {
+         // this should never happen
+         assert(0);
+      }
+      write_buffer(parent);
+   }
+   else {
+      root.root = child;
+      narf_sync();
+   }
+}
+#endif
+
 //! @see narf.h
 bool narf_free(const char *key) {
    NAF naf;
@@ -572,77 +729,40 @@ bool narf_free(const char *key) {
 
 #ifdef SMART_FREE
    // remove from tree
-   if (root.root == naf) {
-      if (left == END && right == END) {
-         root.root = END;
-         goto sync_chain;
-      }
-      // TODO FIX this is similar to non-root case below
-      else if (left == END) {
-         read_buffer(right);
-         node->parent = END;
-         write_buffer(right);
 
-         root.root = right;
-         goto sync_chain;
-      }
-      else if (right == END) {
-         read_buffer(left);
-         node->parent = END;
-         write_buffer(left);
-
-         root.root = left;
-         goto sync_chain;
-      }
-      else {
-         // chose a random direction to pivot
-         if (naf & 1) {
-            read_buffer(left);
-            beta = node->right;
-            node->right = naf;
-            node->parent = END;
-            write_buffer(left);
-
-            read_buffer(naf);
-            node->left = beta;
-            node->parent = left;
-            write_buffer(naf);
-
-            root.root = left;
-         }
-         else {
-            read_buffer(right);
-            beta = node->left;
-            node->left = naf;
-            node->parent = END;
-            write_buffer(right);
-
-            read_buffer(naf);
-            node->right = beta;
-            node->parent = right;
-            write_buffer(naf);
-
-            root.root = right;
-         }
-      }
-   }
-
-   // if we're here, we have a left and a right
-   // and we're not root
    read_buffer(naf);
-   prev = node->parent; // note reuse of variable
    left = node->left;
    right = node->right;
+   prev = node->parent; // note reuse of variable
+
+   printf("===\n");
+   narf_pt(root.root, 0, 0);
 
    while (left != END && right != END) {
       // wobble down the chain until we have a free sibling
-      read_buffer(prev);
+      if (prev != END) {
+         read_buffer(prev);
+      }
+      else {
+         // well this is awkward!
+         // pick random direction...
+         if (naf & 1) {
+            node->right = naf;
+         }
+         else {
+            node->left = naf;
+         }
+      }
 
-      // TODO FIX this is similar to root case above
       if (node->left == naf) {
-
-         node->left = left;
-         write_buffer(prev);
+         if (prev != END) {
+            node->left = left;
+            write_buffer(prev);
+         }
+         else {
+            root.root = left;
+            narf_sync();
+         }
 
          read_buffer(left);
          beta = node->right;
@@ -656,9 +776,14 @@ bool narf_free(const char *key) {
          write_buffer(naf);
       }
       else if (node->right == naf) {
-
-         node->right = right;
-         write_buffer(prev);
+         if (prev != END) {
+            node->right = right;
+            write_buffer(prev);
+         }
+         else {
+            root.root = right;
+            narf_sync();
+         }
 
          read_buffer(right);
          beta = node->left;
@@ -673,49 +798,34 @@ bool narf_free(const char *key) {
       }
       else {
          // this should never happen
-         // TODO FIX possible infinite loop here
          assert(0);
       }
+
+   read_buffer(naf);
+   left = node->left;
+   right = node->right;
+   prev = node->parent; // note reuse of variable
+
+   printf("---\n");
+   narf_pt(root.root, 0, 0);
    }
 
-   // TODO FIX this is similar to root case above
-   if (left == END) {
-      if (right != END) {
-         read_buffer(right);
-         node->parent = prev;
-         write_buffer(right);
-      }
-      beta = right; // note reuse of variable
+   if (left != END && right == END) {
+      skip_naf(prev, naf, left);
    }
-   else if (right == END) {
-      read_buffer(left);
-      node->parent = prev;
-      write_buffer(left);
-      beta = left; // note reuse of variable
+   else if (left == END && right != END) {
+      skip_naf(prev, naf, right);
    }
-   else {
-      // TODO FIX this should never happen
-      assert(0);
+   else if (left == END && right == END) {
+      skip_naf(prev, naf, END);
    }
 
-   read_buffer(prev);
-   if (node->left == naf) {
-      node->left = beta;
-   }
-   else if (node->right == naf) {
-      node->right = beta;
-   }
-   else {
-      // this should never happen
-      assert(0);
-   }
-   write_buffer(prev);
+   printf("---\n");
+   narf_pt(root.root, 0, 0);
+   printf("===\n");
 
-sync_chain:
-   narf_sync();
+   // add to the free chain
    narf_chain(naf);
-
-   // TODO FIX call rebalance intelligently!
 
 #else
    narf_sync();
@@ -876,123 +986,5 @@ NAF narf_previous(NAF naf) {
    read_buffer(naf);
    return node->prev;
 }
-
-#ifdef NARF_DEBUG
-//! @brief Helper used to pretty print the NARF tree.
-//!
-//! @param sector The current sector being printed
-//! @param indent The number of levels to indent
-//! @param pattern Bitfield indicating tree limbs to print
-static void narf_pt(uint32_t sector, int indent, uint32_t pattern) {
-   uint32_t l, r;
-   int i;
-   char *p;
-   char c;
-
-   if (!verify()) return;
-
-   if (sector != END) {
-      read_buffer(sector);
-      l = node->left;
-      r = node->right;
-      p = strdup(node->key);
-      narf_pt(l, indent + 1, pattern);
-   }
-
-   for (i = 0; i < indent; i++) {
-      if (pattern & (1 << i)) {
-         printf("|  ");
-      }
-      else {
-         printf("   ");
-      }
-   }
-
-   if (indent) {
-      if (pattern & (1 << indent)) {
-         c = '\\';
-      }
-      else {
-      c = '/';
-      }
-   }
-   else {
-      c = '-';
-   }
-
-   if (sector == END) {
-      printf("%c- (nil)\n", c);
-      return;
-   }
-   else {
-      printf("%c- %s [%d]\n", c, p, sector);
-      free(p);
-   }
-
-   narf_pt(r, indent + 1, (pattern ^ (3 << (indent))) & ~1);
-}
-
-//! see narf.h
-void narf_debug(void) {
-   uint32_t sector;
-
-   printf("root.signature     = %08x '%4s'\n", root.signature, root.sigbytes);
-   if (root.signature != SIGNATURE) {
-      printf("bad signature\n");
-      return;
-   }
-
-   printf("root.version       = %08x\n", root.version);
-   if (root.version != VERSION) {
-      printf("bad version\n");
-      return;
-   }
-
-   printf("root.sector_size   = %d\n", root.sector_size);
-   if (root.sector_size != SECTOR_SIZE) {
-      printf("bad sector size\n");
-      return;
-   }
-
-   printf("root.total_sectors = %d\n", root.total_sectors);
-   if (root.total_sectors < 2) {
-      printf("bad total sectors\n");
-      return;
-   }
-
-   printf("root.vacant        = %d\n", root.vacant);
-   printf("root.chain         = %d\n", root.chain);
-   printf("root.root          = %d\n", root.root);
-   printf("root.first         = %d\n", root.first);
-
-   sector = root.first;
-   while (sector != END) {
-      printf("\n");
-      read_buffer(sector);
-      printf("sector = %d\n", sector);
-      printf("key    = '%s'\n", node->key);
-      printf("parent = %d\n", node->parent);
-      printf("left   = %d\n", node->left);
-      printf("right  = %d\n", node->right);
-      printf("prev   = %d\n", node->prev);
-      printf("next   = %d\n", node->next);
-      printf("start  = %d\n", node->start);
-      printf("length = %d\n", node->length);
-      printf("bytes  = %d\n", node->bytes);
-
-      sector = node->next;
-   }
-
-   printf("\nfreechain:\n");
-   sector = root.chain;
-   while (sector != END) {
-      read_buffer(sector);
-      printf("%d (%d:%d) -> %d\n", sector, node->start, node->length, node->next);
-      sector = node->next;
-   }
-
-   narf_pt(root.root, 0, 0);
-}
-#endif
 
 // vim:set ai softtabstop=3 shiftwidth=3 tabstop=3 expandtab: ff=unix

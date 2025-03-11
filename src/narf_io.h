@@ -30,7 +30,7 @@ bool narf_io_close(void);
 uint32_t narf_io_sectors(void);
 
 //! @brief Write a sector to the disk
-//! 
+//!
 //! This is typically implemented by you for your
 //! hardware.
 //!
@@ -40,7 +40,7 @@ uint32_t narf_io_sectors(void);
 bool narf_io_write(uint32_t sector, uint8_t *data);
 
 //! @brief Read a sector from the disk
-//! 
+//!
 //! This is typically implemented by you for your
 //! hardware.
 //!
