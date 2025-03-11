@@ -29,11 +29,12 @@ bool narf_io_open(void) {
 
    errno = 0;
    if (access(FILENAME, F_OK) != 0) {
+      // we use dd to create a 1G empty file from /dev/zero
       if (system("dd if=/dev/zero of=" FILENAME " bs=1K count=1M")) {
          if (errno) {
             perror("system dd [...]");
          }
-         fprintf(stderr, "could not create NARF\n");
+         fprintf(stderr, "could not create " FILENAME "\n");
          return false;
       }
    }
@@ -47,14 +48,14 @@ bool narf_io_open(void) {
       if (errno) {
          perror("stat");
       }
-      fprintf(stderr, "could not stat NARF\n");
+      fprintf(stderr, "could not stat " FILENAME "\n");
       return false;
    }
 
    errno = 0;
    fd = open(FILENAME, O_RDWR, 0);
    if (fd == -1) {
-      perror("open example.narf");
+      perror("open " FILENAME);
       return false;
    }
 
@@ -81,6 +82,7 @@ bool narf_io_close(void) {
       perror("close");
       ret = false;
    }
+   sync();
 
    // reset file scope static variables
    image = NULL;
