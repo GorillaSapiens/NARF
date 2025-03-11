@@ -37,4 +37,31 @@ ordering is done by "strcmp" on keys.
 the first sector, sector 0, is reserved for holding pointers to the root
 of the tree, and the beginning and end of the linked list.
 
-[TODO: explain dirfirst() and dirnext()]
+===
+
+there are two convenience functions worth mentioning, narf_dirfirst()
+and narf_dirnext().  together they allow you to traverse keys as if they
+were full paths.
+
+imagine you have a NARF with the following keys:
+
+/bar
+/biz
+/foo
+/groink/
+/groink/elephant
+/groink/zebra
+/zebra
+
+if you then call narf_dirfirst("/", "/"), it will return the NAF for
+"/bar". continuing on with narf_dirnext(), it will return NAF for each
+key EXCEPT "/groink/elephant" and "/groink/zebra".
+
+if you instead call narf_dirfirst("/groink/", "/"), it will return the
+NAF for "/groink/", and the call to narf_dirnext() will return the NAF
+for "/groink/elephant" followed by "/groink/zebra".
+
+this makes sense if you think of entries ending in "/" as directories
+and others as just files.  just be sure your dirname parameter ends
+with your separator.  you can of course use any separator you like,
+including multicharacter separators (which might be useful for utf8).
