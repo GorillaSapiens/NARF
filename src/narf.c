@@ -245,6 +245,7 @@ static bool narf_insert(NAF naf, const char *key) {
          }
          else {
             // this should never happen !!!
+            assert(0);
          }
       }
    }
@@ -397,7 +398,7 @@ NAF narf_dirnext(const char *dirname, const char *sep, NAF naf) {
    // at this point, "naf" is (probably) valid,
    // it is in the buffer,
    // and it is the first node after us.
-   
+
    dirname_len = strlen(dirname);
    if (strncmp(dirname, node->key, dirname_len)) {
       // not a match at all!
@@ -520,27 +521,43 @@ NAF narf_alloc(const char *key, uint32_t size) {
 
 //! @see narf.h
 bool narf_free(const char *key) {
-   uint32_t sector;
-   uint32_t prev;
-   uint32_t next;
+   NAF naf;
+   NAF prev;
+   NAF next;
+#ifdef SMART_FREE
+   NAF left;
+   NAF right;
+   NAF beta;
+#endif
 
    if (!verify()) return false;
 
-   sector = narf_find(key);
+   naf = narf_find(key);
 
-   if (sector == END) {
+   if (naf == END) {
       return false;
    }
 
-   read_buffer(sector);
+   // unlink from list
+   read_buffer(naf);
    prev = node->prev;
    next = node->next;
-   write_buffer(sector);
+#ifdef SMART_FREE
+   left = node->left;
+   right = node->right;
+#endif
+   node->prev = END;
+   node->next = END;
+   write_buffer(naf);
 
    if (next != END) {
       read_buffer(next);
       node->prev = prev;
       write_buffer(next);
+   }
+   else {
+      root.last = prev;
+      narf_sync();
    }
 
    if (prev != END) {
@@ -553,9 +570,158 @@ bool narf_free(const char *key) {
       narf_sync();
    }
 
-   narf_chain(sector);
+#ifdef SMART_FREE
+   // remove from tree
+   if (root.root == naf) {
+      if (left == END && right == END) {
+         root.root = END;
+         goto sync_chain;
+      }
+      // TODO FIX this is similar to non-root case below
+      else if (left == END) {
+         read_buffer(right);
+         node->parent = END;
+         write_buffer(right);
 
+         root.root = right;
+         goto sync_chain;
+      }
+      else if (right == END) {
+         read_buffer(left);
+         node->parent = END;
+         write_buffer(left);
+
+         root.root = left;
+         goto sync_chain;
+      }
+      else {
+         // chose a random direction to pivot
+         if (naf & 1) {
+            read_buffer(left);
+            beta = node->right;
+            node->right = naf;
+            node->parent = END;
+            write_buffer(left);
+
+            read_buffer(naf);
+            node->left = beta;
+            node->parent = left;
+            write_buffer(naf);
+
+            root.root = left;
+         }
+         else {
+            read_buffer(right);
+            beta = node->left;
+            node->left = naf;
+            node->parent = END;
+            write_buffer(right);
+
+            read_buffer(naf);
+            node->right = beta;
+            node->parent = right;
+            write_buffer(naf);
+
+            root.root = right;
+         }
+      }
+   }
+
+   // if we're here, we have a left and a right
+   // and we're not root
+   read_buffer(naf);
+   prev = node->parent; // note reuse of variable
+   left = node->left;
+   right = node->right;
+
+   while (left != END && right != END) {
+      // wobble down the chain until we have a free sibling
+      read_buffer(prev);
+
+      // TODO FIX this is similar to root case above
+      if (node->left == naf) {
+
+         node->left = left;
+         write_buffer(prev);
+
+         read_buffer(left);
+         beta = node->right;
+         node->right = naf;
+         node->parent = prev;
+         write_buffer(left);
+
+         read_buffer(naf);
+         prev = node->parent = left;
+         left = node->left = beta;
+         write_buffer(naf);
+      }
+      else if (node->right == naf) {
+
+         node->right = right;
+         write_buffer(prev);
+
+         read_buffer(right);
+         beta = node->left;
+         node->left = naf;
+         node->parent = prev;
+         write_buffer(right);
+
+         read_buffer(naf);
+         prev = node->parent = right;
+         right = node->right = beta;
+         write_buffer(naf);
+      }
+      else {
+         // this should never happen
+         // TODO FIX possible infinite loop here
+         assert(0);
+      }
+   }
+
+   // TODO FIX this is similar to root case above
+   if (left == END) {
+      if (right != END) {
+         read_buffer(right);
+         node->parent = prev;
+         write_buffer(right);
+      }
+      beta = right; // note reuse of variable
+   }
+   else if (right == END) {
+      read_buffer(left);
+      node->parent = prev;
+      write_buffer(left);
+      beta = left; // note reuse of variable
+   }
+   else {
+      // TODO FIX this should never happen
+      assert(0);
+   }
+
+   read_buffer(prev);
+   if (node->left == naf) {
+      node->left = beta;
+   }
+   else if (node->right == naf) {
+      node->right = beta;
+   }
+   else {
+      // this should never happen
+      assert(0);
+   }
+   write_buffer(prev);
+
+sync_chain:
+   narf_sync();
+   narf_chain(naf);
+
+   // TODO FIX call rebalance intelligently!
+
+#else
+   narf_sync();
+   narf_chain(naf);
    narf_rebalance();
+#endif // SMART_FREE
 
    return true;
 }

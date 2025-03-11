@@ -71,7 +71,7 @@ void loop(void) {
             while (fgets(p, sizeof(p), f)) {
                p[strlen(p) - 1] = 0;
                printf("narf_alloc(%s,%d)=%d\n",
-                  p, 1, result ASSIGN narf_alloc(p, 1));
+                  p, 1024, result ASSIGN narf_alloc(p, 1024));
             }
             fclose(f);
          }
