@@ -5,8 +5,8 @@
 
 **Pinky:** Ooooh, a filesystem! Will it have cheese?  
 
-**Brain:** No, Pinky. It shall be called NARF—Not A Real
-           Filesystem—optimized for constrained environments, with
+**Brain:** No, Pinky. It shall be called NARF — Not A Real
+           Filesystem — optimized for constrained environments, with
            minimal overhead and simple metadata structures.
 
 **Pinky:** NARF! I love it already! But, uh, Brain… if it’s not a
