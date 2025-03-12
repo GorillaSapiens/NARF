@@ -617,14 +617,32 @@ NAF narf_dirnext(const char *dirname, const char *sep, NAF naf) {
    return END;
 }
 
+void trim_excess(NAF naf, Sector length) {
+   NAF extra;
+   Sector excess;
+
+   read_buffer(naf);
+
+   excess = node->length - length;
+   extra = node->start + length;
+
+   node->length = length;
+   write_buffer(naf);
+
+   read_buffer(extra);
+   node->start = extra + 1;
+   node->length = excess - 1;
+   write_buffer(extra);
+
+   narf_chain(extra);
+}
+
 //! @see narf.h
 NAF narf_alloc(const char *key, ByteSize bytes) {
    NAF naf;
    NAF prev;
    NAF next;
-
    Sector length;
-   Sector excess;
 
    length = (bytes + NARF_SECTOR_SIZE - 1) / NARF_SECTOR_SIZE;
 
@@ -660,21 +678,9 @@ NAF narf_alloc(const char *key, ByteSize bytes) {
          read_buffer(naf);
          if (node->length > length) {
             // we need to trim the excess.
-            excess = node->length - length;
-            prev = node->start + length;
-
-            node->length = length;
-            write_buffer(naf);
-
-            read_buffer(prev);
-            node->start = prev + 1;
-            node->length = excess - 1;
-            write_buffer(prev);
-
-            narf_chain(prev);
-
-            read_buffer(naf);
+            trim_excess(naf, length);
          }
+         read_buffer(naf);
          break;
       }
       prev = next;
@@ -809,7 +815,8 @@ NAF narf_realloc(const char *key, ByteSize bytes) {
                write_buffer(naf);
 
                if (node->length > length) {
-                  // TODO FIX trim off the end
+                  // we need to trim the excess.
+                  trim_excess(naf, length);
                }
 
                return naf;
