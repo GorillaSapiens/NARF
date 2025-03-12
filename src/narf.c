@@ -717,13 +717,84 @@ NAF narf_alloc(const char *key, ByteSize bytes) {
    return naf;
 }
 
+void narf_move(NAF dst, NAF src, Sector length, ByteSize bytes) {
+   NAF prev, next, parent;
+   Sector og_start;
+   Sector start;
+   Sector og_length;
+   Sector i;
+
+   // move into our new home
+   read_buffer(src);
+   og_start = node->start;
+   og_length = node->length;
+   start = node->start = dst + 1;
+   node->length = length;
+   node->bytes = bytes;
+   prev = node->prev;
+   next = node->next;
+   parent = node->parent;
+   write_buffer(dst);
+
+   // fix up prev
+   if (prev != END) {
+      read_buffer(prev);
+      node->next = dst;
+      write_buffer(prev);
+   }
+   else {
+      root.first = dst;
+      narf_sync();
+   }
+
+   // fix up next
+   if (next != END) {
+      read_buffer(next);
+      node->prev = dst;
+      write_buffer(next);
+   }
+   else {
+      root.last = dst;
+      narf_sync();
+   }
+
+   // fix up parent
+   if (parent != END) {
+      read_buffer(parent);
+      if (node->left == src) {
+         node->left = dst;
+      }
+      else if (node->right == src) {
+         node->right = dst;
+      }
+      else {
+         // this should never happen
+         assert(0);
+      }
+      write_buffer(parent);
+   }
+   else {
+      root.root = dst;
+      narf_sync();
+   }
+
+   // copy the data
+   for (i = 0; i < og_length; i++) {
+      read_buffer(og_start + i);
+      write_buffer(start + i);
+   }
+
+   // chain the old naf
+   narf_chain(src);
+}
+
 //! @see narf.h
 NAF narf_realloc(const char *key, ByteSize bytes) {
    NAF naf;
    NAF prev;
    NAF next;
    NAF tmp;
-   Sector start;
+   Sector og_start;
    Sector length;
    Sector og_length;
 
@@ -743,7 +814,7 @@ NAF narf_realloc(const char *key, ByteSize bytes) {
    read_buffer(naf);
    length = (bytes + NARF_SECTOR_SIZE - 1) / NARF_SECTOR_SIZE;
    og_length = node->length;
-   start = node->start;
+   og_start = node->start;
 
    // do we need to change at all?
    if (og_length == length) {
@@ -788,7 +859,7 @@ NAF narf_realloc(const char *key, ByteSize bytes) {
          tmp = next;
          next = node->next;
 
-         if (start + og_length == tmp) {
+         if (og_start + og_length == tmp) {
             // we found a block after us !!!
 
             if (og_length + node->length + 1 >= length) {
@@ -835,12 +906,53 @@ NAF narf_realloc(const char *key, ByteSize bytes) {
       // nothing place to expand, we need to move.
 
       // can we move into chain?
+      prev = END;
+      next = root.chain;
+      while(next != END) {
+         read_buffer(next);
+         tmp = next;
+         next = node->next;
+
+         if (node->length >= length + 1) {
+            // we found a spot big enough for us !!!
+
+            // unlink from chain
+            if (prev != END) {
+               read_buffer(prev);
+               node->next = next;
+               write_buffer(prev);
+            }
+            else {
+               root.chain = next;
+               narf_sync();
+            }
+
+            if (node->length > length + 1) { // TODO FIX is this right???
+               // we need to trim the excess.
+               trim_excess(tmp, length);
+            }
+
+            // move into our new home
+            narf_move(tmp, naf, length, bytes);
+
+            // return the new
+            return tmp;
+         }
+
+         prev = tmp;
+         // next has already been set!
+      }
 
       // all options exhausted, move into vacant
+      tmp = root.vacant;
+      root.vacant += length + 1;
+      narf_sync();
+      narf_move(tmp, naf, length, bytes);
+      return tmp;
    }
 
-   // placeholder for now
-   return END;
+   // this should never happen
+   assert(0);
 }
 
 #ifdef NARF_SMART_FREE
