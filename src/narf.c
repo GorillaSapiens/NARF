@@ -217,22 +217,23 @@ void narf_debug(void) {
    printf("root.root          = %d\n", root.root);
    printf("root.first         = %d\n", root.first);
    printf("root.last          = %d\n", root.last);
+   printf("\n");
 
    naf = root.first;
    while (naf != END) {
-      printf("\n");
       read_buffer(naf);
-      printf("sector = %d\n", naf);
-      printf("key    = '%s'\n", node->key);
-      printf("u/l/r  = %d / %d / %d\n", node->parent, node->left, node->right);
-      printf("p/n    = %d / %d\n", node->prev, node->next);
-      printf("start  = %d\n", node->start);
-      printf("length = %d\n", node->length);
-      printf("bytes  = %d\n", node->bytes);
+      printf("naf = %d => '%.*s'\n",
+         naf, (int) sizeof(node->key), node->key);
+      printf("tree u/l/r  = %d / %d / %d\n",
+         node->parent, node->left, node->right);
+      printf("list p/n    = %d / %d\n",
+         node->prev, node->next);
+      printf("start:len   = %d:%d (%d)\n",
+         node->start, node->length, node->bytes);
+      printf("\n");
 
       naf = node->next;
    }
-   printf("\n");
 
    if (root.chain == END) {
       printf("freechain is empty\n");
@@ -247,6 +248,7 @@ void narf_debug(void) {
       }
       printf("\n");
    }
+   printf("\n");
 
    if (root.root == END) {
       printf("tree is empty\n");
