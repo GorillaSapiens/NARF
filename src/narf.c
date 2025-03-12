@@ -832,7 +832,11 @@ NAF narf_realloc(const char *key, ByteSize bytes) {
          // next has already been set!
       }
 
-      // nothing worked, we need to move.
+      // nothing place to expand, we need to move.
+
+      // can we move into chain?
+
+      // all options exhausted, move into vacant
    }
 
    // placeholder for now
