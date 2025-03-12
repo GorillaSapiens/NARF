@@ -117,6 +117,7 @@ NAF narf_dirnext(const char *dirname,
                  NAF         naf);
 
 //! @brief Allocate storage for key
+//! @see narf_realloc()
 //! @see narf_free()
 //! @see narf_rebalance()
 //!
@@ -133,8 +134,26 @@ NAF narf_dirnext(const char *dirname,
 NAF narf_alloc(const char *key,
                ByteSize    bytes);
 
+//! @brief Grow or shrink storage for key
+//! @see narf_alloc()
+//! @see narf_free()
+//! @see narf_rebalance()
+//!
+//! Grow or shrink the key allocation.  Like it's
+//! C stdlib namesake, it may move the NAF. If
+//! a NAF for the key does not exist, narf_alloc()
+//! is called to create one.  If bytes == 0,
+//! narf_free() is called and INVALID_NAF is returned.
+//!
+//! @param key The key we're reallocating
+//! @param size The new size in bytes to reserve for data
+//! @return The new NAF
+NAF narf_realloc(const char *key,
+                 ByteSize    bytes);
+
 //! @brief Free storage for key
 //! @see narf_alloc()
+//! @see narf_realloc()
 //! @see narf_rebalance()
 //!
 //! Frees up (deletes) space allocated by narf_alloc(),

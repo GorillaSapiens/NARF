@@ -195,27 +195,37 @@ void narf_debug(void) {
       read_buffer(naf);
       printf("sector = %d\n", naf);
       printf("key    = '%s'\n", node->key);
-      printf("parent = %d\n", node->parent);
-      printf("left   = %d\n", node->left);
-      printf("right  = %d\n", node->right);
-      printf("prev   = %d\n", node->prev);
-      printf("next   = %d\n", node->next);
+      printf("u/l/r  = %d / %d / %d\n", node->parent, node->left, node->right);
+      printf("p/n    = %d / %d\n", node->prev, node->next);
       printf("start  = %d\n", node->start);
       printf("length = %d\n", node->length);
       printf("bytes  = %d\n", node->bytes);
 
       naf = node->next;
    }
+   printf("\n");
 
-   printf("\nfreechain:\n");
-   naf = root.chain;
-   while (naf != END) {
-      read_buffer(naf);
-      printf("%d (%d:%d) -> %d\n", naf, node->start, node->length, node->next);
-      naf = node->next;
+   if (root.chain == END) {
+      printf("freechain is empty\n");
+   }
+   else {
+      printf("freechain:\n");
+      naf = root.chain;
+      while (naf != END) {
+         read_buffer(naf);
+         printf("%d (%d:%d) -> %d\n", naf, node->start, node->length, node->next);
+         naf = node->next;
+      }
+      printf("\n");
    }
 
-   narf_pt(root.root, 0, 0);
+   if (root.root == END) {
+      printf("tree is empty\n");
+   }
+   else {
+      printf("tree:\n");
+      narf_pt(root.root, 0, 0);
+   }
 }
 #endif
 
@@ -701,6 +711,59 @@ NAF narf_alloc(const char *key, ByteSize bytes) {
    return naf;
 }
 
+//! @see narf.h
+NAF narf_realloc(const char *key, ByteSize bytes) {
+   NAF naf;
+   Sector length;
+   Sector og_length;
+
+   if (!verify()) return END;
+
+   naf = narf_find(key);
+
+   if (naf == END) {
+      return narf_alloc(key, bytes);
+   }
+
+   if (bytes == 0) {
+      narf_free(key);
+      return END;
+   }
+
+   read_buffer(naf);
+   if (bytes < node->bytes) {
+      // update the size
+      node->bytes = bytes;
+      write_buffer(naf);
+
+      og_length = node->length;
+      length = (bytes + NARF_SECTOR_SIZE - 1) / NARF_SECTOR_SIZE;
+      if (length < og_length) {
+         // update the length
+         node->length = length;
+         write_buffer(naf);
+
+         node->length = og_length - length - 1;
+         node->start = naf + node->length + 2;
+         write_buffer(naf + length + 1);
+         narf_chain(naf + length + 1);
+      }
+
+      return naf;
+   }
+
+   // ok, we need to grow.
+
+   // can we grow into vacant?
+
+   // can we grow into the chain?
+
+   // nothing worked, we need to move.
+
+   // placeholder for now
+   return END;
+}
+
 #ifdef NARF_SMART_FREE
 //! @brief A helper function used by narf_free()
 //! @see narf_free()
@@ -797,9 +860,6 @@ bool narf_free(const char *key) {
    right = node->right;
    prev = node->parent; // note reuse of variable
 
-   printf("===\n");
-   narf_pt(root.root, 0, 0);
-
    while (left != END && right != END) {
       // wobble down the chain until we have a free sibling
       if (prev != END) {
@@ -863,13 +923,10 @@ bool narf_free(const char *key) {
          assert(0);
       }
 
-   read_buffer(naf);
-   left = node->left;
-   right = node->right;
-   prev = node->parent; // note reuse of variable
-
-   printf("---\n");
-   narf_pt(root.root, 0, 0);
+      read_buffer(naf);
+      left = node->left;
+      right = node->right;
+      prev = node->parent; // note reuse of variable
    }
 
    if (left != END && right == END) {
@@ -881,10 +938,6 @@ bool narf_free(const char *key) {
    else if (left == END && right == END) {
       skip_naf(prev, naf, END);
    }
-
-   printf("---\n");
-   narf_pt(root.root, 0, 0);
-   printf("===\n");
 
    // add to the free chain
    narf_chain(naf);

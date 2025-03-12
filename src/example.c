@@ -59,6 +59,15 @@ void loop(void) {
          printf("narf_alloc(%s,%d)=%d\n",
             key, size, result ASSIGN narf_alloc(key, size));
       }
+      else if (!strncmp(buffer, "realloc ", 8)) {
+         char key[256];
+         int size;
+         NAF result;
+
+         sscanf(buffer, "realloc %s %d", key, &size);
+         printf("narf_realloc(%s,%d)=%d\n",
+            key, size, result ASSIGN narf_realloc(key, size));
+      }
       else if (!strncmp(buffer, "slurp ",6)) {
          char p[512];
          FILE *f;
