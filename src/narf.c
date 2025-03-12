@@ -731,34 +731,48 @@ NAF narf_realloc(const char *key, ByteSize bytes) {
    }
 
    read_buffer(naf);
-   if (bytes < node->bytes) {
-      // update the size
+   length = (bytes + NARF_SECTOR_SIZE - 1) / NARF_SECTOR_SIZE;
+   og_length = node->length;
+
+   // do we need to change at all?
+   if (og_length == length) {
       node->bytes = bytes;
       write_buffer(naf);
-
-      og_length = node->length;
-      length = (bytes + NARF_SECTOR_SIZE - 1) / NARF_SECTOR_SIZE;
-      if (length < og_length) {
-         // update the length
-         node->length = length;
-         write_buffer(naf);
-
-         node->length = og_length - length - 1;
-         node->start = naf + node->length + 2;
-         write_buffer(naf + length + 1);
-         narf_chain(naf + length + 1);
-      }
-
       return naf;
    }
 
-   // ok, we need to grow.
+   if (bytes < node->bytes) {
+      // we need to shrink
+      node->bytes = bytes;
+      node->length = length;
+      write_buffer(naf);
 
-   // can we grow into vacant?
+      node->length = og_length - length - 1;
+      node->start = naf + node->length + 2;
+      write_buffer(naf + length + 1);
+      narf_chain(naf + length + 1);
 
-   // can we grow into the chain?
+      return naf;
+   }
+   else {
+      // we need to grow
 
-   // nothing worked, we need to move.
+      // can we grow into vacant?
+      if (node->start + og_length == root.vacant) {
+         node->length = length;
+         node->bytes = bytes;
+         write_buffer(naf);
+
+         root.vacant += (length - og_length);
+         narf_sync();
+
+         return naf;
+      }
+
+      // can we grow into the chain?
+
+      // nothing worked, we need to move.
+   }
 
    // placeholder for now
    return END;
