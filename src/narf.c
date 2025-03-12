@@ -617,6 +617,16 @@ NAF narf_dirnext(const char *dirname, const char *sep, NAF naf) {
    return END;
 }
 
+//! @brief Trim a naf length down
+//! @see narf_alloc
+//! @see narf_realloc
+//!
+//! adds excess unused space to the chain.
+//! this is a helper function for narf_alloc()
+//! and narf_realloc()
+//!
+//! @param naf The NAF to trim
+//! @param length The desired length
 void trim_excess(NAF naf, Sector length) {
    NAF extra;
    Sector excess;
@@ -717,6 +727,17 @@ NAF narf_alloc(const char *key, ByteSize bytes) {
    return naf;
 }
 
+//! @brief Move a NAF, copying all data
+//! @see narf_realloc
+//!
+//! move and relink a NAF, adjusting size and
+//! copying old data.
+//! this is a helper function for narf_realloc()
+//!
+//! @param dst The destination for the NAF
+//! @param src The source for the NAF
+//! @param length The desired length
+//! @param bytes The desired bytes
 void narf_move(NAF dst, NAF src, Sector length, ByteSize bytes) {
    NAF prev, next, parent;
    Sector og_start;
