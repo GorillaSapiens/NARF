@@ -186,6 +186,7 @@ void narf_debug(void) {
    printf("root.chain         = %d\n", root.chain);
    printf("root.root          = %d\n", root.root);
    printf("root.first         = %d\n", root.first);
+   printf("root.last          = %d\n", root.last);
 
    sector = root.first;
    while (sector != END) {
@@ -223,7 +224,11 @@ void narf_debug(void) {
 static void narf_chain(NAF naf) {
    uint32_t prev;
    uint32_t next;
+   uint32_t tmp;
    uint32_t length;
+   uint32_t tmp_length;
+
+again:
 
    // reset fields
    read_buffer(naf);
@@ -234,7 +239,63 @@ static void narf_chain(NAF naf) {
    node->parent = END;
    node->bytes = 0;
    // do NOT reset "start" and "length"
+   length = node->length;
    write_buffer(naf);
+
+   // can they be combined with another?
+   prev = END;
+   next = root.chain;
+   while(next != END) {
+
+      read_buffer(next);
+
+      // anticipation...
+      tmp = next;
+      tmp_length = node->length;
+      next = node->next;
+
+      // are the two adjacent?
+      if ((naf == tmp + tmp_length + 1) ||
+          (naf + length + 1 == tmp)) {
+         // remove item from chain
+         if (prev == END) {
+            root.chain = next;
+            narf_sync();
+         }
+         else {
+            read_buffer(prev);
+            node->next = next;
+            write_buffer(prev);
+         }
+         // combine the two
+         if (tmp < naf) {
+            read_buffer(tmp);
+            node->length += length + 1;
+            write_buffer(tmp);
+            naf = tmp;
+         }
+         else {
+            read_buffer(naf);
+            node->length += tmp_length + 1;
+            write_buffer(naf);
+         }
+         // reinsert
+         goto again;
+      }
+
+      prev = tmp;
+      // next has already been set!
+   }
+
+   // dumbest case, can we rewind root.vacant?
+   if (root.vacant == naf + length + 1) {
+      root.vacant = naf;
+      narf_sync();
+      return;
+   }
+
+   // reset the buffer
+   read_buffer(naf);
 
    // record them in the free chain
    if (root.chain == END) {
