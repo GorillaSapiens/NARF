@@ -627,7 +627,7 @@ NAF narf_dirnext(const char *dirname, const char *sep, NAF naf) {
 //!
 //! @param naf The NAF to trim
 //! @param length The desired length
-void trim_excess(NAF naf, Sector length) {
+static void trim_excess(NAF naf, Sector length) {
    NAF extra;
    Sector excess;
 
@@ -738,7 +738,7 @@ NAF narf_alloc(const char *key, ByteSize bytes) {
 //! @param src The source for the NAF
 //! @param length The desired length
 //! @param bytes The desired bytes
-void narf_move(NAF dst, NAF src, Sector length, ByteSize bytes) {
+static void narf_move(NAF dst, NAF src, Sector length, ByteSize bytes) {
    NAF prev, next, parent;
    Sector og_start;
    Sector start;
