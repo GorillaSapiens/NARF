@@ -714,6 +714,10 @@ NAF narf_alloc(const char *key, ByteSize bytes) {
 //! @see narf.h
 NAF narf_realloc(const char *key, ByteSize bytes) {
    NAF naf;
+   NAF prev;
+   NAF next;
+   NAF tmp;
+   Sector start;
    Sector length;
    Sector og_length;
 
@@ -733,6 +737,7 @@ NAF narf_realloc(const char *key, ByteSize bytes) {
    read_buffer(naf);
    length = (bytes + NARF_SECTOR_SIZE - 1) / NARF_SECTOR_SIZE;
    og_length = node->length;
+   start = node->start;
 
    // do we need to change at all?
    if (og_length == length) {
@@ -770,6 +775,55 @@ NAF narf_realloc(const char *key, ByteSize bytes) {
       }
 
       // can we grow into the chain?
+      prev = END;
+      next = root.chain;
+      while(next != END) {
+         read_buffer(next);
+         tmp = next;
+         next = node->next;
+
+         if (start + og_length == tmp) {
+            // we found a block after us !!!
+
+            if (og_length + node->length + 1 >= length) {
+               // we fit !!!
+
+               // unlink from chain
+               if (prev != END) {
+                  read_buffer(prev);
+                  node->next = next;
+                  write_buffer(prev);
+               }
+               else {
+                  root.chain = next;
+                  narf_sync();
+               }
+
+               // absorb tmp
+               read_buffer(tmp);
+               og_length = node->length; // note variable reuse
+
+               read_buffer(naf);
+               node->bytes = bytes;
+               node->length += og_length + 1;
+               write_buffer(naf);
+
+               if (node->length > length) {
+                  // TODO FIX trim off the end
+               }
+
+               return naf;
+            }
+            else {
+               // we didn't fit.  no point to continue
+               // search.
+               break;
+            }
+         }
+
+         prev = tmp;
+         // next has already been set!
+      }
 
       // nothing worked, we need to move.
    }
