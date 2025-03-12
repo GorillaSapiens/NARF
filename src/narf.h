@@ -4,8 +4,13 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-// define this for debug functions
-#define NARF_DEBUG
+#include "narf_conf.h"
+
+//! @brief Type for NARF sectors
+//! @see narf_conf.h
+//!
+//! This is provided in the narf_conf.h file
+typedef NARF_SECTOR_ADDRESS_TYPE Sector;
 
 //! @brief Type for NARF entries
 //!
@@ -17,7 +22,10 @@
 //! we want to make clear the distinction between a
 //! NAF, which contains metadata, and a regular sector
 //! containing data.
-typedef uint32_t NAF;
+typedef Sector NAF;
+
+//! @brief Type for sizes in bytes
+typedef NARF_SIZE_TYPE ByteSize;
 
 //! @brief An invalid NAF
 //!
@@ -36,7 +44,7 @@ typedef uint32_t NAF;
 //!
 //! @param sectors The total size in sectors
 //! @return true for success
-bool narf_mkfs(uint32_t sectors);
+bool narf_mkfs(Sector sectors);
 
 //! @brief Initialize an existing NARF
 //!
@@ -123,7 +131,7 @@ NAF narf_dirnext(const char *dirname,
 //! @param size The size in bytes to reserve for data
 //! @return The new NAF
 NAF narf_alloc(const char *key,
-               uint32_t    size);
+               ByteSize    bytes);
 
 //! @brief Free storage for key
 //! @see narf_alloc()
@@ -168,13 +176,13 @@ const char *narf_key(NAF naf);
 //!
 //! @param naf The NAF
 //! @return a sector number or -1
-uint32_t narf_sector(NAF naf);
+Sector narf_sector(NAF naf);
 
 //! @brief Get the data size in bytes for this NAF
 //!
 //! @param naf The NAF
 //! @return the size in bytes
-uint32_t narf_size(NAF naf);
+ByteSize narf_size(NAF naf);
 
 //! @brief Get the first NAF in key order
 //! @see narf_next()

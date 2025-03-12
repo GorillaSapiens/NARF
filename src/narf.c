@@ -23,13 +23,9 @@
 
 #define END INVALID_NAF // i hate typing
 
-#define SECTOR_SIZE 512
-
 // 32 is the ideal height of a binary
 // tree with 2^32 nodes.
 #define FORCE_REBALANCE 32
-
-//#define SMART_FREE
 
 //! @brief The Root structure for our Not A Real Filesystem
 //!
@@ -41,15 +37,18 @@ typedef struct PACKED {
       uint8_t sigbytes[4];
    };
    uint32_t version;       // VERSION
-   uint32_t sector_size;   // sector size in bytes
-   uint32_t total_sectors; // total size of storage in sectors
+   ByteSize sector_size;   // sector size in bytes
+   Sector   total_sectors; // total size of storage in sectors
    NAF root;               // sector of root node
    NAF first;              // sector of first node in key order
    NAF last;               // sector of last node in key order
    NAF chain;              // previously allocated but free now
-   uint32_t vacant;        // number of first unallocated sector
+   Sector   vacant;        // number of first unallocated sector
 } Root;
-static_assert(sizeof(Root) == 9 * sizeof(uint32_t), "Root wrong size");
+static_assert(sizeof(Root) == 2 * sizeof(uint32_t) +
+                              1 * sizeof(ByteSize) +
+                              2 * sizeof(Sector) +
+                              4 * sizeof(NAF), "Root wrong size");
 
 // TODO FIX is "Header" really still an appropriate name for this?
 typedef struct PACKED {
@@ -59,15 +58,17 @@ typedef struct PACKED {
    NAF prev;        // previous ordered NAF
    NAF next;        // next ordered NAF
 
-   uint32_t start;       // data start sector
-   uint32_t length;      // data length in sectors
-   uint32_t bytes;       // data size in bytes
+   Sector   start;       // data start sector
+   Sector   length;      // data length in sectors
+   ByteSize bytes;       // data size in bytes
 
-   char key[512 - 8 * sizeof(uint32_t)]; // key
+   char key[NARF_SECTOR_SIZE - 5 * sizeof(NAF)
+                             - 2 * sizeof(Sector)
+                             - 1 * sizeof(ByteSize)]; // key
 } Header;
-static_assert(sizeof(Header) == 512, "Header wrong size");
+static_assert(sizeof(Header) == NARF_SECTOR_SIZE, "Header wrong size");
 
-uint8_t buffer[SECTOR_SIZE] = { 0 };
+uint8_t buffer[NARF_SECTOR_SIZE] = { 0 };
 Root root = { 0 };
 Header *node = (Header *) buffer;
 
@@ -95,26 +96,26 @@ static bool write_buffer(NAF naf) {
 static bool verify(void) {
    if (root.signature != SIGNATURE) return false;
    if (root.version != VERSION) return false;
-   if (root.sector_size != SECTOR_SIZE) return false;
+   if (root.sector_size != NARF_SECTOR_SIZE) return false;
    return true;
 }
 
 #ifdef NARF_DEBUG
 //! @brief Helper used to pretty print the NARF tree.
 //!
-//! @param sector The current sector being printed
+//! @param naf The current NAF being printed
 //! @param indent The number of levels to indent
 //! @param pattern Bitfield indicating tree limbs to print
-static void narf_pt(uint32_t sector, int indent, uint32_t pattern) {
-   uint32_t l, r;
+static void narf_pt(NAF naf, int indent, uint32_t pattern) {
+   NAF l, r;
    int i;
    char *p;
    char c;
 
    if (!verify()) return;
 
-   if (sector != END) {
-      read_buffer(sector);
+   if (naf != END) {
+      read_buffer(naf);
       l = node->left;
       r = node->right;
       p = strdup(node->key);
@@ -142,12 +143,12 @@ static void narf_pt(uint32_t sector, int indent, uint32_t pattern) {
       c = '=';
    }
 
-   if (sector == END) {
+   if (naf == END) {
       printf("%c- (nil)\n", c);
       return;
    }
    else {
-      printf("%c- %s [%d]\n", c, p, sector);
+      printf("%c- %s [%d]\n", c, p, naf);
       free(p);
    }
 
@@ -156,7 +157,7 @@ static void narf_pt(uint32_t sector, int indent, uint32_t pattern) {
 
 //! see narf.h
 void narf_debug(void) {
-   uint32_t sector;
+   NAF naf;
 
    printf("root.signature     = %08x '%4s'\n", root.signature, root.sigbytes);
    if (root.signature != SIGNATURE) {
@@ -171,7 +172,7 @@ void narf_debug(void) {
    }
 
    printf("root.sector_size   = %d\n", root.sector_size);
-   if (root.sector_size != SECTOR_SIZE) {
+   if (root.sector_size != NARF_SECTOR_SIZE) {
       printf("bad sector size\n");
       return;
    }
@@ -188,11 +189,11 @@ void narf_debug(void) {
    printf("root.first         = %d\n", root.first);
    printf("root.last          = %d\n", root.last);
 
-   sector = root.first;
-   while (sector != END) {
+   naf = root.first;
+   while (naf != END) {
       printf("\n");
-      read_buffer(sector);
-      printf("sector = %d\n", sector);
+      read_buffer(naf);
+      printf("sector = %d\n", naf);
       printf("key    = '%s'\n", node->key);
       printf("parent = %d\n", node->parent);
       printf("left   = %d\n", node->left);
@@ -203,15 +204,15 @@ void narf_debug(void) {
       printf("length = %d\n", node->length);
       printf("bytes  = %d\n", node->bytes);
 
-      sector = node->next;
+      naf = node->next;
    }
 
    printf("\nfreechain:\n");
-   sector = root.chain;
-   while (sector != END) {
-      read_buffer(sector);
-      printf("%d (%d:%d) -> %d\n", sector, node->start, node->length, node->next);
-      sector = node->next;
+   naf = root.chain;
+   while (naf != END) {
+      read_buffer(naf);
+      printf("%d (%d:%d) -> %d\n", naf, node->start, node->length, node->next);
+      naf = node->next;
    }
 
    narf_pt(root.root, 0, 0);
@@ -222,11 +223,11 @@ void narf_debug(void) {
 //!
 //! @param naf The NAF to add
 static void narf_chain(NAF naf) {
-   uint32_t prev;
-   uint32_t next;
-   uint32_t tmp;
-   uint32_t length;
-   uint32_t tmp_length;
+   NAF prev;
+   NAF next;
+   NAF tmp;
+   Sector length;
+   Sector tmp_length;
 
 again:
 
@@ -337,7 +338,7 @@ again:
    }
 }
 
-//! @brief Insert sector into the tree and list.
+//! @brief Insert NAF into the tree and list.
 //!
 //! Forces rebalance if tree is too tall.
 //!
@@ -439,13 +440,13 @@ static bool narf_insert(NAF naf, const char *key) {
 }
 
 //! @see narf.h
-bool narf_mkfs(uint32_t sectors) {
+bool narf_mkfs(Sector sectors) {
    if (!narf_io_open()) return false;
 
    memset(buffer, 0, sizeof(buffer));
    root.signature     = SIGNATURE;
    root.version       = VERSION;
-   root.sector_size   = SECTOR_SIZE;
+   root.sector_size   = NARF_SECTOR_SIZE;
    root.total_sectors = sectors;
    root.vacant        = 1;
    root.root          = END;
@@ -607,15 +608,15 @@ NAF narf_dirnext(const char *dirname, const char *sep, NAF naf) {
 }
 
 //! @see narf.h
-NAF narf_alloc(const char *key, uint32_t size) {
+NAF narf_alloc(const char *key, ByteSize bytes) {
    NAF naf;
-   uint32_t prev;
-   uint32_t next;
+   NAF prev;
+   NAF next;
 
-   uint32_t length;
-   uint32_t excess;
+   Sector length;
+   Sector excess;
 
-   length = (size + SECTOR_SIZE - 1) / SECTOR_SIZE;
+   length = (bytes + NARF_SECTOR_SIZE - 1) / NARF_SECTOR_SIZE;
 
    if (!verify()) return END;
 
@@ -685,7 +686,7 @@ NAF narf_alloc(const char *key, uint32_t size) {
    node->right  = END;
    node->prev    = END;
    node->next    = END;
-   node->bytes  = size;
+   node->bytes  = bytes;
    strncpy(node->key, key, sizeof(node->key));
    write_buffer(naf);
 
@@ -700,7 +701,7 @@ NAF narf_alloc(const char *key, uint32_t size) {
    return naf;
 }
 
-#ifdef SMART_FREE
+#ifdef NARF_SMART_FREE
 //! @brief A helper function used by narf_free()
 //! @see narf_free()
 //!
@@ -735,18 +736,18 @@ static void skip_naf(NAF parent, NAF naf, NAF child) {
       narf_sync();
    }
 }
-#endif
+#endif // NARF_SMART_FREE
 
 //! @see narf.h
 bool narf_free(const char *key) {
    NAF naf;
    NAF prev;
    NAF next;
-#ifdef SMART_FREE
+#ifdef NARF_SMART_FREE
    NAF left;
    NAF right;
    NAF beta;
-#endif
+#endif // NARF_SMART_FREE
 
    if (!verify()) return false;
 
@@ -760,10 +761,10 @@ bool narf_free(const char *key) {
    read_buffer(naf);
    prev = node->prev;
    next = node->next;
-#ifdef SMART_FREE
+#ifdef NARF_SMART_FREE
    left = node->left;
    right = node->right;
-#endif
+#endif // !NARF_SMART_FREE
    node->prev = END;
    node->next = END;
    write_buffer(naf);
@@ -788,7 +789,7 @@ bool narf_free(const char *key) {
       narf_sync();
    }
 
-#ifdef SMART_FREE
+#ifdef NARF_SMART_FREE
    // remove from tree
 
    read_buffer(naf);
@@ -892,7 +893,7 @@ bool narf_free(const char *key) {
    narf_sync();
    narf_chain(naf);
    narf_rebalance();
-#endif // SMART_FREE
+#endif // NARF_SMART_FREE
 
    return true;
 }
@@ -900,25 +901,25 @@ bool narf_free(const char *key) {
 //! @see narf.h
 bool narf_rebalance(void) {
    static char key[sizeof(((Header *) 0)->key)]; // EXPENSIVE !!!
-   uint32_t head = root.first;
+   NAF head = root.first;
 
-   uint32_t sector = root.first;
-   uint32_t count = 0;
-   uint32_t target = 0;
-   uint32_t spot = 0;
+   NAF naf = root.first;
+   Sector count = 0;
+   Sector target = 0;
+   Sector spot = 0;
 
-   uint32_t numerator;
-   uint32_t denominator = 2;
+   Sector numerator;
+   Sector denominator = 2;
 
-   uint32_t prev;
-   uint32_t next;
+   NAF prev;
+   NAF next;
 
    if (!verify()) return false;
 
-   while (sector != END) {
+   while (naf != END) {
       ++count;
-      read_buffer(sector);
-      sector = node->next;
+      read_buffer(naf);
+      naf = node->next;
    }
 
    root.root = END;
@@ -928,19 +929,19 @@ bool narf_rebalance(void) {
 
    while (denominator < count) {
       // odd multiples of denominator
-      sector = head;
+      naf = head;
       numerator = 1;
       target = count * numerator / denominator;
       spot = 0;
 
-      while (numerator < denominator && sector != END) {
-         read_buffer(sector);
-         while (sector != END) {
+      while (numerator < denominator && naf != END) {
+         read_buffer(naf);
+         while (naf != END) {
             next = node->next;
             if (spot == target) {
                prev = node->prev;
 
-               if (head == sector) {
+               if (head == naf) {
                   head = next;
                }
                if (prev != END) {
@@ -954,24 +955,24 @@ bool narf_rebalance(void) {
                   write_buffer(next);
                }
 
-               read_buffer(sector);
+               read_buffer(naf);
                node->prev = END;
                node->next = END;
                node->left = END;
                node->right = END;
                node->parent = END;
                strncpy(key, node->key, sizeof(node->key));
-               write_buffer(sector);
+               write_buffer(naf);
 
-               narf_insert(sector, key);
+               narf_insert(naf, key);
 
                numerator += 2;
                target = count * numerator / denominator;
             }
             ++spot;
-            sector = next;
-            if (sector != END) {
-               read_buffer(sector);
+            naf = next;
+            if (naf != END) {
+               read_buffer(naf);
             }
          }
       }
@@ -981,9 +982,9 @@ bool narf_rebalance(void) {
    }
 
    // now finish the job
-   sector = head;
-   while (sector != END) {
-      read_buffer(sector);
+   naf = head;
+   while (naf != END) {
+      read_buffer(naf);
       next = node->next;
       node->prev = END;
       node->next = END;
@@ -991,11 +992,11 @@ bool narf_rebalance(void) {
       node->right = END;
       node->parent = END;
       strncpy(key, node->key, sizeof(node->key));
-      write_buffer(sector);
+      write_buffer(naf);
 
-      narf_insert(sector, key);
+      narf_insert(naf, key);
 
-      sector = next;
+      naf = next;
    }
 
    return true;
@@ -1009,14 +1010,14 @@ const char *narf_key(NAF naf) {
 }
 
 //! @see narf.h
-uint32_t narf_sector(NAF naf) {
+Sector narf_sector(NAF naf) {
    if (!verify() || naf == END) return END;
    read_buffer(naf);
    return node->start;
 }
 
 //! @see narf.h
-uint32_t narf_size(NAF naf) {
+ByteSize narf_size(NAF naf) {
    if (!verify() || naf == END) return 0;
    read_buffer(naf);
    return node->bytes;
