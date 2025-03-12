@@ -101,6 +101,15 @@ static bool verify(void) {
 }
 
 #ifdef NARF_DEBUG
+
+#ifdef USE_UTF8
+#define HORIZ "━"
+#define VERT  "┃"
+#define UPPER "┏"
+#define LOWER "┗"
+#define NIL   "❌"
+#endif
+
 //! @brief Helper used to pretty print the NARF tree.
 //!
 //! @param naf The current NAF being printed
@@ -110,7 +119,7 @@ static void narf_pt(NAF naf, int indent, uint32_t pattern) {
    NAF l, r;
    int i;
    char *p;
-   char c;
+   char *arm;
 
    if (!verify()) return;
 
@@ -124,7 +133,11 @@ static void narf_pt(NAF naf, int indent, uint32_t pattern) {
 
    for (i = 0; i < indent; i++) {
       if (pattern & (1 << i)) {
+#ifndef USE_UTF8
          printf("|  ");
+#else
+         printf(VERT "  ");
+#endif
       }
       else {
          printf("   ");
@@ -133,22 +146,38 @@ static void narf_pt(NAF naf, int indent, uint32_t pattern) {
 
    if (indent) {
       if (pattern & (1 << indent)) {
-         c = '\\';
+#ifndef USE_UTF8
+         arm = "\\-";
+#else
+         arm = LOWER HORIZ;
+#endif
       }
       else {
-         c = '/';
+#ifndef USE_UTF8
+         arm = "/-";
+#else
+         arm = UPPER HORIZ;
+#endif
       }
    }
    else {
-      c = '=';
+#ifndef USE_UTF8
+      arm = "==";
+#else
+      arm = HORIZ HORIZ;
+#endif
    }
 
    if (naf == END) {
-      printf("%c- (nil)\n", c);
+#ifndef USE_UTF8
+      printf("%s (nil)\n", arm);
+#else
+      printf("%s%s\n", arm, NIL);
+#endif
       return;
    }
    else {
-      printf("%c- %s [%d]\n", c, p, naf);
+      printf("%s %s [%d]\n", arm, p, naf);
       free(p);
    }
 

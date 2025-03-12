@@ -19,6 +19,9 @@
 // Uncomment this for debugging functions
 #define NARF_DEBUG
 
+// Uncomment for unicode line drawing characters in debug functions
+#define USE_UTF8
+
 // Uncomment this for "smart" free implementation
 // This is faster, but takes up more code space
 #define NARF_SMART_FREE
