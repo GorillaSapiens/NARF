@@ -23,10 +23,6 @@
 
 #define END INVALID_NAF // i hate typing
 
-// 32 is the ideal height of a binary
-// tree with 2^32 nodes.
-#define FORCE_REBALANCE 32
-
 //! @brief The Root structure for our Not A Real Filesystem
 //!
 //! it is kept in memory, and flushed out with narf_sync().
@@ -43,11 +39,12 @@ typedef struct PACKED {
    NAF first;              // sector of first node in key order
    NAF last;               // sector of last node in key order
    NAF chain;              // previously allocated but free now
+   Sector   count;         // count of total number of allocated NAF
    Sector   vacant;        // number of first unallocated sector
 } Root;
 static_assert(sizeof(Root) == 2 * sizeof(uint32_t) +
                               1 * sizeof(ByteSize) +
-                              2 * sizeof(Sector) +
+                              3 * sizeof(Sector) +
                               4 * sizeof(NAF), "Root wrong size");
 
 // TODO FIX is "Header" really still an appropriate name for this?
@@ -71,6 +68,19 @@ static_assert(sizeof(Header) == NARF_SECTOR_SIZE, "Header wrong size");
 uint8_t buffer[NARF_SECTOR_SIZE] = { 0 };
 Root root = { 0 };
 Header *node = (Header *) buffer;
+
+//! @brief Get the ideal height for our tree.
+Sector max_height(void) {
+   Sector ret = 1;
+   Sector i = root.count;
+
+   while (i) {
+      ++ret;
+      i >>= 1;
+   }
+
+   return ret;
+}
 
 //! @brief Read a NAF into our buffer
 //!
@@ -217,6 +227,7 @@ void narf_debug(void) {
    printf("root.root          = %d\n", root.root);
    printf("root.first         = %d\n", root.first);
    printf("root.last          = %d\n", root.last);
+   printf("root.count         = %d\n", root.count);
    printf("\n");
 
    naf = root.first;
@@ -473,7 +484,7 @@ static bool narf_insert(NAF naf, const char *key) {
       }
    }
 
-   if (height > FORCE_REBALANCE) {
+   if (height > max_height()) {
       narf_rebalance();
    }
 
@@ -494,6 +505,7 @@ bool narf_mkfs(Sector sectors) {
    root.first         = END;
    root.last          = END;
    root.chain         = END;
+   root.count         = 0;
    memcpy(buffer, &root, sizeof(root));
    write_buffer(0);
 
@@ -752,6 +764,7 @@ NAF narf_alloc(const char *key, ByteSize bytes) {
          naf, node->start, node->length, node->bytes);
 #endif
 
+   ++root.count;
    narf_sync();
    narf_insert(naf, key);
 
@@ -1182,10 +1195,14 @@ bool narf_free(const char *key) {
       skip_naf(prev, naf, END);
    }
 
+   --root.count;
+   narf_sync();
+
    // add to the free chain
    narf_chain(naf);
 
 #else
+   --root.count;
    narf_sync();
    narf_chain(naf);
    narf_rebalance();
