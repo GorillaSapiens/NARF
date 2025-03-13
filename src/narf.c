@@ -1316,6 +1316,102 @@ bool narf_rebalance(void) {
 }
 
 //! @see narf.h
+bool narf_defrag(void) {
+   NAF tmp;
+   NAF other;
+   NAF parent, left, right, prev, next;
+   Sector tmp_length;
+   Sector other_length;
+   Sector i;
+
+   while (root.chain != END) {
+      tmp = root.chain;
+      read_buffer(tmp);
+      root.chain = node->next;
+      tmp_length = node->length;
+      narf_sync();
+
+      other = tmp + tmp_length + 1;
+      read_buffer(other);
+      other_length = node->length;
+      parent = node->parent;
+      left = node->left;
+      right = node->right;
+      prev = node->prev;
+      next = node->next;
+      node->start = tmp + 1;
+      write_buffer(tmp);
+
+      for (i = 0; i < other_length; ++i) {
+         read_buffer(other + i + 1);
+         write_buffer(tmp + i + 1);
+      }
+
+      if (parent != END) {
+         read_buffer(parent);
+         if (node->left == other) {
+            node->left = tmp;
+         }
+         else if (node->right == other) {
+            node->right = tmp;
+         }
+         else {
+            // this should never happen
+            assert(0);
+         }
+         write_buffer(parent);
+      }
+      else {
+         root.root = tmp;
+         narf_sync();
+      }
+
+      if (left != END) {
+         read_buffer(left);
+         node->parent = tmp;
+         write_buffer(left);
+      }
+
+      if (right != END) {
+         read_buffer(right);
+         node->parent = tmp;
+         write_buffer(right);
+      }
+
+      if (prev != END) {
+         read_buffer(prev);
+         node->next = tmp;
+         write_buffer(prev);
+      }
+      else {
+         root.first = tmp;
+         narf_sync();
+      }
+
+      if (next != END) {
+         read_buffer(next);
+         node->prev = tmp;
+         write_buffer(next);
+      }
+      else {
+         root.last = tmp;
+         narf_sync();
+      }
+
+      other = tmp + other_length + 1;
+
+      read_buffer(other);
+      node->start = other + 1;
+      node->length = tmp_length;
+      write_buffer(other);
+
+      narf_chain(other);
+   }
+
+   return true;
+}
+
+//! @see narf.h
 const char *narf_key(NAF naf) {
    if (!verify() || naf == END) return NULL;
    read_buffer(naf);

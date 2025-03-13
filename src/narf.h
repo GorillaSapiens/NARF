@@ -173,10 +173,18 @@ bool narf_free(const char *key);
 //! expensive operation.
 //!
 //! Other NARF functions (narf_alloc(), narf_free())
-//! may call this for you.
+//! may call this for you under some circumstances.
 //!
 //! @return true for success
 bool narf_rebalance(void);
+
+//! @brief Defragment and compact the NARF
+//! @see narf_free()
+//!
+//! This makes the NARF as small as possible by
+//! removing any gaps that may have been left by
+//! narf_free()
+bool narf_defrag(void);
 
 //! @brief Get the key corresponding to a NAF
 //! @see narf_find()

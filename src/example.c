@@ -68,6 +68,12 @@ void loop(void) {
          printf("narf_realloc(%s,%d)=%d\n",
             key, size, result ASSIGN narf_realloc(key, size));
       }
+      else if (!strncmp(buffer, "defrag", 6)) {
+         bool result;
+
+         printf("narf_defrag()=%s\n",
+            tf[result ASSIGN narf_defrag()]);
+      }
       else if (!strncmp(buffer, "slurp ",6)) {
          char p[512];
          FILE *f;
