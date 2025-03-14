@@ -197,7 +197,21 @@ static void narf_pt(NAF naf, int indent, uint32_t pattern) {
       return;
    }
    else {
-      printf("%s %s [%d]\n", arm, p, naf);
+      printf("%s %s [%d]", arm, p, naf);
+      if (naf == root.first) {
+         printf(" (first)");
+      }
+      if (naf == root.last) {
+         printf(" (last)");
+      }
+      if (naf == root.root) {
+         printf(" (root)");
+      }
+      if (naf == root.chain) {
+         // seeing this means there's a serious problem
+         printf(" (chain)");
+      }
+      printf("\n");
       free(p);
    }
 
