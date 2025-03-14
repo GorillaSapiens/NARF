@@ -79,8 +79,6 @@ Sector max_height(void) {
       i >>= 1;
    }
 
-   ret = ret * 3 / 2; // integer * 1.5
-
    return ret;
 }
 
@@ -97,14 +95,10 @@ static bool read_buffer(NAF naf) {
 //! @param naf The NAF to write
 //! @return true on success
 static bool write_buffer(NAF naf) {
-#ifdef NARF_DEBUG_INTEGRITY
-   assert(!naf || (node->start == naf + 1));
-#endif
-   return narf_io_write(naf, buffer);
-}
-
-//! @brief perilous! no checking!
-static bool write_data(NAF naf) {
+// #ifdef NARF_DEBUG_INTEGRITY
+// // doing this here interferes with data move!
+//    assert(!naf || (node->start == naf + 1));
+// #endif
    return narf_io_write(naf, buffer);
 }
 
@@ -546,7 +540,7 @@ again:
    length = node->length;
    write_buffer(naf);
 
-#ifdef NARF_DEBUG
+#ifdef NARF_DEBUG_INTEGRITY
    printf("chaining...\n");
    print_node(naf);
 #endif
@@ -576,7 +570,7 @@ again:
             node->next = next;
             write_buffer(prev);
          }
-#ifdef NARF_DEBUG
+#ifdef NARF_DEBUG_INTEGRITY
          printf("combining %d %d\n", naf, tmp);
          print_node(naf);
          print_node(tmp);
@@ -603,7 +597,7 @@ again:
 
    // dumbest case, can we rewind root.vacant?
    if (root.vacant == naf + length + 1) {
-#ifdef NARF_DEBUG
+#ifdef NARF_DEBUG_INTEGRITY
       printf("rewind to %d\n", naf);
 #endif
       root.vacant = naf;
@@ -616,7 +610,7 @@ again:
 
    // record them in the free chain
    if (root.chain == END) {
-#ifdef NARF_DEBUG
+#ifdef NARF_DEBUG_INTEGRITY
       printf("head of chain\n");
 #endif
       // done above // read_buffer(naf);
@@ -756,7 +750,7 @@ static bool narf_insert(NAF naf, const char *key) {
       }
    }
 
-   if (height > max_height()) {
+   if (height > max_height() + 2) {
       narf_rebalance();
    }
 
@@ -950,7 +944,7 @@ static void trim_excess(NAF naf, Sector length) {
    NAF extra;
    Sector excess;
 
-#ifdef NARF_DEBUG
+#ifdef NARF_DEBUG_INTEGRITY
    printf("TRIMMING %d %d\n", naf, length);
    print_chain();
    printf("\n");
@@ -983,7 +977,7 @@ NAF narf_unchain(Sector length) {
       read_buffer(next);
       if (node->length >= length) {
 
-#ifdef NARF_DEBUG
+#ifdef NARF_DEBUG_INTEGRITY
          printf("NEED %d FOUND %d %d:%d\n",
                 length, next, node->start, node->length);
          print_node(next);
@@ -1068,7 +1062,7 @@ NAF narf_alloc(const char *key, ByteSize bytes) {
    strncpy(node->key, key, sizeof(node->key));
    write_buffer(naf);
 
-#ifdef NARF_DEBUG
+#ifdef NARF_DEBUG_INTEGRITY
    printf("alloc %08x %08x %d %d\n",
          naf, node->start, node->length, node->bytes);
 #endif
@@ -1103,16 +1097,6 @@ static void narf_move(NAF dst, NAF src, Sector length, ByteSize bytes) {
    Sector og_length;
    Sector i;
 
-#ifdef NARF_DEBUG_INTEGRITY
-   printf("MOVE SRC\n");
-   print_node(src);
-   if (node->parent != END) {
-      printf("MOVE SRC->PARENT\n");
-      print_node(node->parent);
-   }
-   printf("\n");
-#endif
-
    // move into our new home
    read_buffer(src);
    og_start = node->start;
@@ -1126,11 +1110,6 @@ static void narf_move(NAF dst, NAF src, Sector length, ByteSize bytes) {
    left = node->left;
    right = node->right;
    write_buffer(dst);
-
-#ifdef NARF_DEBUG_INTEGRITY
-   printf("MOVE DST\n");
-   print_node(dst);
-#endif
 
    // fix up prev
    if (prev != END) {
@@ -1191,7 +1170,7 @@ static void narf_move(NAF dst, NAF src, Sector length, ByteSize bytes) {
    // copy the data
    for (i = 0; i < og_length; i++) {
       read_buffer(og_start + i);
-      write_data(start + i);
+      write_buffer(start + i);
    }
 
    // chain the old naf
@@ -1217,11 +1196,6 @@ NAF narf_realloc(const char *key, ByteSize bytes) {
       narf_free(key);
       return END;
    }
-
-#ifdef NARF_DEBUG_INTEGRITY
-   printf("REALLOC FOUND\n");
-   print_node(naf);
-#endif
 
    read_buffer(naf);
    length = (bytes + NARF_SECTOR_SIZE - 1) / NARF_SECTOR_SIZE;
