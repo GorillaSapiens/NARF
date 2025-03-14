@@ -79,6 +79,8 @@ Sector max_height(void) {
       i >>= 1;
    }
 
+   ret = ret * 3 / 2; // integer * 1.5
+
    return ret;
 }
 
@@ -742,6 +744,12 @@ NAF narf_alloc(const char *key, ByteSize bytes) {
 
    if (naf == END) {
       // nothing on the chain was suitable
+ 
+      if (root.vacant + length + 1 > root.total_sectors) {
+         // NO ROOM!!!
+         return END;
+      }
+
       naf = root.vacant;
       ++root.vacant;
       node->start  = root.vacant;
@@ -1009,6 +1017,12 @@ NAF narf_realloc(const char *key, ByteSize bytes) {
       }
 
       // all options exhausted, move into vacant
+
+      if (root.vacant + length + 1 > root.total_sectors) {
+         // NO ROOM!!!
+         return END;
+      }
+
       tmp = root.vacant;
       root.vacant += length + 1;
       narf_sync();
