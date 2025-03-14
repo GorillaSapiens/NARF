@@ -97,6 +97,14 @@ static bool read_buffer(NAF naf) {
 //! @param naf The NAF to write
 //! @return true on success
 static bool write_buffer(NAF naf) {
+#ifdef NARF_DEBUG_INTEGRITY
+   assert(!naf || (node->start == naf + 1));
+#endif
+   return narf_io_write(naf, buffer);
+}
+
+//! @brief perilous! no checking!
+static bool write_data(NAF naf) {
    return narf_io_write(naf, buffer);
 }
 
@@ -196,7 +204,38 @@ static void narf_pt(NAF naf, int indent, uint32_t pattern) {
    narf_pt(r, indent + 1, (pattern ^ (3 << (indent))) & ~1);
 }
 
-//! see narf.h
+//! @see narf_debug
+void print_node(NAF naf) {
+   read_buffer(naf);
+   printf("naf = %d => '%.*s'\n",
+          naf, (int) sizeof(node->key), node->key);
+   printf("tree u/l/r  = %d / %d / %d\n",
+          node->parent, node->left, node->right);
+   printf("list p/n    = %d / %d\n",
+          node->prev, node->next);
+   printf("start:len   = %d:%d (%d)\n",
+          node->start, node->length, node->bytes);
+}
+
+//! @see narf_debug()
+void print_chain(void) {
+   NAF naf;
+   if (root.chain == END) {
+      printf("freechain is empty\n");
+   }
+   else {
+      printf("freechain:\n");
+      naf = root.chain;
+      while (naf != END) {
+         read_buffer(naf);
+         printf("%d (%d:%d) -> %d\n", naf, node->start, node->length, node->next);
+         naf = node->next;
+      }
+      printf("\n");
+   }
+}
+
+//! @see narf.h
 void narf_debug(void) {
    NAF naf;
 
@@ -234,33 +273,13 @@ void narf_debug(void) {
 
    naf = root.first;
    while (naf != END) {
-      read_buffer(naf);
-      printf("naf = %d => '%.*s'\n",
-         naf, (int) sizeof(node->key), node->key);
-      printf("tree u/l/r  = %d / %d / %d\n",
-         node->parent, node->left, node->right);
-      printf("list p/n    = %d / %d\n",
-         node->prev, node->next);
-      printf("start:len   = %d:%d (%d)\n",
-         node->start, node->length, node->bytes);
+      print_node(naf);
       printf("\n");
 
       naf = node->next;
    }
 
-   if (root.chain == END) {
-      printf("freechain is empty\n");
-   }
-   else {
-      printf("freechain:\n");
-      naf = root.chain;
-      while (naf != END) {
-         read_buffer(naf);
-         printf("%d (%d:%d) -> %d\n", naf, node->start, node->length, node->next);
-         naf = node->next;
-      }
-      printf("\n");
-   }
+   print_chain();
    printf("\n");
 
    if (root.root == END) {
@@ -270,6 +289,222 @@ void narf_debug(void) {
       printf("tree:\n");
       narf_pt(root.root, 0, 0);
    }
+}
+#endif
+
+#ifdef NARF_DEBUG_INTEGRITY
+void verify_not_on_tree(NAF parent, NAF naf) {
+   NAF l, r;
+
+   if (parent == END) {
+      return;
+   }
+   assert(parent != naf);
+
+   read_buffer(parent);
+   l = node->left;
+   r = node->right;
+
+   verify_not_on_tree(l, naf);
+   verify_not_on_tree(r, naf);
+}
+
+void verify_not_in_chain(NAF naf) {
+   NAF tmp;
+   tmp = root.chain;
+   while (tmp != END) {
+      read_buffer(tmp);
+      assert(naf != tmp);
+      tmp = node->next;
+   }
+}
+
+//! @brief if it's in the tree, it should not be in chain
+void walk_tree(NAF parent, NAF naf) {
+   NAF l, r;
+
+   if (naf == END) {
+      return;
+   }
+
+   verify_not_in_chain(naf);
+
+   // assert parent linkage
+   if (parent == END) {
+      assert(root.root == naf);
+   }
+   else {
+      read_buffer(parent);
+      assert((node->left == naf || node->right == naf) &&
+             (node->left != node->right));
+   }
+
+   read_buffer(naf);
+   l = node->left;
+   r = node->right;
+
+   // assert parent
+   assert(node->parent == parent);
+
+   walk_tree(naf, l);
+   walk_tree(naf, r);
+}
+
+//! @brief if it's in the chain, it should not be in tree
+void walk_chain(void) {
+   NAF tmp;
+   NAF next;
+   tmp = root.chain;
+   while (tmp != END) {
+      read_buffer(tmp);
+      next = node->next;
+      verify_not_on_tree(root.root, tmp);
+      tmp = next;
+   }
+}
+
+//! @brief detect a loop in the chain linked list
+void chain_loop(void) {
+   NAF a, b;
+
+   a = b = root.chain;
+
+   while (a != END && b != END) {
+
+      assert(a < root.vacant);
+
+      read_buffer(a);
+      a = node->next;
+
+      read_buffer(b);
+      b = node->next;
+      if (b != END) {
+         read_buffer(b);
+         b = node->next;
+      }
+
+      if (a != END && b != END) {
+         assert (a != b);
+      }
+   }
+}
+
+//! @brief detect a loop in the ordered linked list
+void order_loop(void) {
+   NAF a, b;
+
+   a = b = root.first;
+
+   while (a != END && b != END) {
+      read_buffer(a);
+      a = node->next;
+
+      read_buffer(b);
+      b = node->next;
+      if (b != END) {
+         read_buffer(b);
+         b = node->next;
+      }
+
+      if (a != END && b != END) {
+         assert (a != b);
+      }
+   }
+}
+
+//! @brief detect a loop in the reverse order linked list
+void reverse_loop(void) {
+   NAF a, b;
+
+   a = b = root.last;
+
+   while (a != END && b != END) {
+      read_buffer(a);
+      a = node->prev;
+
+      read_buffer(b);
+      b = node->next;
+      if (b != END) {
+         read_buffer(b);
+         b = node->next;
+      }
+
+      if (a != END) {
+         read_buffer(a);
+         b = node->prev;
+      }
+      if (a != END && b != END) {
+         assert (a != b);
+      }
+   }
+}
+
+void walk_order(void) {
+   NAF prev;
+   NAF next;
+   NAF naf;
+
+   if (root.first == END && root.last == END) {
+      return;
+   }
+
+   assert(root.first != END && root.last != END);
+
+   // walk forward
+   prev = END;
+   naf = root.first;
+
+   while (naf != END) {
+      read_buffer(naf);
+      next = node->next;
+
+      if (node->prev == END) {
+         assert(root.first == naf);
+      }
+      else {
+         read_buffer(node->prev);
+         assert(node->next == naf);
+      }
+
+      prev = naf;
+      naf = next;
+   }
+
+   // walk backward
+   next = END;
+   naf = root.last;
+
+   while (naf != END) {
+      read_buffer(naf);
+      prev = node->prev;
+
+      if (node->next == END) {
+         assert(root.last == naf);
+      }
+      else {
+         read_buffer(node->next);
+         assert(node->prev == naf);
+      }
+
+      next = naf;
+      naf = prev;
+   }
+}
+
+void verify_integrity(void) {
+   printf("verify integrity order_loop\n");
+   order_loop();
+   printf("verify integrity reverse_loop\n");
+   reverse_loop();
+   printf("verify integrity chain_loop\n");
+   chain_loop();
+   printf("verify integrity walk_chain\n");
+   walk_chain();
+   printf("verify integrity walk_tree\n");
+   walk_tree(END, root.root);
+   printf("verify integrity prev_next_cohesion\n");
+   walk_order();
+   // TODO test tree <-> first/last cohesion
 }
 #endif
 
@@ -297,6 +532,11 @@ again:
    length = node->length;
    write_buffer(naf);
 
+#ifdef NARF_DEBUG
+   printf("chaining...\n");
+   print_node(naf);
+#endif
+
    // can they be combined with another?
    prev = END;
    next = root.chain;
@@ -322,6 +562,11 @@ again:
             node->next = next;
             write_buffer(prev);
          }
+#ifdef NARF_DEBUG
+         printf("combining %d %d\n", naf, tmp);
+         print_node(naf);
+         print_node(tmp);
+#endif
          // combine the two
          if (tmp < naf) {
             read_buffer(tmp);
@@ -344,6 +589,9 @@ again:
 
    // dumbest case, can we rewind root.vacant?
    if (root.vacant == naf + length + 1) {
+#ifdef NARF_DEBUG
+      printf("rewind to %d\n", naf);
+#endif
       root.vacant = naf;
       narf_sync();
       return;
@@ -354,6 +602,9 @@ again:
 
    // record them in the free chain
    if (root.chain == END) {
+#ifdef NARF_DEBUG
+      printf("head of chain\n");
+#endif
       // done above // read_buffer(naf);
       node->next = root.chain;
       write_buffer(naf);
@@ -390,6 +641,10 @@ again:
       node->next = next;
       write_buffer(naf);
    }
+
+#ifdef NARF_DEBUG_INTEGRITY
+   verify_integrity();
+#endif
 }
 
 //! @brief Insert NAF into the tree and list.
@@ -410,6 +665,7 @@ static bool narf_insert(NAF naf, const char *key) {
    if (root.root == END) {
       root.root = naf;
       root.first = naf;
+      root.last = naf;
       narf_sync();
    }
    else {
@@ -489,6 +745,10 @@ static bool narf_insert(NAF naf, const char *key) {
    if (height > max_height()) {
       narf_rebalance();
    }
+
+#ifdef NARF_DEBUG_INTEGRITY
+   verify_integrity();
+#endif
 
    return true;
 }
@@ -676,6 +936,12 @@ static void trim_excess(NAF naf, Sector length) {
    NAF extra;
    Sector excess;
 
+#ifdef NARF_DEBUG
+   printf("TRIMMING %d %d\n", naf, length);
+   print_chain();
+   printf("\n");
+#endif
+
    read_buffer(naf);
 
    excess = node->length - length;
@@ -692,29 +958,23 @@ static void trim_excess(NAF naf, Sector length) {
    narf_chain(extra);
 }
 
-//! @see narf.h
-NAF narf_alloc(const char *key, ByteSize bytes) {
-   NAF naf;
+NAF narf_unchain(Sector length) {
    NAF prev;
    NAF next;
-   Sector length;
+   NAF naf;
 
-   length = (bytes + NARF_SECTOR_SIZE - 1) / NARF_SECTOR_SIZE;
-
-   if (!verify()) return END;
-
-   naf = narf_find(key);
-
-   if (naf != END) {
-      return false;
-   }
-
-   // first check if we can allocate from the chain
    prev = END;
    next = root.chain;
    while(next != END) {
       read_buffer(next);
       if (node->length >= length) {
+
+#ifdef NARF_DEBUG
+         printf("NEED %d FOUND %d %d:%d\n",
+                length, next, node->start, node->length);
+         print_node(next);
+#endif
+
          // this will do nicely
          naf = next;
          next = node->next;
@@ -736,11 +996,36 @@ NAF narf_alloc(const char *key, ByteSize bytes) {
             trim_excess(naf, length);
          }
          read_buffer(naf);
-         break;
+
+#ifdef NARF_DEBUG_INTEGRITY
+   verify_integrity();
+#endif
+
+         return naf;
       }
       prev = next;
       next = node->next;
    }
+   return END;
+}
+
+//! @see narf.h
+NAF narf_alloc(const char *key, ByteSize bytes) {
+   NAF naf;
+   Sector length;
+
+   length = (bytes + NARF_SECTOR_SIZE - 1) / NARF_SECTOR_SIZE;
+
+   if (!verify()) return END;
+
+   naf = narf_find(key);
+
+   if (naf != END) {
+      return false;
+   }
+
+   // first check if we can allocate from the chain
+   naf = narf_unchain(length);
 
    if (naf == END) {
       // nothing on the chain was suitable
@@ -755,9 +1040,11 @@ NAF narf_alloc(const char *key, ByteSize bytes) {
       node->start  = root.vacant;
       node->length = length;
       root.vacant += length;
+      write_buffer(naf);
    }
 
    // reset fields except start and length
+   read_buffer(naf);
    node->parent = END;
    node->left   = END;
    node->right  = END;
@@ -776,6 +1063,10 @@ NAF narf_alloc(const char *key, ByteSize bytes) {
    narf_sync();
    narf_insert(naf, key);
 
+#ifdef NARF_DEBUG_INTEGRITY
+   verify_integrity();
+#endif
+
    return naf;
 }
 
@@ -792,10 +1083,21 @@ NAF narf_alloc(const char *key, ByteSize bytes) {
 //! @param bytes The desired bytes
 static void narf_move(NAF dst, NAF src, Sector length, ByteSize bytes) {
    NAF prev, next, parent;
+   NAF left, right;
    Sector og_start;
    Sector start;
    Sector og_length;
    Sector i;
+
+#ifdef NARF_DEBUG_INTEGRITY
+   printf("MOVE SRC\n");
+   print_node(src);
+   if (node->parent != END) {
+      printf("MOVE SRC->PARENT\n");
+      print_node(node->parent);
+   }
+   printf("\n");
+#endif
 
    // move into our new home
    read_buffer(src);
@@ -807,7 +1109,14 @@ static void narf_move(NAF dst, NAF src, Sector length, ByteSize bytes) {
    prev = node->prev;
    next = node->next;
    parent = node->parent;
+   left = node->left;
+   right = node->right;
    write_buffer(dst);
+
+#ifdef NARF_DEBUG_INTEGRITY
+   printf("MOVE DST\n");
+   print_node(dst);
+#endif
 
    // fix up prev
    if (prev != END) {
@@ -851,10 +1160,24 @@ static void narf_move(NAF dst, NAF src, Sector length, ByteSize bytes) {
       narf_sync();
    }
 
+   // fix up left
+   if (left != END) {
+      read_buffer(left);
+      node->parent = dst;
+      write_buffer(left);
+   }
+
+   // fix up right
+   if (right != END) {
+      read_buffer(right);
+      node->parent = dst;
+      write_buffer(right);
+   }
+
    // copy the data
    for (i = 0; i < og_length; i++) {
       read_buffer(og_start + i);
-      write_buffer(start + i);
+      write_data(start + i);
    }
 
    // chain the old naf
@@ -864,10 +1187,7 @@ static void narf_move(NAF dst, NAF src, Sector length, ByteSize bytes) {
 //! @see narf.h
 NAF narf_realloc(const char *key, ByteSize bytes) {
    NAF naf;
-   NAF prev;
-   NAF next;
    NAF tmp;
-   Sector og_start;
    Sector length;
    Sector og_length;
 
@@ -884,10 +1204,14 @@ NAF narf_realloc(const char *key, ByteSize bytes) {
       return END;
    }
 
+#ifdef NARF_DEBUG_INTEGRITY
+   printf("REALLOC FOUND\n");
+   print_node(naf);
+#endif
+
    read_buffer(naf);
    length = (bytes + NARF_SECTOR_SIZE - 1) / NARF_SECTOR_SIZE;
    og_length = node->length;
-   og_start = node->start;
 
    // do we need to change at all?
    if (og_length == length) {
@@ -903,117 +1227,31 @@ NAF narf_realloc(const char *key, ByteSize bytes) {
       write_buffer(naf);
 
       node->length = og_length - length - 1;
-      node->start = naf + node->length + 2;
+      node->start = naf + length + 2;
       write_buffer(naf + length + 1);
       narf_chain(naf + length + 1);
+
+#ifdef NARF_DEBUG_INTEGRITY
+   verify_integrity();
+#endif
 
       return naf;
    }
    else {
       // we need to grow
 
-      // can we grow into vacant?
-      if (node->start + og_length == root.vacant) {
-         node->length = length;
-         node->bytes = bytes;
-         write_buffer(naf);
+      // first check if we can allocate from the chain
+      tmp = narf_unchain(length);
+      if (tmp != END) {
+         // move into our new home
+         narf_move(tmp, naf, length, bytes);
 
-         root.vacant += (length - og_length);
-         narf_sync();
+#ifdef NARF_DEBUG_INTEGRITY
+   verify_integrity();
+#endif
 
-         return naf;
-      }
-
-      // can we grow into the chain?
-      prev = END;
-      next = root.chain;
-      while(next != END) {
-         read_buffer(next);
-         tmp = next;
-         next = node->next;
-
-         if (og_start + og_length == tmp) {
-            // we found a block after us !!!
-
-            if (og_length + node->length + 1 >= length) {
-               // we fit !!!
-
-               // unlink from chain
-               if (prev != END) {
-                  read_buffer(prev);
-                  node->next = next;
-                  write_buffer(prev);
-               }
-               else {
-                  root.chain = next;
-                  narf_sync();
-               }
-
-               // absorb tmp
-               read_buffer(tmp);
-               og_length = node->length; // note variable reuse
-
-               read_buffer(naf);
-               node->bytes = bytes;
-               node->length += og_length + 1;
-               write_buffer(naf);
-
-               if (node->length > length) {
-                  // we need to trim the excess.
-                  trim_excess(naf, length);
-               }
-
-               return naf;
-            }
-            else {
-               // we didn't fit.  no point to continue
-               // search.
-               break;
-            }
-         }
-
-         prev = tmp;
-         // next has already been set!
-      }
-
-      // nothing place to expand, we need to move.
-
-      // can we move into chain?
-      prev = END;
-      next = root.chain;
-      while(next != END) {
-         read_buffer(next);
-         tmp = next;
-         next = node->next;
-
-         if (node->length >= length + 1) {
-            // we found a spot big enough for us !!!
-
-            // unlink from chain
-            if (prev != END) {
-               read_buffer(prev);
-               node->next = next;
-               write_buffer(prev);
-            }
-            else {
-               root.chain = next;
-               narf_sync();
-            }
-
-            if (node->length > length + 1) { // TODO FIX is this right???
-               // we need to trim the excess.
-               trim_excess(tmp, length);
-            }
-
-            // move into our new home
-            narf_move(tmp, naf, length, bytes);
-
-            // return the new
-            return tmp;
-         }
-
-         prev = tmp;
-         // next has already been set!
+         // return the new
+         return tmp;
       }
 
       // all options exhausted, move into vacant
@@ -1027,6 +1265,11 @@ NAF narf_realloc(const char *key, ByteSize bytes) {
       root.vacant += length + 1;
       narf_sync();
       narf_move(tmp, naf, length, bytes);
+
+#ifdef NARF_DEBUG_INTEGRITY
+   verify_integrity();
+#endif
+
       return tmp;
    }
 
@@ -1068,6 +1311,10 @@ static void skip_naf(NAF parent, NAF naf, NAF child) {
       root.root = child;
       narf_sync();
    }
+
+#ifdef NARF_DEBUG_INTEGRITY
+   verify_integrity();
+#endif
 }
 #endif // NARF_SMART_FREE
 
@@ -1326,6 +1573,10 @@ bool narf_rebalance(void) {
       naf = next;
    }
 
+#ifdef NARF_DEBUG_INTEGRITY
+   verify_integrity();
+#endif
+
    return true;
 }
 
@@ -1421,6 +1672,10 @@ bool narf_defrag(void) {
 
       narf_chain(other);
    }
+
+#ifdef NARF_DEBUG_INTEGRITY
+   verify_integrity();
+#endif
 
    return true;
 }

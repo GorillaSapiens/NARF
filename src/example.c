@@ -131,17 +131,18 @@ char *rname(int l) {
 
 void gremlins(int s, int n) {
    char buf[1024];
+   int m;
    int l;
 
    printf("gremlins %d %d\n", s, n);
 
    srand(s);
 
-   l = rand() % 5 + 3; // length of keys
+   l = rand() % 7 + 1; // length of keys
 
    process_cmd("mkfs");
 
-   while(n) {
+   for(m = 0; m < n; m++) {
       switch(rand() % 4) {
          case 0:
             sprintf(buf, "alloc %s %d", rname(l), rand() % 65536);
@@ -156,14 +157,16 @@ void gremlins(int s, int n) {
             sprintf(buf, "cat %s", rname(l));
             break;
       }
-      printf("GREMLINS: %s\n", buf);
+      printf("\n\nGREMLINS %d: %s\n", m, buf);
       process_cmd(buf);
-      n--;
+      printf("\nAFTER:\n");
+      narf_debug();
+      printf("\n");
    }
 
-   narf_debug();
-   narf_io_close();
-   exit(0);
+   //narf_debug();
+   //narf_io_close();
+   //exit(0);
 }
 
 void loop(void) {
