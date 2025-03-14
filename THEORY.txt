@@ -39,6 +39,12 @@ of the tree, and the beginning and end of the linked list.
 
 ===
 
+If you're concerned about wear leveling and bad block detection, modern
+micro SD cards have this built in to the silicon.  there's no need for
+NARF to worry about it on uSD.
+
+===
+
 there are two convenience functions worth mentioning, narf_dirfirst()
 and narf_dirnext().  together they allow you to traverse keys as if they
 were full paths.
