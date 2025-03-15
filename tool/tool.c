@@ -16,6 +16,42 @@ void HandleFileDrop(HWND hwnd, HDROP hDrop);
 
 HTREEITEM hDraggedItem = NULL; // Store the item being dragged
 HWND hTreeView;
+HIMAGELIST hDragImageList;
+POINT ptOffset;
+HIMAGELIST hImageList;
+
+// Create an image list for the TreeView and associate an HBITMAP
+void CreateImageList(HWND hwnd) {
+    hImageList = ImageList_Create(16, 16, ILC_COLOR32 | ILC_MASK, 1, 1);  // Create image list (16x16 icons)
+
+    // Create a simple 16x16 bitmap dynamically (you can replace this with your own logic)
+    HBITMAP hBitmap = CreateCompatibleBitmap(GetDC(hwnd), 16, 16);
+
+    if (hBitmap == NULL) {
+        MessageBox(NULL, "Failed to create bitmap!", "Error", MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    // Create a memory DC and select the bitmap into it
+    HDC hdcMem = CreateCompatibleDC(GetDC(hwnd));
+    HBITMAP hOldBitmap = (HBITMAP)SelectObject(hdcMem, hBitmap);
+
+    // Draw something simple into the bitmap (for example, a red rectangle)
+    RECT rect = { 0, 0, 16, 16 };
+    HBRUSH hBrush = CreateSolidBrush(RGB(255, 0, 0));  // Red color
+    FillRect(hdcMem, &rect, hBrush);
+
+    // Clean up
+    SelectObject(hdcMem, hOldBitmap);
+    DeleteDC(hdcMem);
+    DeleteObject(hBrush);
+
+    // Add the bitmap to the image list
+    ImageList_Add(hImageList, hBitmap, NULL);
+
+    // Set the image list for the TreeView control
+    TreeView_SetImageList(hTreeView, hImageList, TVSIL_NORMAL);  // Set the normal image list
+}
 
 void InitializeTreeView(HWND hwnd) {
     INITCOMMONCONTROLSEX icex;
@@ -31,6 +67,8 @@ void InitializeTreeView(HWND hwnd) {
         MessageBox(hwnd, "TreeView creation failed!", "Error", MB_OK | MB_ICONERROR);
         return;
     }
+
+    CreateImageList(hwnd);
     
     ShowWindow(hTreeView, SW_SHOW);
     UpdateWindow(hTreeView);
@@ -135,7 +173,6 @@ const char* TreeView_GetItemText(HWND hTree, HTREEITEM hItem) {
     tvi.pszText = itemText;
     tvi.cchTextMax = sizeof(itemText) - 1;
 
-printf ("%p %p %s\n",itemText, tvi.pszText, tvi.pszText);
     if (TreeView_GetItem(hTree, &tvi)) {
         return itemText;
     }
@@ -147,9 +184,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
     switch (uMsg) {
         case WM_SIZE:
             ResizeTreeView(hwnd);
-            return 0;
-        case WM_DESTROY:
-            PostQuitMessage(0);
             return 0;
         case WM_DROPFILES:
             HandleFileDrop(hwnd, (HDROP)wParam);  // Handle file drop in the WindowProc
@@ -173,9 +207,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 
                 if (hitTestInfo.hItem && hitTestInfo.hItem != hDraggedItem) {
                     // Move the dragged item to the new location
-                    HTREEITEM hParent = TreeView_GetParent(hTreeView, hitTestInfo.hItem);
-                    AddItemToTree(hTreeView, hParent, (const char*)TreeView_GetItemText(hTreeView, hDraggedItem));
+                    //HTREEITEM hParent = TreeView_GetParent(hTreeView, hitTestInfo.hItem);
+                    //AddItemToTree(hTreeView, hParent, (const char*)TreeView_GetItemText(hTreeView, hDraggedItem));
+                    AddItemToTree(hTreeView, hitTestInfo.hItem, (const char*)TreeView_GetItemText(hTreeView, hDraggedItem));
                     TreeView_DeleteItem(hTreeView, hDraggedItem);
+        // Ensure the parent item is expanded to show the new file
+        TreeView_Expand(hTreeView, hitTestInfo.hItem, TVE_EXPAND);
                 }
 
                 if (hLastHoveredItem) {
@@ -183,7 +220,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     tvi.mask = TVIF_STATE;
                     tvi.hItem = hLastHoveredItem;
                     tvi.state = 0;
-                    tvi.stateMask = TVIS_SELECTED; // Reset the selection state
+                    tvi.stateMask = TVIS_DROPHILITED; // Reset the selection state
                     TreeView_SetItem(hTreeView, &tvi);
                	    hLastHoveredItem = NULL;
                 }
@@ -193,6 +230,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 
                 hDraggedItem = NULL; // Reset the dragged item
                 ReleaseCapture();
+
+                // Clean up the drag image resources
+                ImageList_Destroy(hDragImageList);
+                hDragImageList = NULL;
             }
             break;
         case WM_MOUSEMOVE: // Update the dragged item during the drag operation
@@ -200,6 +241,16 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 // Manual extraction of mouse coordinates
                 int x = LOWORD(lParam);
                 int y = HIWORD(lParam);
+
+                // Move the drag image with the mouse
+                int dx = x - ptOffset.x;
+                int dy = y - ptOffset.y;
+
+                ptOffset.x = x;
+                ptOffset.y = y;
+
+                // Move the drag image
+                ImageList_DragMove(dx, dy);
 
                 // Find the item under the mouse cursor
                 TVHITTESTINFO hitTestInfo = {0};
@@ -209,13 +260,16 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 
                 // If a new item is under the cursor, highlight it
                 if (hHoveredItem != hLastHoveredItem) {
+
+                    TreeView_Expand(hTreeView, hHoveredItem, TVE_EXPAND);
+
                     // Reset the previous item's state if any
                     if (hLastHoveredItem) {
                         TVITEM tvi = {0};
                         tvi.mask = TVIF_STATE;
                         tvi.hItem = hLastHoveredItem;
                         tvi.state = 0;
-                        tvi.stateMask = TVIS_SELECTED; // Reset the selection state
+                        tvi.stateMask = TVIS_DROPHILITED; // Reset the selection state
                         TreeView_SetItem(hTreeView, &tvi);
                     }
 
@@ -223,8 +277,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     TVITEM tvi = {0};
                     tvi.mask = TVIF_STATE;
                     tvi.hItem = hHoveredItem;
-                    tvi.state = TVIS_SELECTED;
-                    tvi.stateMask = TVIS_SELECTED; // Reset the selection state
+                    tvi.state = TVIS_DROPHILITED;
+                    tvi.stateMask = TVIS_DROPHILITED; // Reset the selection state
                     TreeView_SetItem(hTreeView, &tvi);
                     
                     // Update the last hovered item
@@ -233,6 +287,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     // Redraw the treeview to reflect the updated appearance
                     InvalidateRect(hTreeView, NULL, TRUE);
                 }
+
             }
             break;
         case WM_RBUTTONUP:
@@ -243,10 +298,42 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 // This message is sent when dragging starts
                 NMTREEVIEW *pNMTV = (NMTREEVIEW*)lParam;
                 hDraggedItem = pNMTV->itemNew.hItem;
+
+		// Select the item to get the drag image
+                TreeView_SelectItem(hTreeView, hDraggedItem);
+
+                // Create the drag image
+                hDragImageList = (HIMAGELIST)SendMessage(hTreeView, TVM_CREATEDRAGIMAGE, 0, (LPARAM)hDraggedItem);
+
+                if (hDragImageList) {
+                    // Set the drag image position (mouse position at the time of drag start)
+                    int x = LOWORD(lParam);
+                    int y = HIWORD(lParam);
+                    ptOffset.x = x;
+                    ptOffset.y = y;
+
+                    POINT pt;
+                    GetCursorPos(&pt);
+                    ScreenToClient(hwnd, &pt);
+                    //ImageList_BeginDrag(hDragImageList, 0, pt.x, pt.y);
+                    ImageList_BeginDrag(hDragImageList, 0, x, y);
+
+                    // Begin dragging the image
+                    //ImageList_BeginDrag(hDragImageList, 0, 0, 0); // Start drag with image list and offset
+                }
+else { printf("NO IMAGE %08x\n", hDraggedItem); }
+
                 SetCapture(hwnd); // Capture mouse events while dragging
                 hLastHoveredItem = NULL;
             }
             break;
+        case WM_DESTROY:
+            if (hDragImageList) {
+                ImageList_Destroy(hDragImageList);
+            }
+            PostQuitMessage(0);
+            return 0;
+
 
     }
     return DefWindowProc(hwnd, uMsg, wParam, lParam);
