@@ -28,7 +28,7 @@ a NAF is Not A File.  the size of the key is limited to about 480 bytes,
 which is longer than total path length limits on some real file systems.
 any character is allowed in a key, except '\0', for obvious reasons.
 
-the mapping is stored in what is often called a threaded binary tree.
+the mapping is stored in both a bianry tree and doubly linked list.
 each NAF in the tree contains "left", "right", and "parent" pointers
 of a binary tree, as well as "previous" and "next" pointers of a doubly
 linked list.  this gives O(log₂N) searching and O(N) in-order traversal.
@@ -36,6 +36,10 @@ ordering is done by "strcmp" on keys.
 
 the first sector, sector 0, is reserved for holding pointers to the root
 of the tree, and the beginning and end of the linked list.
+
+free'd sectors are placed in a chain in order of increasing size.
+new allocations are made from the chain if possible, or by expanding
+into unused storage.
 
 ===
 
