@@ -29,4 +29,7 @@
 // This is faster, but takes up more code space
 #define NARF_SMART_FREE
 
+// Uncomment this for utf-8 code point based key comparison
+#define UTF8_STRNCMP
+
 #endif

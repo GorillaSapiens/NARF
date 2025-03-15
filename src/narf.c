@@ -23,6 +23,75 @@
 
 #define END INVALID_NAF // i hate typing
 
+#ifdef UTF8_STRNCMP
+#define strncmp utf8_strncmp
+
+//! @brief Decode UTF-8
+//!
+//! Decode a UTF-8 sequence into a Unicode code point (handles incomplete
+//! sequences)
+//!
+static int32_t utf8_decode_safe(const char **s, const char *end) {
+   const unsigned char *p = (const unsigned char *) *s;
+   if (*s >= end || !**s) return -2;  // Stop at buffer end or null terminator
+
+   int codepoint = 0, num_bytes = 0;
+
+   if (p[0] < 0x80) {  // 1-byte (ASCII)
+      codepoint = p[0];
+      num_bytes = 1;
+   } else if (p[0] >= 0xC2 && p[0] <= 0xDF && *s + 1 < end) {  // 2-byte
+      codepoint = (p[0] & 0x1F) << 6 |
+                  (p[1] & 0x3F);
+      num_bytes = 2;
+   } else if (p[0] >= 0xE0 && p[0] <= 0xEF && *s + 2 < end) {  // 3-byte
+      codepoint = (p[0] & 0x0F) << 12 |
+                  (p[1] & 0x3F) <<  6 |
+                  (p[2] & 0x3F);
+      num_bytes = 3;
+   } else if (p[0] >= 0xF0 && p[0] <= 0xF4 && *s + 3 < end) {  // 4-byte
+      codepoint = (p[0] & 0x07) << 18 |
+                  (p[1] & 0x3F) << 12 |
+                  (p[2] & 0x3F) <<  6 |
+                  (p[3] & 0x3F);
+      num_bytes = 4;
+   } else {
+      return -1; // Invalid UTF-8 sequence
+   }
+
+   *s += num_bytes;
+   return codepoint;
+}
+
+//! @brief UTF-8 aware strncmp
+//!
+//! compares up to n bytes, ensuring character integrity
+//!
+int32_t utf8_strncmp(const char *s1, const char *s2, size_t n) {
+   const char *end1 = s1 + n, *end2 = s2 + n;
+
+   while (s1 < end1 && s2 < end2 && *s1 && *s2) {
+      const char *prev_s1 = s1, *prev_s2 = s2;
+      int cp1 = utf8_decode_safe(&s1, end1);
+      int cp2 = utf8_decode_safe(&s2, end2);
+
+      if (cp1 == -1 || cp2 == -1) {
+         // Invalid UTF-8 fallback
+         return (unsigned char)*prev_s1 - (unsigned char)*prev_s2;
+      }
+      if (cp1 == -2 || cp2 == -2) {
+         // Reached byte limit safely
+         break;
+      }
+      if (cp1 != cp2) {
+         return cp1 - cp2;
+      }
+   }
+
+   return 0;
+}
+#endif
+
 //! @brief The Root structure for our Not A Real Filesystem
 //!
 //! it is kept in memory, and flushed out with narf_sync().
