@@ -48,7 +48,8 @@ void CreateImageList(HWND hwnd) {
    DeleteObject(hBrush);
 
    // Add the bitmap to the image list
-   ImageList_Add(hImageList, hBitmap, NULL);
+   //ImageList_Add(hImageList, hBitmap, NULL);
+   ImageList_AddMasked(hImageList, hBitmap, RGB(255, 255, 255)); // white transparent
 
 
 
@@ -287,7 +288,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 
             // Move the drag image based on the adjusted position
             ImageList_DragMove(pt.x, pt.y);
-            printf("DragMove %d,%d\n", pt.x, pt.y);
 
 #endif
 
@@ -353,7 +353,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                ptOffset.y = y;
 
                // Begin dragging the image
-               BOOL tf = ImageList_BeginDrag(hDragImageList, 0, BMSIZE/2, BMSIZE/2); // Start drag with image list and offset
+               BOOL tf = ImageList_BeginDrag(hDragImageList, 0, BMSIZE*3/2, BMSIZE/2); // Start drag with image list and offset
                ImageList_DragShowNolock(TRUE);
             }
 
