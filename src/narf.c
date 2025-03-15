@@ -1075,7 +1075,7 @@ NAF narf_unchain(Sector length) {
          read_buffer(naf);
 
 #ifdef NARF_DEBUG_INTEGRITY
-   verify_integrity();
+         verify_integrity();
 #endif
 
          return naf;
@@ -1106,7 +1106,7 @@ NAF narf_alloc(const char *key, ByteSize bytes) {
 
    if (naf == END) {
       // nothing on the chain was suitable
- 
+
       if (root.vacant + length + 1 > root.total_sectors) {
          // NO ROOM!!!
          return END;
@@ -1289,7 +1289,7 @@ NAF narf_realloc(const char *key, ByteSize bytes) {
       narf_chain(naf + length + 1);
 
 #ifdef NARF_DEBUG_INTEGRITY
-   verify_integrity();
+      verify_integrity();
 #endif
 
       return naf;
@@ -1304,7 +1304,7 @@ NAF narf_realloc(const char *key, ByteSize bytes) {
          narf_move(tmp, naf, length, bytes);
 
 #ifdef NARF_DEBUG_INTEGRITY
-   verify_integrity();
+         verify_integrity();
 #endif
 
          // return the new
@@ -1324,7 +1324,7 @@ NAF narf_realloc(const char *key, ByteSize bytes) {
       narf_move(tmp, naf, length, bytes);
 
 #ifdef NARF_DEBUG_INTEGRITY
-   verify_integrity();
+      verify_integrity();
 #endif
 
       return tmp;
