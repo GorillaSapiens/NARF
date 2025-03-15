@@ -21,11 +21,12 @@ POINT ptOffset;
 HIMAGELIST hImageList;
 
 // Create an image list for the TreeView and associate an HBITMAP
+#define BMSIZE 16
 void CreateImageList(HWND hwnd) {
-    hImageList = ImageList_Create(16, 16, ILC_COLOR32 | ILC_MASK, 1, 1);  // Create image list (16x16 icons)
+    hImageList = ImageList_Create(BMSIZE, BMSIZE, ILC_COLOR32 | ILC_MASK, 1, 1);  // Create image list (16x16 icons)
 
     // Create a simple 16x16 bitmap dynamically (you can replace this with your own logic)
-    HBITMAP hBitmap = CreateCompatibleBitmap(GetDC(hwnd), 16, 16);
+    HBITMAP hBitmap = CreateCompatibleBitmap(GetDC(hwnd), BMSIZE, BMSIZE);
 
     if (hBitmap == NULL) {
         MessageBox(NULL, "Failed to create bitmap!", "Error", MB_OK | MB_ICONERROR);
@@ -37,7 +38,7 @@ void CreateImageList(HWND hwnd) {
     HBITMAP hOldBitmap = (HBITMAP)SelectObject(hdcMem, hBitmap);
 
     // Draw something simple into the bitmap (for example, a red rectangle)
-    RECT rect = { 0, 0, 16, 16 };
+    RECT rect = { 0, 0, BMSIZE, BMSIZE };
     HBRUSH hBrush = CreateSolidBrush(RGB(255, 0, 0));  // Red color
     FillRect(hdcMem, &rect, hBrush);
 
@@ -48,6 +49,20 @@ void CreateImageList(HWND hwnd) {
 
     // Add the bitmap to the image list
     ImageList_Add(hImageList, hBitmap, NULL);
+
+
+
+
+    hdcMem = CreateCompatibleDC(GetDC(hwnd));
+    hOldBitmap = (HBITMAP)SelectObject(hdcMem, hBitmap);
+    hBrush = CreateSolidBrush(RGB(0, 0, 255));  // Red color
+    FillRect(hdcMem, &rect, hBrush);
+    SelectObject(hdcMem, hOldBitmap);
+    DeleteDC(hdcMem);
+    DeleteObject(hBrush);
+
+    ImageList_Add(hImageList, hBitmap, NULL);
+
 
     // Set the image list for the TreeView control
     TreeView_SetImageList(hTreeView, hImageList, TVSIL_NORMAL);  // Set the normal image list
@@ -220,7 +235,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     tvi.mask = TVIF_STATE;
                     tvi.hItem = hLastHoveredItem;
                     tvi.state = 0;
-                    tvi.stateMask = TVIS_DROPHILITED; // Reset the selection state
+                    tvi.stateMask = TVIS_BOLD | TVIS_DROPHILITED; // Reset the selection state
                     TreeView_SetItem(hTreeView, &tvi);
                	    hLastHoveredItem = NULL;
                 }
@@ -231,9 +246,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 hDraggedItem = NULL; // Reset the dragged item
                 ReleaseCapture();
 
+                ImageList_EndDrag();
+
                 // Clean up the drag image resources
                 ImageList_Destroy(hDragImageList);
                 hDragImageList = NULL;
+
             }
             break;
         case WM_MOUSEMOVE: // Update the dragged item during the drag operation
@@ -250,7 +268,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 ptOffset.y = y;
 
                 // Move the drag image
-                ImageList_DragMove(dx, dy);
+                ImageList_DragMove(0,0); //dx, dy);
 
                 // Find the item under the mouse cursor
                 TVHITTESTINFO hitTestInfo = {0};
@@ -269,7 +287,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                         tvi.mask = TVIF_STATE;
                         tvi.hItem = hLastHoveredItem;
                         tvi.state = 0;
-                        tvi.stateMask = TVIS_DROPHILITED; // Reset the selection state
+                        tvi.stateMask = TVIS_BOLD | TVIS_DROPHILITED; // Reset the selection state
                         TreeView_SetItem(hTreeView, &tvi);
                     }
 
@@ -277,8 +295,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     TVITEM tvi = {0};
                     tvi.mask = TVIF_STATE;
                     tvi.hItem = hHoveredItem;
-                    tvi.state = TVIS_DROPHILITED;
-                    tvi.stateMask = TVIS_DROPHILITED; // Reset the selection state
+                    tvi.state = TVIS_BOLD | TVIS_DROPHILITED;
+                    tvi.stateMask = TVIS_BOLD | TVIS_DROPHILITED; // Reset the selection state
                     TreeView_SetItem(hTreeView, &tvi);
                     
                     // Update the last hovered item
@@ -312,14 +330,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     ptOffset.x = x;
                     ptOffset.y = y;
 
-                    POINT pt;
-                    GetCursorPos(&pt);
-                    ScreenToClient(hwnd, &pt);
-                    //ImageList_BeginDrag(hDragImageList, 0, pt.x, pt.y);
-                    ImageList_BeginDrag(hDragImageList, 0, x, y);
-
                     // Begin dragging the image
-                    //ImageList_BeginDrag(hDragImageList, 0, 0, 0); // Start drag with image list and offset
+                    BOOL tf = ImageList_BeginDrag(hDragImageList, 0, 0, 0); // Start drag with image list and offset
+printf("BEGINDRAG %d\n", tf);
                 }
 else { printf("NO IMAGE %08x\n", hDraggedItem); }
 
