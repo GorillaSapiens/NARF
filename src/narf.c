@@ -1453,8 +1453,8 @@ bool narf_free(const char *key) {
 #else
    --root.count;
    narf_sync();
-   narf_chain(naf);
    narf_rebalance();
+   narf_chain(naf);
 #endif // NARF_SMART_FREE
 
    return true;
