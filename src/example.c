@@ -143,7 +143,7 @@ void gremlins(int s, int n) {
    process_cmd("mkfs");
 
    for(m = 0; m < n; m++) {
-      switch(rand() % 4) {
+      switch(rand() % 4) { // TODO FIX make rebalance / defrag infrequent
          case 0:
             sprintf(buf, "alloc %s %d", rname(l), rand() % 65536);
             break;
@@ -155,6 +155,12 @@ void gremlins(int s, int n) {
             break;
          case 3:
             sprintf(buf, "cat %s", rname(l));
+            break;
+         case 4:
+            sprintf(buf, "rebalance");
+            break;
+         case 5:
+            sprintf(buf, "defrag");
             break;
       }
       printf("\n\nGREMLINS %d: %s\n", m, buf);
