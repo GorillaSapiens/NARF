@@ -109,6 +109,26 @@ void process_cmd(char *buffer) {
       sscanf(buffer, "cat %s", key);
       printf("narf_find(%s)=%d\n", key, narf_find(key));
    }
+   else if (!strncmp(buffer, "tag ", 4)) {
+      char key[256];
+      char data[32] = { 0 };
+      bool result;
+
+      sscanf(buffer, "tag %s %s", key, data);
+      NAF naf = narf_find(key);
+      printf("narf_set_metadata(%s,%s)=%s\n",
+            key, data, tf[result ASSIGN narf_set_metadata(naf, (uint8_t *)data)]);
+   }
+   else if (!strncmp(buffer, "scan ", 5)) {
+      char key[256];
+      char *result;
+
+      sscanf(buffer, "scan %s", key);
+      NAF naf = narf_find(key);
+      result = (char *)narf_metadata(naf);
+      printf("narf_metadata(%s)=%s\n",
+            key, result ? result : "(null)");
+   }
    else if (!strncmp(buffer, "gremlins ", 9)) {
       int s, n;
       sscanf(buffer, "gremlins %d %d", &s, &n);

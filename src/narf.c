@@ -23,6 +23,55 @@
 
 #define END INVALID_NAF // i hate typing
 
+//! @brief The Root structure for our Not A Real Filesystem
+//!
+//! it is kept in memory, and flushed out with narf_sync().
+//! it is intentionally small.
+typedef struct PACKED {
+   union {
+      uint32_t signature;  // SIGNATURE
+      uint8_t sigbytes[4];
+   };
+   uint32_t version;       // VERSION
+   ByteSize sector_size;   // sector size in bytes
+   Sector   total_sectors; // total size of storage in sectors
+   NAF root;               // sector of root node
+   NAF first;              // sector of first node in key order
+   NAF last;               // sector of last node in key order
+   NAF chain;              // previously allocated but free now
+   Sector   count;         // count of total number of allocated NAF
+   Sector   vacant;        // number of first unallocated sector
+} Root;
+static_assert(sizeof(Root) == 2 * sizeof(uint32_t) +
+                              1 * sizeof(ByteSize) +
+                              3 * sizeof(Sector) +
+                              4 * sizeof(NAF), "Root wrong size");
+
+// TODO FIX is "Header" really still an appropriate name for this?
+typedef struct PACKED {
+   NAF parent;      // parent NAF
+   NAF left;        // left sibling NAF
+   NAF right;       // right sibling NAF
+   NAF prev;        // previous ordered NAF
+   NAF next;        // next ordered NAF
+
+   uint8_t metadata[32]; // not used by NARF
+
+   Sector   start;       // data start sector
+   Sector   length;      // data length in sectors
+   ByteSize bytes;       // data size in bytes
+
+   char key[NARF_SECTOR_SIZE - 5 * sizeof(NAF)
+                             - 2 * sizeof(Sector)
+                             - 1 * sizeof(ByteSize)
+                             - 32 * sizeof(uint8_t)];
+} Header;
+static_assert(sizeof(Header) == NARF_SECTOR_SIZE, "Header wrong size");
+
+uint8_t buffer[NARF_SECTOR_SIZE] = { 0 };
+Root root = { 0 };
+Header *node = (Header *) buffer;
+
 #ifdef UTF8_STRNCMP
 #define strncmp utf8_strncmp
 
@@ -91,52 +140,6 @@ int32_t utf8_strncmp(const char *s1, const char *s2, size_t n) {
    return 0;
 }
 #endif
-
-//! @brief The Root structure for our Not A Real Filesystem
-//!
-//! it is kept in memory, and flushed out with narf_sync().
-//! it is intentionally small.
-typedef struct PACKED {
-   union {
-      uint32_t signature;  // SIGNATURE
-      uint8_t sigbytes[4];
-   };
-   uint32_t version;       // VERSION
-   ByteSize sector_size;   // sector size in bytes
-   Sector   total_sectors; // total size of storage in sectors
-   NAF root;               // sector of root node
-   NAF first;              // sector of first node in key order
-   NAF last;               // sector of last node in key order
-   NAF chain;              // previously allocated but free now
-   Sector   count;         // count of total number of allocated NAF
-   Sector   vacant;        // number of first unallocated sector
-} Root;
-static_assert(sizeof(Root) == 2 * sizeof(uint32_t) +
-                              1 * sizeof(ByteSize) +
-                              3 * sizeof(Sector) +
-                              4 * sizeof(NAF), "Root wrong size");
-
-// TODO FIX is "Header" really still an appropriate name for this?
-typedef struct PACKED {
-   NAF parent;      // parent NAF
-   NAF left;        // left sibling NAF
-   NAF right;       // right sibling NAF
-   NAF prev;        // previous ordered NAF
-   NAF next;        // next ordered NAF
-
-   Sector   start;       // data start sector
-   Sector   length;      // data length in sectors
-   ByteSize bytes;       // data size in bytes
-
-   char key[NARF_SECTOR_SIZE - 5 * sizeof(NAF)
-                             - 2 * sizeof(Sector)
-                             - 1 * sizeof(ByteSize)]; // key
-} Header;
-static_assert(sizeof(Header) == NARF_SECTOR_SIZE, "Header wrong size");
-
-uint8_t buffer[NARF_SECTOR_SIZE] = { 0 };
-Root root = { 0 };
-Header *node = (Header *) buffer;
 
 //! @brief Get the ideal height for our tree.
 Sector max_height(void) {
@@ -292,6 +295,8 @@ void print_node(NAF naf) {
           node->prev, node->next);
    printf("start:len   = %d:%d (%d)\n",
           node->start, node->length, node->bytes);
+   printf("metadata    = '%s'\n",
+          node->metadata);
 }
 
 //! @see narf_debug()
@@ -1128,6 +1133,7 @@ NAF narf_alloc(const char *key, ByteSize bytes) {
    node->prev    = END;
    node->next    = END;
    node->bytes  = bytes;
+   memset(node->metadata, 0, sizeof(node->metadata));
    strncpy(node->key, key, sizeof(node->key));
    write_buffer(naf);
 
@@ -1782,6 +1788,22 @@ NAF narf_previous(NAF naf) {
    if (!verify() || naf == END) return END;
    read_buffer(naf);
    return node->prev;
+}
+
+//! @see narf.h
+uint8_t *narf_metadata(NAF naf) {
+   if (!verify() || naf == END) return NULL;
+   read_buffer(naf);
+   return node->metadata;
+}
+
+//! @see narf.h
+bool narf_set_metadata(NAF naf, uint8_t *data) {
+   if (!verify() || naf == END) return false;
+   read_buffer(naf);
+   memcpy(node->metadata, data, sizeof(node->metadata));
+   write_buffer(naf);
+   return true;
 }
 
 // vim:set ai softtabstop=3 shiftwidth=3 tabstop=3 expandtab: ff=unix

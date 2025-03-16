@@ -257,6 +257,38 @@ NAF narf_last(void);
 //! @return the NAF before the current, in key order
 NAF narf_previous(NAF naf);
 
+//! @brief Get metadata associated with NAF
+//! @see narf_set_metadata()
+//!
+//! Returns a pointer to memory which WILL be
+//! overwritten by any subsequent narf_*() call!
+//!
+//! Retrieve the metadata associated with the NAF.
+//! This is an array of 32 bytes.  NARF does not
+//! do anything with this data, you may assign any
+//! use to it you like.
+//!
+//! metadata is preserved when narf_realloc() is
+//! called with a new NONZERO size, even if new
+//! storage is allocated.
+//!
+//! metadata is destroyed on narf_free() or if
+//! narf_realloc() is called with a zero size.
+//!
+//! @param naf The NAF to get the metadata from
+//! @return A pointer to an array of 32 bytes
+uint8_t *narf_metadata(NAF naf);
+
+//! @brief Set metadata associated with NAF
+//! @see narf_metadata()
+//!
+//! see narf_metadata() for details
+//!
+//! @param naf The NAF to set metadata for
+//! @param data Pointer to array of 32 bytes
+//! @return true on success, false on failure
+bool narf_set_metadata(NAF naf, uint8_t *data);
+
 #ifdef NARF_DEBUG
 //! @brief Print some debug info
 void narf_debug(void);
