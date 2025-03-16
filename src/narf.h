@@ -32,6 +32,75 @@ typedef NARF_SIZE_TYPE ByteSize;
 //! This usually indicates an error.
 #define INVALID_NAF ((NAF) -1)
 
+#ifdef NARF_MBR_UTILS
+//! @brief Write a new blank MBR to the media
+//! @see narf_partition
+//! @see narf_format
+//! @see narf_findpart
+//! @see narf_mount
+//!
+//! VERY DESTRUCTIVE !!!
+//!
+//! existing MBR is overwritten and blanked
+//!
+//! @param message Custom boot_code message, or NULL for default
+//! @return true for success
+bool narf_mbr(const char *message);
+
+//! @brief Write a new partition table entry to the media
+//! @see narf_mbr
+//! @see narf_format
+//! @see narf_findpart
+//! @see narf_mount
+//!
+//! DESTRUCTIVE !!!
+//!
+//! existing partition data is overwritten.
+//! all available space is used for the new partition.
+//!
+//! @param partition The partition number (1-4) to occupy
+//! @return true for success
+bool narf_partition(int partition);
+
+//! @brief Format a partition with a new NARF
+//! @see narf_mbr
+//! @see narf_partition
+//! @see narf_findpart
+//! @see narf_mount
+//! @see narf_mkfs
+//!
+//! DESTRUCTIVE !!!
+//!
+//! calls narf_mkfs() with correct parameters based on partition
+//! table.
+bool narf_format(int partition);
+
+//! @brief Find a NARF partition
+//! @see narf_mbr
+//! @see narf_partition
+//! @see narf_format
+//! @see narf_findpart
+//! @see narf_mount
+//!
+//! @return A number (1-4) of the partition containint NARF, or -1
+int narf_findpart(void);
+
+//! @brief Mount a NARF partition
+//! @see narf_mbr
+//! @see narf_partition
+//! @see narf_format
+//! @see narf_findpart
+//! @see narf_mount
+//! @see narf_init
+//!
+//! calls narf_init with correct parameters based on partition
+//! table.
+//!
+//! @param partition The partition (1-4) to mount
+//! @return true for success
+bool narf_mount(int partition);
+#endif
+
 //! @brief Create a new NARF
 //!
 //! This should be used on blank media to initialize
@@ -42,9 +111,10 @@ typedef NARF_SIZE_TYPE ByteSize;
 //! One of either narf_mkfs() or narf_init() must
 //! be called before other functions can be used
 //!
-//! @param sectors The total size in sectors
+//! @param start The first sector
+//! @paran size The number of sectors
 //! @return true for success
-bool narf_mkfs(Sector sectors);
+bool narf_mkfs(Sector start, Sector size);
 
 //! @brief Initialize an existing NARF
 //!
@@ -54,8 +124,9 @@ bool narf_mkfs(Sector sectors);
 //! One of either narf_mkfs() or narf_init() must
 //! be called before other functions can be used
 //!
+//! @param start The first sector
 //! @return true for success
-bool narf_init(void);
+bool narf_init(Sector start);
 
 //! @brief Sync the NARF to disk
 //!
@@ -129,7 +200,7 @@ NAF narf_dirnext(const char *dirname,
 //! with 2^32 nodes)
 //!
 //! @param key The key we're allocating for
-//! @param size The size in bytes to reserve for data
+//! @param bytes The size in bytes to reserve for data
 //! @return The new NAF
 NAF narf_alloc(const char *key,
                ByteSize    bytes);
@@ -146,7 +217,7 @@ NAF narf_alloc(const char *key,
 //! narf_free() is called and INVALID_NAF is returned.
 //!
 //! @param key The key we're reallocating
-//! @param size The new size in bytes to reserve for data
+//! @param bytes The new size in bytes to reserve for data
 //! @return The new NAF
 NAF narf_realloc(const char *key,
                  ByteSize    bytes);

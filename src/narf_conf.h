@@ -16,6 +16,10 @@
 // should be one of uint8_t, uint16_t, uint32_t, or uint64_t
 #define NARF_SIZE_TYPE uint32_t
 
+// Uncomment this for MBR and partitioning functions
+// Useful for real removable media
+#define NARF_MBR_UTILS
+
 // Uncomment this for debugging functions
 #define NARF_DEBUG
 

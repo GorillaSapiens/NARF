@@ -7,23 +7,50 @@
 
 #define ASSIGN =
 
+extern void narf_io_configure(const char *fname);
+
 const char *tf[] = { "false", "true" };
 
 void gremlins(int s, int n);
 
 void process_cmd(char *buffer) {
    if (!strncmp(buffer, "mkfs", 4)) {
-      uint32_t sectors = narf_io_sectors();
+      uint32_t start = 0;
+      uint32_t size = narf_io_sectors();
       bool result;
 
-      printf("narf_mkfs(0x%x)=%s\n",
-            sectors, tf[result ASSIGN narf_mkfs(sectors)]);
+      printf("narf_mkfs(0x%x, 0x%x)=%s\n",
+            start, size, tf[result ASSIGN narf_mkfs(start, size)]);
    }
    else if (!strncmp(buffer, "init", 4)) {
-      bool result;
-
-      printf("narf_init()=%s\n",
-            tf[result ASSIGN narf_init()]);
+      uint32_t start = 0;
+      printf("narf_init(0x%x)=%s\n",
+            start, tf[narf_init(start)]);
+   }
+   else if (!strncmp(buffer, "mbr", 3)) {
+      if (strlen(buffer) > 4) {
+         printf("narf_mbr(%s)=%s\n",
+               buffer + 4, tf[narf_mbr(buffer + 4)]);
+      }
+      else {
+         printf("narf_mbr(NULL)=%s\n",
+               tf[narf_mbr(NULL)]);
+      }
+   }
+   else if (!strncmp(buffer, "partition ", 10)) {
+      int part = atoi(buffer + 10);
+      printf("narf_partition(%d)=%s\n",
+            part, tf[narf_partition(part)]);
+   }
+   else if (!strncmp(buffer, "format ", 7)) {
+      int part = atoi(buffer + 7);
+      printf("narf_format(%d)=%s\n",
+            part, tf[narf_format(part)]);
+   }
+   else if (!strncmp(buffer, "mount ", 6)) {
+      int part = atoi(buffer + 6);
+      printf("narf_mount(%d)=%s\n",
+            part, tf[narf_mount(part)]);
    }
    else if (!strncmp(buffer, "rebalance", 9)) {
       bool result;
@@ -160,7 +187,10 @@ void gremlins(int s, int n) {
 
    l = rand() % 7 + 1; // length of keys
 
-   process_cmd("mkfs");
+   process_cmd("mbr");
+   process_cmd("partition 1");
+   process_cmd("format 1");
+   process_cmd("mount 1");
 
    for(m = 0; m < n; m++) {
       switch(rand() % 4) { // TODO FIX make rebalance / defrag infrequent
@@ -217,6 +247,12 @@ int main(int argc, char **argv) {
    bool result;
 
    printf("NARF example\n");
+
+   if (argc != 2) {
+      fprintf(stderr, "Usage: %s <filename|=size,filename>\n", argv[0]);
+      exit(0);
+   }
+   narf_io_configure(argv[1]);
 
    printf("narf_io_open()=%d\n", result ASSIGN narf_io_open());
 

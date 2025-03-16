@@ -23,6 +23,31 @@
 
 #define END INVALID_NAF // i hate typing
 
+//! @brief Classic MBR Partition Entry (16 bytes)
+typedef struct PACKED {
+   uint8_t  boot_indicator;       // 0x80 if bootable, 0x00 if not
+   uint8_t  start_head;           // Start head
+   uint8_t  start_sector;         // Start sector (low bits)
+   uint8_t  start_cylinder;       // Start cylinder (high bits)
+   uint8_t  partition_type;       // Partition type (e.g., 0x07 for NTFS)
+   uint8_t  end_head;             // End head
+   uint8_t  end_sector;           // End sector (low bits)
+   uint8_t  end_cylinder;         // End cylinder (high bits)
+   uint32_t start_lba;            // Start of the partition (LBA)
+   uint32_t partition_size;       // Size of the partition (LBA)
+} MBRPartitionEntry;
+static_assert(sizeof(MBRPartitionEntry) == 16, "MBRPartitionEntry wrong size");
+#define NARF_PART_TYPE 0x6E // lowercase 'n' (uppercase is taken)
+
+//! @brief Classic MBR sector (512 bytes)
+typedef struct PACKED {
+   uint8_t boot_code[446];       // Boot code (446 bytes)
+   MBRPartitionEntry partitions[4]; // 4 partition entries (16 bytes each)
+   uint16_t signature;           // Boot signature (0xAA55)
+} MBR;
+static_assert(sizeof(MBR) == 512, "MBRPartitionEntry wrong size");
+#define MBR_SIGNATURE 0xAA55
+
 //! @brief The Root structure for our Not A Real Filesystem
 //!
 //! it is kept in memory, and flushed out with narf_sync().
@@ -41,13 +66,14 @@ typedef struct PACKED {
    NAF chain;              // previously allocated but free now
    Sector   count;         // count of total number of allocated NAF
    Sector   vacant;        // number of first unallocated sector
+   Sector   start;         // where the root sector lives
 } Root;
 static_assert(sizeof(Root) == 2 * sizeof(uint32_t) +
-                              1 * sizeof(ByteSize) +
-                              3 * sizeof(Sector) +
-                              4 * sizeof(NAF), "Root wrong size");
+      1 * sizeof(ByteSize) +
+      4 * sizeof(Sector) +
+      4 * sizeof(NAF), "Root wrong size");
 
-// TODO FIX is "Header" really still an appropriate name for this?
+//! @brief A Node structure to hold NAF details
 typedef struct PACKED {
    NAF parent;      // parent NAF
    NAF left;        // left sibling NAF
@@ -62,15 +88,39 @@ typedef struct PACKED {
    ByteSize bytes;       // data size in bytes
 
    char key[NARF_SECTOR_SIZE - 5 * sizeof(NAF)
-                             - 2 * sizeof(Sector)
-                             - 1 * sizeof(ByteSize)
-                             - 32 * sizeof(uint8_t)];
-} Header;
-static_assert(sizeof(Header) == NARF_SECTOR_SIZE, "Header wrong size");
+      - 2 * sizeof(Sector)
+      - 1 * sizeof(ByteSize)
+      - 32 * sizeof(uint8_t)];
+} Node;
+static_assert(sizeof(Node) == NARF_SECTOR_SIZE, "Node wrong size");
 
 uint8_t buffer[NARF_SECTOR_SIZE] = { 0 };
 Root root = { 0 };
-Header *node = (Header *) buffer;
+Node *node = (Node *) buffer;
+
+//! @brief Read a NAF into our buffer
+//!
+//! @param naf The naf to read
+//! @return true on success
+static bool read_buffer(NAF naf) {
+   return narf_io_read(naf, buffer);
+}
+
+//! @brief Write a NAF from buffer to disk
+//!
+//! @param naf The NAF to write
+//! @return true on success
+static bool write_buffer(NAF naf) {
+#ifdef NARF_DEBUG_INTEGRITY
+   assert(!naf || (node->start == naf + 1));
+#endif
+   return narf_io_write(naf, buffer);
+}
+
+// @see write_buffer()
+static bool write_data(NAF naf) {
+   return narf_io_write(naf, buffer);
+}
 
 #ifdef UTF8_STRNCMP
 #define strncmp utf8_strncmp
@@ -91,18 +141,18 @@ static int32_t utf8_decode_safe(const char **s, const char *end) {
       num_bytes = 1;
    } else if (p[0] >= 0xC2 && p[0] <= 0xDF && *s + 1 < end) {  // 2-byte
       codepoint = (p[0] & 0x1F) << 6 |
-                  (p[1] & 0x3F);
+         (p[1] & 0x3F);
       num_bytes = 2;
    } else if (p[0] >= 0xE0 && p[0] <= 0xEF && *s + 2 < end) {  // 3-byte
       codepoint = (p[0] & 0x0F) << 12 |
-                  (p[1] & 0x3F) <<  6 |
-                  (p[2] & 0x3F);
+         (p[1] & 0x3F) <<  6 |
+         (p[2] & 0x3F);
       num_bytes = 3;
    } else if (p[0] >= 0xF0 && p[0] <= 0xF4 && *s + 3 < end) {  // 4-byte
       codepoint = (p[0] & 0x07) << 18 |
-                  (p[1] & 0x3F) << 12 |
-                  (p[2] & 0x3F) <<  6 |
-                  (p[3] & 0x3F);
+         (p[1] & 0x3F) << 12 |
+         (p[2] & 0x3F) <<  6 |
+         (p[3] & 0x3F);
       num_bytes = 4;
    } else {
       return -1; // Invalid UTF-8 sequence
@@ -141,6 +191,203 @@ int32_t utf8_strncmp(const char *s1, const char *s2, size_t n) {
 }
 #endif
 
+#ifdef NARF_MBR_UTILS
+
+// derived from bootloader.{asm|bin}
+static const uint8_t boot_code_stub[] = {
+   0xeb, 0x00, 0xb8, 0xc0, 0x07, 0x8e, 0xd8, 0x8e,
+   0xc0, 0xbe, 0x21, 0x7c, 0xe8, 0x02, 0x00, 0xeb,
+   0xfe, 0xac, 0x08, 0xc0, 0x74, 0x05, 0xe8, 0x03,
+   0x00, 0xeb, 0xf6, 0xc3, 0xb4, 0x0e, 0xcd, 0x10,
+   0xc3 };
+static const char boot_code_msg[] = 
+   "NARF! not bootable.\r\n";
+
+//! @brief Write a new blank MBR to the media
+//! @see narf_partition
+//! @see narf_format
+//! @see narf_findpart
+//! @see narf_mount
+//!
+//! VERY DESTRUCTIVE !!!
+//!
+//! existing MBR is overwritten and blanked
+//!
+//! @param message Custom boot_code message, or NULL for default
+//! @return true for success
+bool narf_mbr(const char *message) {
+   MBR *mbr = (MBR *) buffer;
+
+   if (!narf_io_open()) return false;
+
+   memset(buffer, 0, sizeof(buffer));
+   memcpy(buffer, boot_code_stub, sizeof(boot_code_stub));
+   if (message == NULL) {
+      message = boot_code_msg;
+   }
+   strcpy((char *)(buffer + sizeof(boot_code_stub)), message);
+   mbr->signature = MBR_SIGNATURE;
+   write_buffer(0);
+
+   return true;
+}
+
+//! @brief Write a new partition table entry to the media
+//! @see narf_mbr
+//! @see narf_format
+//! @see narf_findpart
+//! @see narf_mount
+//!
+//! DESTRUCTIVE !!!
+//!
+//! existing partition data is overwritten.
+//! all available space is used for the new partition.
+//!
+//! @param partition The partition number (1-4) to occupy
+//! @return true for success
+bool narf_partition(int partition) {
+   int i;
+   Sector start;
+   Sector end;
+   MBR *mbr;
+
+   if (!narf_io_open()) return false;
+
+   start = 1;
+   end = narf_io_sectors();
+   mbr = (MBR *) buffer;
+   read_buffer(0);
+
+   if (partition < 1 || partition > 4) {
+      return false;
+   }
+   --partition;
+
+   // TODO FIX we're making a lot of assumptions here.
+   // do we REALLY know partitions are ordered?
+   // is this just more complexity than we need?
+
+   for (i = 0; i < 4; i++) {
+      if (i < partition) {
+         if (mbr->partitions[i].partition_type) {
+            start =
+               mbr->partitions[i].start_lba +
+               mbr->partitions[i].partition_size;
+         }
+      }
+      else if (i > partition) {
+         if (mbr->partitions[i].partition_type) {
+            end = mbr->partitions[i].start_lba - 1;
+            break;
+         }
+      }
+   }
+
+   mbr->partitions[partition].partition_type = NARF_PART_TYPE;
+   mbr->partitions[partition].start_lba = start;
+   mbr->partitions[partition].partition_size = end - start;
+
+   write_buffer(0);
+
+   return true;
+}
+
+//! @brief Format a partition with a new NARF
+//! @see narf_mbr
+//! @see narf_partition
+//! @see narf_findpart
+//! @see narf_mount
+//! @see narf_mkfs
+//!
+//! DESTRUCTIVE !!!
+//!
+//! calls narf_mkfs() with correct parameters based on partition
+//! table.
+bool narf_format(int partition) {
+   MBR *mbr;
+
+   if (!narf_io_open()) return false;
+
+   mbr = (MBR *) buffer;
+   read_buffer(0);
+
+   if (partition < 1 || partition > 4) {
+#ifdef NARF_DEBUG
+      printf("bad partition\n");
+#endif
+      return false;
+   }
+   --partition;
+
+   if (mbr->partitions[partition].partition_type != NARF_PART_TYPE) {
+#ifdef NARF_DEBUG
+      printf("bad type\n");
+#endif
+      return false;
+   }
+
+   return
+      narf_mkfs(mbr->partitions[partition].start_lba,
+         mbr->partitions[partition].partition_size);
+}
+
+//! @brief Find a NARF partition
+//! @see narf_mbr
+//! @see narf_partition
+//! @see narf_format
+//! @see narf_findpart
+//! @see narf_mount
+//!
+//! @return A number (1-4) of the partition containint NARF, or -1
+int narf_findpart(void) {
+   int i;
+   MBR *mbr;
+
+   if (!narf_io_open()) return false;
+
+   mbr = (MBR *) buffer;
+   read_buffer(0);
+
+   for (i = 0; i < 4; i++) {
+      if (mbr->partitions[i].partition_type == NARF_PART_TYPE) {
+         return i + 1;
+      }
+   }
+
+   return 0;
+}
+
+//! @brief Mount a NARF partition
+//! @see narf_mbr
+//! @see narf_partition
+//! @see narf_format
+//! @see narf_findpart
+//! @see narf_mount
+//! @see narf_init
+//!
+//! calls narf_init with correct parameters based on partition
+//! table.
+//!
+//! @param partition The partition (1-4) to mount
+//! @return true for success
+bool narf_mount(int partition) {
+   MBR *mbr;
+
+   if (!narf_io_open()) return false;
+
+   mbr = (MBR *) buffer;
+   read_buffer(0);
+
+   --partition;
+
+   if (mbr->partitions[partition].partition_type != NARF_PART_TYPE) {
+      return false;
+   }
+
+   return narf_init(mbr->partitions[partition].start_lba);
+}
+#endif
+
 //! @brief Get the ideal height for our tree.
 Sector max_height(void) {
    Sector ret = 1;
@@ -152,26 +399,6 @@ Sector max_height(void) {
    }
 
    return ret;
-}
-
-//! @brief Read a NAF into our buffer
-//!
-//! @param naf The naf to read
-//! @return true on success
-static bool read_buffer(NAF naf) {
-   return narf_io_read(naf, buffer);
-}
-
-//! @brief Write a NAF from buffer to disk
-//!
-//! @param naf The NAF to write
-//! @return true on success
-static bool write_buffer(NAF naf) {
-// #ifdef NARF_DEBUG_INTEGRITY
-// // doing this here interferes with data move!
-//    assert(!naf || (node->start == naf + 1));
-// #endif
-   return narf_io_write(naf, buffer);
 }
 
 //! @brief Verify we're working with a valid filesystem
@@ -288,15 +515,15 @@ static void narf_pt(NAF naf, int indent, uint32_t pattern) {
 void print_node(NAF naf) {
    read_buffer(naf);
    printf("naf = %d => '%.*s'\n",
-          naf, (int) sizeof(node->key), node->key);
+         naf, (int) sizeof(node->key), node->key);
    printf("tree u/l/r  = %d / %d / %d\n",
-          node->parent, node->left, node->right);
+         node->parent, node->left, node->right);
    printf("list p/n    = %d / %d\n",
-          node->prev, node->next);
+         node->prev, node->next);
    printf("start:len   = %d:%d (%d)\n",
-          node->start, node->length, node->bytes);
+         node->start, node->length, node->bytes);
    printf("metadata    = '%.*s'\n",
-          (int) sizeof(node->metadata), node->metadata);
+         (int) sizeof(node->metadata), node->metadata);
 }
 
 //! @see narf_debug()
@@ -351,6 +578,7 @@ void narf_debug(void) {
    printf("root.first         = %d\n", root.first);
    printf("root.last          = %d\n", root.last);
    printf("root.count         = %d\n", root.count);
+   printf("root.start         = %d\n", root.start);
    printf("\n");
 
    naf = root.first;
@@ -418,7 +646,7 @@ void walk_tree(NAF parent, NAF naf) {
    else {
       read_buffer(parent);
       assert((node->left == naf || node->right == naf) &&
-             (node->left != node->right));
+            (node->left != node->right));
    }
 
    read_buffer(naf);
@@ -633,7 +861,7 @@ again:
 
       // are the two adjacent?
       if ((naf == tmp + tmp_length + 1) ||
-          (naf + length + 1 == tmp)) {
+            (naf + length + 1 == tmp)) {
          // remove item from chain
          if (prev == END) {
             root.chain = next;
@@ -836,22 +1064,23 @@ static bool narf_insert(NAF naf, const char *key) {
 }
 
 //! @see narf.h
-bool narf_mkfs(Sector sectors) {
+bool narf_mkfs(Sector start, Sector size) {
    if (!narf_io_open()) return false;
 
    memset(buffer, 0, sizeof(buffer));
    root.signature     = SIGNATURE;
    root.version       = VERSION;
    root.sector_size   = NARF_SECTOR_SIZE;
-   root.total_sectors = sectors;
-   root.vacant        = 1;
+   root.total_sectors = size;
+   root.vacant        = start + 1;
    root.root          = END;
    root.first         = END;
    root.last          = END;
    root.chain         = END;
    root.count         = 0;
+   root.start         = start;
    memcpy(buffer, &root, sizeof(root));
-   write_buffer(0);
+   write_buffer(start);
 
 #ifdef NARF_DEBUG
    printf("keysize %ld\n", sizeof(node->key));
@@ -861,10 +1090,10 @@ bool narf_mkfs(Sector sectors) {
 }
 
 //! @see narf.h
-bool narf_init(void) {
+bool narf_init(Sector start) {
    if (!narf_io_open()) return false;
 
-   read_buffer(0);
+   read_buffer(start);
    memcpy(&root, buffer, sizeof(root));
 
 #ifdef NARF_DEBUG
@@ -879,7 +1108,7 @@ bool narf_sync(void) {
    if (!verify()) return false;
    memset(buffer, 0, sizeof(buffer));
    memcpy(buffer, &root, sizeof(root));
-   return write_buffer(0);
+   return write_buffer(root.start);
 }
 
 //! @see narf.h
@@ -1053,7 +1282,7 @@ NAF narf_unchain(Sector length) {
 
 #ifdef NARF_DEBUG_INTEGRITY
          printf("NEED %d FOUND %d %d:%d\n",
-                length, next, node->start, node->length);
+               length, next, node->start, node->length);
          print_node(next);
 #endif
 
@@ -1245,7 +1474,7 @@ static void narf_move(NAF dst, NAF src, Sector length, ByteSize bytes) {
    // copy the data
    for (i = 0; i < og_length; i++) {
       read_buffer(og_start + i);
-      write_buffer(start + i);
+      write_data(start + i); // write_data bypasses integrity check
    }
 
    // chain the old naf
@@ -1537,7 +1766,7 @@ bool narf_free(const char *key) {
 
 //! @see narf.h
 bool narf_rebalance(void) {
-   static char key[sizeof(((Header *) 0)->key)]; // EXPENSIVE !!!
+   static char key[sizeof(((Node *) 0)->key)]; // TODO/FIX EXPENSIVE !!!
    NAF head = root.first;
 
    NAF naf = root.first;
