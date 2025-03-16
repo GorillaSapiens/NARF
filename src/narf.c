@@ -295,8 +295,8 @@ void print_node(NAF naf) {
           node->prev, node->next);
    printf("start:len   = %d:%d (%d)\n",
           node->start, node->length, node->bytes);
-   printf("metadata    = '%s'\n",
-          node->metadata);
+   printf("metadata    = '%.*s'\n",
+          (int) sizeof(node->metadata), node->metadata);
 }
 
 //! @see narf_debug()
