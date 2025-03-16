@@ -42,6 +42,10 @@ void process_cmd(char *buffer) {
       printf("narf_partition(%d)=%s\n",
             part, tf[narf_partition(part)]);
    }
+   else if (!strncmp(buffer, "findpart", 8)) {
+      printf("narf_findpart()=%d\n",
+            narf_findpart());
+   }
    else if (!strncmp(buffer, "format ", 7)) {
       int part = atoi(buffer + 7);
       printf("narf_format(%d)=%s\n",

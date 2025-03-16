@@ -103,6 +103,12 @@ bool narf_mount(int partition);
 
 //! @brief Create a new NARF
 //!
+//! This is for nonremovable media like flash memory.
+//!
+//! If you're working with removable media with MBR,
+//! use narf_format() instead.  narf_format() will
+//! call this with correct parameters for you.
+//!
 //! This should be used on blank media to initialize
 //! the base data structure.  This is a destructive
 //! operation, and wil overwrite any data already
@@ -117,6 +123,12 @@ bool narf_mount(int partition);
 bool narf_mkfs(Sector start, Sector size);
 
 //! @brief Initialize an existing NARF
+//!
+//! This is for nonremovable media like flash memory.
+//!
+//! If you're working with removable media with MBR,
+//! use narf_mount() instead.  narf_mount() will
+//! call this with correct parameters for you.
 //!
 //! This should be used on media that already has
 //! a NARF, usually created by narf_mkfs()
