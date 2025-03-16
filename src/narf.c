@@ -185,7 +185,7 @@ static bool verify(void) {
 
 #ifdef NARF_DEBUG
 
-#ifdef USE_UTF8
+#ifdef USE_UTF8_LINE_DRAWING
 #define HORIZ "━"
 #define VERT  "┃"
 #define UPPER "┏"
@@ -216,7 +216,7 @@ static void narf_pt(NAF naf, int indent, uint32_t pattern) {
 
    for (i = 0; i < indent; i++) {
       if (pattern & (1 << i)) {
-#ifndef USE_UTF8
+#ifndef USE_UTF8_LINE_DRAWING
          printf("|  ");
 #else
          printf(VERT "  ");
@@ -229,14 +229,14 @@ static void narf_pt(NAF naf, int indent, uint32_t pattern) {
 
    if (indent) {
       if (pattern & (1 << indent)) {
-#ifndef USE_UTF8
+#ifndef USE_UTF8_LINE_DRAWING
          arm = "\\-";
 #else
          arm = LOWER HORIZ;
 #endif
       }
       else {
-#ifndef USE_UTF8
+#ifndef USE_UTF8_LINE_DRAWING
          arm = "/-";
 #else
          arm = UPPER HORIZ;
@@ -244,7 +244,7 @@ static void narf_pt(NAF naf, int indent, uint32_t pattern) {
       }
    }
    else {
-#ifndef USE_UTF8
+#ifndef USE_UTF8_LINE_DRAWING
       arm = "==";
 #else
       arm = HORIZ HORIZ;
@@ -252,7 +252,7 @@ static void narf_pt(NAF naf, int indent, uint32_t pattern) {
    }
 
    if (naf == END) {
-#ifndef USE_UTF8
+#ifndef USE_UTF8_LINE_DRAWING
       printf("%s (nil)\n", arm);
 #else
       printf("%s%s\n", arm, NIL);

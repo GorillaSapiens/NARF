@@ -23,13 +23,22 @@
 //#define NARF_DEBUG_INTEGRITY
 
 // Uncomment for unicode line drawing characters in debug functions
-#define USE_UTF8
+#define USE_UTF8_LINE_DRAWING
 
 // Uncomment this for "smart" free implementation
 // This is faster, but takes up more code space
 #define NARF_SMART_FREE
 
 // Uncomment this for utf-8 code point based key comparison
-#define UTF8_STRNCMP
+//
+// you probably don't need this.  i can't think of any reason
+// anyone would need this. UTF-8 ensures that higher code
+// points have higher byte values.  multibyte characters are
+// encoded in a way that preserves ordering.  this define has
+// slightly different handling in the edge case where a UTF-8
+// character is malformed, which could happen in the case of
+// the complete key not fitting in the alloted space.
+//
+//#define UTF8_STRNCMP
 
 #endif
