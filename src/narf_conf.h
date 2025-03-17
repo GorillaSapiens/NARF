@@ -43,6 +43,9 @@
 // character is malformed, which could happen in the case of
 // the complete key not fitting in the alloted space.
 //
+// i'll leave it here, commented, to serve as a model in case
+// someone wants to do some different kind of key ordering.
+//
 //#define UTF8_STRNCMP
 
 #endif
