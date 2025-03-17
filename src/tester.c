@@ -2,6 +2,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <sys/types.h>
+#include <dirent.h>
+
 #include "narf.h"
 #include "narf_io.h"
 
@@ -13,8 +16,74 @@ const char *tf[] = { "false", "true" };
 
 void gremlins(int s, int n);
 
+void do_pack_dive(const char *realpath, const char *path, DIR *dir) {
+   struct dirent *entry = readdir(dir);
+
+   while(entry) {
+   printf("line %d\n", __LINE__);
+      if (entry->d_type == DT_DIR) {
+   printf("line %d\n", __LINE__);
+         if (strcmp(entry->d_name, ".") && strcmp(entry->d_name, "..")) {
+   printf("line %d\n", __LINE__);
+            char rbuf[1024];
+            sprintf(rbuf, "%s%s/", realpath, entry->d_name);
+            char buf[1024];
+            sprintf(buf, "%s%s/", path, entry->d_name);
+            narf_alloc(buf, 0);
+            DIR *dir2 = opendir(rbuf);
+   printf("line %d\n", __LINE__);
+   printf("do_cp_dive(%s,%s,%p)\n",rbuf,buf,dir2);
+            do_pack_dive(rbuf, buf, dir2);
+   printf("line %d\n", __LINE__);
+            closedir(dir2);
+   printf("line %d\n", __LINE__);
+         }
+      }
+      else {
+   printf("line %d\n", __LINE__);
+         char data[512];
+         char buf[1024];
+         char rbuf[1024];
+         sprintf(buf, "%s%s", path, entry->d_name);
+         sprintf(rbuf, "%s%s", realpath, entry->d_name);
+   printf("line %d\n", __LINE__);
+         FILE *f = fopen(rbuf, "rb");
+   printf("line %d\n", __LINE__);
+         fseek(f, 0, SEEK_END);
+   printf("line %d\n", __LINE__);
+         long size = ftell(f);
+   printf("line %d\n", __LINE__);
+         uint32_t naf = narf_alloc(buf, size);
+         uint32_t start = narf_sector(naf);
+   printf("line %d\n", __LINE__);
+         fseek(f, 0, SEEK_SET);
+   printf("line %d\n", __LINE__);
+         for (long i = 0; i < size; i += 512) {
+            fread(data, 512, 1, f);
+            narf_io_write(start + (i / 512), (void *) data);
+         }
+   printf("line %d\n", __LINE__);
+         fclose(f);
+   printf("line %d\n", __LINE__);
+      }
+   printf("line %d\n", __LINE__);
+      entry = readdir(dir);
+   }
+}
+
+void do_pack(const char *dirname) {
+   DIR *dir = opendir(dirname);
+   narf_alloc("/", 0);
+   do_pack_dive(dirname, "/", dir);
+   closedir(dir);
+}
+
 void process_cmd(char *buffer) {
-   if (!strncmp(buffer, "mkfs", 4)) {
+   if (!strncmp(buffer, "pack ", 5)) {
+      const char *arg = buffer + 5;
+      do_pack(arg);
+   }
+   else if (!strncmp(buffer, "mkfs", 4)) {
       uint32_t start = 0;
       uint32_t size = narf_io_sectors();
       bool result;

@@ -37,7 +37,7 @@ uint32_t narf_io_sectors(void);
 //! @param sector The address of the sector to access
 //! @param data Pointer to 512 bytes of data to write
 //! @return true on success
-bool narf_io_write(uint32_t sector, uint8_t *data);
+bool narf_io_write(uint32_t sector, void *data);
 
 //! @brief Read a sector from the disk
 //!
@@ -47,7 +47,7 @@ bool narf_io_write(uint32_t sector, uint8_t *data);
 //! @param sector The address of the sector to access
 //! @param data Pointer to 512 bytes read buffer
 //! @return true on success
-bool narf_io_read(uint32_t sector, uint8_t *data);
+bool narf_io_read(uint32_t sector, void *data);
 
 #endif
 

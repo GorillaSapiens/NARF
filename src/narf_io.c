@@ -148,7 +148,7 @@ uint32_t narf_io_sectors(void) {
 }
 
 //! @see narf_io.h
-bool narf_io_write(uint32_t sector, uint8_t *data) {
+bool narf_io_write(uint32_t sector, void *data) {
    bool ret = true;
    if (NULL == memcpy(image + sector * SECTOR_SIZE, data, SECTOR_SIZE)) {
       ret = false;
@@ -157,7 +157,7 @@ bool narf_io_write(uint32_t sector, uint8_t *data) {
 }
 
 //! @see narf_io.h
-bool narf_io_read(uint32_t sector, uint8_t *data) {
+bool narf_io_read(uint32_t sector, void *data) {
    bool ret = true;
    if (NULL == memcpy(data, image + sector * SECTOR_SIZE, SECTOR_SIZE)) {
       ret = false;
