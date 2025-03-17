@@ -24,7 +24,7 @@
 #define NARF_DEBUG
 
 // Uncomment this for debugging structure integrity
-//#define NARF_DEBUG_INTEGRITY
+#define NARF_DEBUG_INTEGRITY
 
 // Uncomment for unicode line drawing characters in debug functions
 #define USE_UTF8_LINE_DRAWING

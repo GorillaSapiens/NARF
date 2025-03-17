@@ -197,7 +197,7 @@ void gremlins(int s, int n) {
    process_cmd("mount 1");
 
    for(m = 0; m < n; m++) {
-      switch(rand() % 4) { // TODO FIX make rebalance / defrag infrequent
+      switch(rand() % 5) { // TODO FIX make rebalance / defrag infrequent
          case 0:
             sprintf(buf, "alloc %s %d", rname(l), rand() % 65536);
             break;
@@ -208,16 +208,32 @@ void gremlins(int s, int n) {
             sprintf(buf, "realloc %s %d", rname(l), rand() % 65536);
             break;
          case 3:
-            sprintf(buf, "cat %s", rname(l));
+            {
+               char *p = rname(l);
+               sprintf(buf, "tag %s md_%s_md_%04x", p, p, rand() % 65536);
+            }
             break;
          case 4:
-            sprintf(buf, "rebalance");
-            break;
-         case 5:
-            sprintf(buf, "defrag");
+            {
+               int z = rand() % 50;
+               switch(z) {
+                  case 0:
+                     sprintf(buf, "rebalance");
+                     break;
+                  case 1:
+                     sprintf(buf, "defrag");
+                     break;
+                  default:
+                     sprintf(buf, "cat %s", rname(l));
+               }
+            }
             break;
       }
-      printf("\n\nGREMLINS %d: %s\n", m, buf);
+      printf("\n");
+      printf("###################\n");
+      printf("#### GREMLINS %d %d: %s\n", s, m, buf);
+      printf("###################\n");
+      printf("\n");
       process_cmd(buf);
       printf("\nAFTER:\n");
       narf_debug();

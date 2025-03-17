@@ -112,7 +112,7 @@ static bool read_buffer(NAF naf) {
 //! @return true on success
 static bool write_buffer(NAF naf) {
 #ifdef NARF_DEBUG_INTEGRITY
-   assert(!naf || (node->start == naf + 1));
+   assert(!naf || naf == root.start || (node->start == naf + 1));
 #endif
    return narf_io_write(naf, buffer);
 }
@@ -1901,7 +1901,7 @@ bool narf_defrag(void) {
 
       for (i = 0; i < other_length; ++i) {
          read_buffer(other + i + 1);
-         write_buffer(tmp + i + 1);
+         write_data(tmp + i + 1);
       }
 
       if (parent != END) {
