@@ -10,7 +10,7 @@
 //! @see narf_conf.h
 //!
 //! This is provided in the narf_conf.h file
-typedef NARF_SECTOR_ADDRESS_TYPE Sector;
+typedef NARF_SECTOR_ADDRESS_TYPE NarfSector;
 
 //! @brief Type for NARF entries
 //!
@@ -22,10 +22,10 @@ typedef NARF_SECTOR_ADDRESS_TYPE Sector;
 //! we want to make clear the distinction between a
 //! NAF, which contains metadata, and a regular sector
 //! containing data.
-typedef Sector NAF;
+typedef NarfSector NAF;
 
 //! @brief Type for sizes in bytes
-typedef NARF_SIZE_TYPE ByteSize;
+typedef NARF_SIZE_TYPE NarfByteSize;
 
 //! @brief An invalid NAF
 //!
@@ -120,7 +120,7 @@ bool narf_mount(int partition);
 //! @param start The first sector
 //! @paran size The number of sectors
 //! @return true for success
-bool narf_mkfs(Sector start, Sector size);
+bool narf_mkfs(NarfSector start, NarfSector size);
 
 //! @brief Initialize an existing NARF
 //!
@@ -138,7 +138,7 @@ bool narf_mkfs(Sector start, Sector size);
 //!
 //! @param start The first sector
 //! @return true for success
-bool narf_init(Sector start);
+bool narf_init(NarfSector start);
 
 //! @brief Sync the NARF to disk
 //!
@@ -215,7 +215,7 @@ NAF narf_dirnext(const char *dirname,
 //! @param bytes The size in bytes to reserve for data
 //! @return The new NAF
 NAF narf_alloc(const char *key,
-               ByteSize    bytes);
+               NarfByteSize    bytes);
 
 //! @brief Grow or shrink storage for key
 //! @see narf_alloc()
@@ -232,7 +232,7 @@ NAF narf_alloc(const char *key,
 //! @param bytes The new size in bytes to reserve for data
 //! @return The new NAF
 NAF narf_realloc(const char *key,
-                 ByteSize    bytes);
+                 NarfByteSize    bytes);
 
 //! @brief Free storage for key
 //! @see narf_alloc()
@@ -286,13 +286,13 @@ const char *narf_key(NAF naf);
 //!
 //! @param naf The NAF
 //! @return a sector number or -1
-Sector narf_sector(NAF naf);
+NarfSector narf_sector(NAF naf);
 
 //! @brief Get the data size in bytes for this NAF
 //!
 //! @param naf The NAF
 //! @return the size in bytes
-ByteSize narf_size(NAF naf);
+NarfByteSize narf_size(NAF naf);
 
 //! @brief Get the first NAF in key order
 //! @see narf_next()
@@ -360,7 +360,7 @@ NAF narf_previous(NAF naf);
 //!
 //! @param naf The NAF to get the metadata from
 //! @return A pointer to an array of 32 bytes
-uint8_t *narf_metadata(NAF naf);
+void *narf_metadata(NAF naf);
 
 //! @brief Set metadata associated with NAF
 //! @see narf_metadata()
@@ -370,7 +370,15 @@ uint8_t *narf_metadata(NAF naf);
 //! @param naf The NAF to set metadata for
 //! @param data Pointer to array of 32 bytes
 //! @return true on success, false on failure
-bool narf_set_metadata(NAF naf, uint8_t *data);
+bool narf_set_metadata(NAF naf, void *data);
+
+//! @brief Append data to a NAF
+//!
+//! @param key The key holding data to append to
+//! @param data Pointer to the data
+//! @param size The size of the data in bytes
+//! @return true for success
+bool narf_append(const char *key, const void *data, NarfByteSize size);
 
 #ifdef NARF_DEBUG
 //! @brief Print some debug info

@@ -188,9 +188,27 @@ void process_cmd(char *buffer) {
       printf("\n");
    }
    else if (!strncmp(buffer, "cat ", 4)) {
-      char key[256];
+      char key[512];
+      NAF naf;
+      int len;
+      int start;
       sscanf(buffer, "cat %s", key);
-      printf("narf_find(%s)=%d\n", key, narf_find(key));
+      printf("narf_find(%s)=%d\n", key, naf ASSIGN narf_find(key));
+      start = narf_sector(naf);
+      len = narf_size(naf);
+
+      while (len > 0) {
+         narf_io_read(start, key);
+         for (int i = 0; i < len && i < 512; i++) {
+            printf("%02x ", (uint8_t) key[i]);
+            if ((i % 16) == 15) {
+               printf("\n");
+            }
+         }
+         start++;
+         len -= 512;
+      }
+      printf("\n");
    }
    else if (!strncmp(buffer, "tag ", 4)) {
       char key[256];

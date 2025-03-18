@@ -1,4 +1,3 @@
-#include <assert.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
@@ -7,9 +6,13 @@
 #include "narf_io.h"
 
 #ifdef NARF_DEBUG
+#include <assert.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <math.h>
+#else
+#define static_assert(x,y)
+#define assert(x)
 #endif
 
 #ifdef __GNUC__
@@ -58,19 +61,19 @@ typedef struct PACKED {
       uint8_t sigbytes[4];
    };
    uint32_t version;       // VERSION
-   ByteSize sector_size;   // sector size in bytes
-   Sector   total_sectors; // total size of storage in sectors
+   NarfByteSize sector_size;   // sector size in bytes
+   NarfSector   total_sectors; // total size of storage in sectors
    NAF root;               // sector of root node
    NAF first;              // sector of first node in key order
    NAF last;               // sector of last node in key order
    NAF chain;              // previously allocated but free now
-   Sector   count;         // count of total number of allocated NAF
-   Sector   vacant;        // number of first unallocated sector
-   Sector   start;         // where the root sector lives
+   NarfSector   count;         // count of total number of allocated NAF
+   NarfSector   vacant;        // number of first unallocated sector
+   NarfSector   start;         // where the root sector lives
 } Root;
 static_assert(sizeof(Root) == 2 * sizeof(uint32_t) +
-      1 * sizeof(ByteSize) +
-      4 * sizeof(Sector) +
+      1 * sizeof(NarfByteSize) +
+      4 * sizeof(NarfSector) +
       4 * sizeof(NAF), "Root wrong size");
 
 //! @brief A Node structure to hold NAF details
@@ -83,20 +86,20 @@ typedef struct PACKED {
 
    uint8_t metadata[32]; // not used by NARF
 
-   Sector   start;       // data start sector
-   Sector   length;      // data length in sectors
-   ByteSize bytes;       // data size in bytes
+   NarfSector   start;       // data start sector
+   NarfSector   length;      // data length in sectors
+   NarfByteSize bytes;       // data size in bytes
 
    char key[NARF_SECTOR_SIZE - 5 * sizeof(NAF)
-      - 2 * sizeof(Sector)
-      - 1 * sizeof(ByteSize)
+      - 2 * sizeof(NarfSector)
+      - 1 * sizeof(NarfByteSize)
       - 32 * sizeof(uint8_t)];
 } Node;
 static_assert(sizeof(Node) == NARF_SECTOR_SIZE, "Node wrong size");
 
-uint8_t buffer[NARF_SECTOR_SIZE] = { 0 };
-Root root = { 0 };
-Node *node = (Node *) buffer;
+static uint8_t buffer[NARF_SECTOR_SIZE] = { 0 };
+static Root root = { 0 };
+static Node *node = (Node *) buffer;
 
 //! @brief Read a NAF into our buffer
 //!
@@ -166,7 +169,7 @@ static int32_t utf8_decode_safe(const char **s, const char *end) {
 //!
 //! compares up to n bytes, ensuring character integrity
 //!
-int32_t utf8_strncmp(const char *s1, const char *s2, size_t n) {
+static int32_t utf8_strncmp(const char *s1, const char *s2, size_t n) {
    const char *end1 = s1 + n, *end2 = s2 + n;
 
    while (s1 < end1 && s2 < end2 && *s1 && *s2) {
@@ -247,8 +250,8 @@ bool narf_mbr(const char *message) {
 //! @return true for success
 bool narf_partition(int partition) {
    int i;
-   Sector start;
-   Sector end;
+   NarfSector start;
+   NarfSector end;
    MBR *mbr;
 
    if (!narf_io_open()) return false;
@@ -389,9 +392,9 @@ bool narf_mount(int partition) {
 #endif
 
 //! @brief Get the ideal height for our tree.
-Sector max_height(void) {
-   Sector ret = 1;
-   Sector i = root.count;
+static int max_height(void) {
+   int ret = 1;
+   NarfSector i = root.count;
 
    while (i) {
       ++ret;
@@ -512,7 +515,7 @@ static void narf_pt(NAF naf, int indent, uint32_t pattern) {
 }
 
 //! @see narf_debug
-void print_node(NAF naf) {
+static void print_node(NAF naf) {
    read_buffer(naf);
    printf("naf = %d => '%.*s'\n",
          naf, (int) sizeof(node->key), node->key);
@@ -527,7 +530,7 @@ void print_node(NAF naf) {
 }
 
 //! @see narf_debug()
-void print_chain(void) {
+static void print_chain(void) {
    NAF naf;
    if (root.chain == END) {
       printf("freechain is empty\n");
@@ -603,7 +606,7 @@ void narf_debug(void) {
 #endif
 
 #ifdef NARF_DEBUG_INTEGRITY
-void verify_not_on_tree(NAF parent, NAF naf) {
+static void verify_not_on_tree(NAF parent, NAF naf) {
    NAF l, r;
 
    if (parent == END) {
@@ -619,7 +622,7 @@ void verify_not_on_tree(NAF parent, NAF naf) {
    verify_not_on_tree(r, naf);
 }
 
-void verify_not_in_chain(NAF naf) {
+static void verify_not_in_chain(NAF naf) {
    NAF tmp;
    tmp = root.chain;
    while (tmp != END) {
@@ -630,7 +633,7 @@ void verify_not_in_chain(NAF naf) {
 }
 
 //! @brief if it's in the tree, it should not be in chain
-void walk_tree(NAF parent, NAF naf) {
+static void walk_tree(NAF parent, NAF naf) {
    NAF l, r;
 
    if (naf == END) {
@@ -661,7 +664,7 @@ void walk_tree(NAF parent, NAF naf) {
 }
 
 //! @brief if it's in the chain, it should not be in tree
-void walk_chain(void) {
+static void walk_chain(void) {
    NAF tmp;
    NAF next;
    tmp = root.chain;
@@ -674,7 +677,7 @@ void walk_chain(void) {
 }
 
 //! @brief detect a loop in the chain linked list
-void chain_loop(void) {
+static void chain_loop(void) {
    NAF a, b;
 
    a = b = root.chain;
@@ -700,7 +703,7 @@ void chain_loop(void) {
 }
 
 //! @brief detect a loop in the ordered linked list
-void order_loop(void) {
+static void order_loop(void) {
    NAF a, b;
 
    a = b = root.first;
@@ -723,7 +726,7 @@ void order_loop(void) {
 }
 
 //! @brief detect a loop in the reverse order linked list
-void reverse_loop(void) {
+static void reverse_loop(void) {
    NAF a, b;
 
    a = b = root.last;
@@ -749,7 +752,7 @@ void reverse_loop(void) {
    }
 }
 
-void walk_order(void) {
+static void walk_order(void) {
    NAF prev;
    NAF next;
    NAF naf;
@@ -801,7 +804,7 @@ void walk_order(void) {
    }
 }
 
-void verify_integrity(void) {
+static void verify_integrity(void) {
    printf("verify integrity order_loop\n");
    order_loop();
    printf("verify integrity reverse_loop\n");
@@ -825,8 +828,8 @@ static void narf_chain(NAF naf) {
    NAF prev;
    NAF next;
    NAF tmp;
-   Sector length;
-   Sector tmp_length;
+   NarfSector length;
+   NarfSector tmp_length;
 
 again:
 
@@ -1064,7 +1067,7 @@ static bool narf_insert(NAF naf, const char *key) {
 }
 
 //! @see narf.h
-bool narf_mkfs(Sector start, Sector size) {
+bool narf_mkfs(NarfSector start, NarfSector size) {
    if (!narf_io_open()) return false;
 
    memset(buffer, 0, sizeof(buffer));
@@ -1090,7 +1093,7 @@ bool narf_mkfs(Sector start, Sector size) {
 }
 
 //! @see narf.h
-bool narf_init(Sector start) {
+bool narf_init(NarfSector start) {
    if (!narf_io_open()) return false;
 
    read_buffer(start);
@@ -1243,9 +1246,9 @@ NAF narf_dirnext(const char *dirname, const char *sep, NAF naf) {
 //!
 //! @param naf The NAF to trim
 //! @param length The desired length
-static void trim_excess(NAF naf, Sector length) {
+static void trim_excess(NAF naf, NarfSector length) {
    NAF extra;
-   Sector excess;
+   NarfSector excess;
 
 #ifdef NARF_DEBUG_INTEGRITY
    printf("TRIMMING %d %d\n", naf, length);
@@ -1269,7 +1272,7 @@ static void trim_excess(NAF naf, Sector length) {
    narf_chain(extra);
 }
 
-NAF narf_unchain(Sector length) {
+static NAF narf_unchain(NarfSector length) {
    NAF prev;
    NAF next;
    NAF naf;
@@ -1321,9 +1324,9 @@ NAF narf_unchain(Sector length) {
 }
 
 //! @see narf.h
-NAF narf_alloc(const char *key, ByteSize bytes) {
+NAF narf_alloc(const char *key, NarfByteSize bytes) {
    NAF naf;
-   Sector length;
+   NarfSector length;
 
    length = (bytes + NARF_SECTOR_SIZE - 1) / NARF_SECTOR_SIZE;
 
@@ -1393,13 +1396,13 @@ NAF narf_alloc(const char *key, ByteSize bytes) {
 //! @param src The source for the NAF
 //! @param length The desired length
 //! @param bytes The desired bytes
-static void narf_move(NAF dst, NAF src, Sector length, ByteSize bytes) {
+static void narf_move(NAF dst, NAF src, NarfSector length, NarfByteSize bytes) {
    NAF prev, next, parent;
    NAF left, right;
-   Sector og_start;
-   Sector start;
-   Sector og_length;
-   Sector i;
+   NarfSector og_start;
+   NarfSector start;
+   NarfSector og_length;
+   NarfSector i;
 
    // move into our new home
    read_buffer(src);
@@ -1482,11 +1485,11 @@ static void narf_move(NAF dst, NAF src, Sector length, ByteSize bytes) {
 }
 
 //! @see narf.h
-NAF narf_realloc(const char *key, ByteSize bytes) {
+NAF narf_realloc(const char *key, NarfByteSize bytes) {
    NAF naf;
    NAF tmp;
-   Sector length;
-   Sector og_length;
+   NarfSector length;
+   NarfSector og_length;
 
    if (!verify()) return END;
 
@@ -1770,12 +1773,12 @@ bool narf_rebalance(void) {
    NAF head = root.first;
 
    NAF naf = root.first;
-   Sector count = 0;
-   Sector target = 0;
-   Sector spot = 0;
+   NarfSector count = 0;
+   NarfSector target = 0;
+   NarfSector spot = 0;
 
-   Sector numerator;
-   Sector denominator = 2;
+   NarfSector numerator;
+   NarfSector denominator = 2;
 
    NAF prev;
    NAF next;
@@ -1877,9 +1880,9 @@ bool narf_defrag(void) {
    NAF tmp;
    NAF other;
    NAF parent, left, right, prev, next;
-   Sector tmp_length;
-   Sector other_length;
-   Sector i;
+   NarfSector tmp_length;
+   NarfSector other_length;
+   NarfSector i;
 
    while (root.chain != END) {
       tmp = root.chain;
@@ -1980,14 +1983,14 @@ const char *narf_key(NAF naf) {
 }
 
 //! @see narf.h
-Sector narf_sector(NAF naf) {
+NarfSector narf_sector(NAF naf) {
    if (!verify() || naf == END) return END;
    read_buffer(naf);
    return node->start;
 }
 
 //! @see narf.h
-ByteSize narf_size(NAF naf) {
+NarfByteSize narf_size(NAF naf) {
    if (!verify() || naf == END) return 0;
    read_buffer(naf);
    return node->bytes;
@@ -2020,18 +2023,67 @@ NAF narf_previous(NAF naf) {
 }
 
 //! @see narf.h
-uint8_t *narf_metadata(NAF naf) {
+void *narf_metadata(NAF naf) {
    if (!verify() || naf == END) return NULL;
    read_buffer(naf);
    return node->metadata;
 }
 
 //! @see narf.h
-bool narf_set_metadata(NAF naf, uint8_t *data) {
+bool narf_set_metadata(NAF naf, void *data) {
    if (!verify() || naf == END) return false;
    read_buffer(naf);
    memcpy(node->metadata, data, sizeof(node->metadata));
    write_buffer(naf);
+   return true;
+}
+
+//! @see narf.h
+bool narf_append(const char *key, const void *data, NarfByteSize size) {
+   NarfByteSize og_bytes;
+   NarfByteSize begin;
+   NarfByteSize remain;
+   NarfSector start;
+   NarfSector current;
+   NAF naf = narf_find(key);
+
+   if (naf == END) {
+      return false;
+   }
+
+   read_buffer(naf);
+   og_bytes = node->bytes;
+   
+   naf = narf_realloc(key, og_bytes + size);
+
+   if (naf == END) {
+      return false;
+   }
+
+   read_buffer(naf);
+   start = node->start;
+
+   begin = og_bytes % NARF_SECTOR_SIZE;
+   current = og_bytes / NARF_SECTOR_SIZE;
+   remain = NARF_SECTOR_SIZE - begin;
+
+   while (size) {
+      read_buffer(start + current);
+      if (remain > size) {
+         remain = size;
+      }
+      memcpy(buffer + begin, data, remain);
+      write_data(start + current);
+
+      // advance all our pointers
+      data = (uint8_t *) data + remain;
+      size -= remain;
+      og_bytes += remain;
+      ++current;
+      begin = 0;
+      remain = NARF_SECTOR_SIZE;
+   }
+
    return true;
 }
 
