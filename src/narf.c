@@ -135,9 +135,10 @@ static bool write_data(NAF naf) {
 //!
 static int32_t utf8_decode_safe(const char **s, const char *end) {
    const unsigned char *p = (const unsigned char *) *s;
-   if (*s >= end || !**s) return -2;  // Stop at buffer end or null terminator
+   int codepoint = 0;
+   int num_bytes = 0;
 
-   int codepoint = 0, num_bytes = 0;
+   if (*s >= end || !**s) return -2;  // Stop at buffer end or null terminator
 
    if (p[0] < 0x80) {  // 1-byte (ASCII)
       codepoint = p[0];
@@ -170,10 +171,12 @@ static int32_t utf8_decode_safe(const char **s, const char *end) {
 //! compares up to n bytes, ensuring character integrity
 //!
 static int32_t utf8_strncmp(const char *s1, const char *s2, size_t n) {
-   const char *end1 = s1 + n, *end2 = s2 + n;
+   const char *end1 = s1 + n;
+   const char *end2 = s2 + n;
 
    while (s1 < end1 && s2 < end2 && *s1 && *s2) {
-      const char *prev_s1 = s1, *prev_s2 = s2;
+      const char *prev_s1 = s1;
+      const char *prev_s2 = s2;
       int cp1 = utf8_decode_safe(&s1, end1);
       int cp2 = utf8_decode_safe(&s2, end2);
 
@@ -203,7 +206,7 @@ static const uint8_t boot_code_stub[] = {
    0xfe, 0xac, 0x08, 0xc0, 0x74, 0x05, 0xe8, 0x03,
    0x00, 0xeb, 0xf6, 0xc3, 0xb4, 0x0e, 0xcd, 0x10,
    0xc3 };
-static const char boot_code_msg[] = 
+static const char boot_code_msg[] =
    "NARF! not bootable.\r\n";
 
 //! @brief Write a new blank MBR to the media
@@ -432,7 +435,8 @@ static bool verify(void) {
 //! @param indent The number of levels to indent
 //! @param pattern Bitfield indicating tree limbs to print
 static void narf_pt(NAF naf, int indent, uint32_t pattern) {
-   NAF l, r;
+   NAF l;
+   NAF r;
    int i;
    char *p;
    char *arm;
@@ -607,7 +611,8 @@ void narf_debug(void) {
 
 #ifdef NARF_DEBUG_INTEGRITY
 static void verify_not_on_tree(NAF parent, NAF naf) {
-   NAF l, r;
+   NAF l;
+   NAF r;
 
    if (parent == END) {
       return;
@@ -634,7 +639,8 @@ static void verify_not_in_chain(NAF naf) {
 
 //! @brief if it's in the tree, it should not be in chain
 static void walk_tree(NAF parent, NAF naf) {
-   NAF l, r;
+   NAF l;
+   NAF r;
 
    if (naf == END) {
       return;
@@ -678,7 +684,8 @@ static void walk_chain(void) {
 
 //! @brief detect a loop in the chain linked list
 static void chain_loop(void) {
-   NAF a, b;
+   NAF a;
+   NAF b;
 
    a = b = root.chain;
 
@@ -704,7 +711,8 @@ static void chain_loop(void) {
 
 //! @brief detect a loop in the ordered linked list
 static void order_loop(void) {
-   NAF a, b;
+   NAF a;
+   NAF b;
 
    a = b = root.first;
 
@@ -727,7 +735,8 @@ static void order_loop(void) {
 
 //! @brief detect a loop in the reverse order linked list
 static void reverse_loop(void) {
-   NAF a, b;
+   NAF a;
+   NAF b;
 
    a = b = root.last;
 
@@ -1397,8 +1406,11 @@ NAF narf_alloc(const char *key, NarfByteSize bytes) {
 //! @param length The desired length
 //! @param bytes The desired bytes
 static void narf_move(NAF dst, NAF src, NarfSector length, NarfByteSize bytes) {
-   NAF prev, next, parent;
-   NAF left, right;
+   NAF prev;
+   NAF next;
+   NAF parent;
+   NAF left;
+   NAF right;
    NarfSector og_start;
    NarfSector start;
    NarfSector og_length;
@@ -1879,7 +1891,11 @@ bool narf_rebalance(void) {
 bool narf_defrag(void) {
    NAF tmp;
    NAF other;
-   NAF parent, left, right, prev, next;
+   NAF parent;
+   NAF left;
+   NAF right;
+   NAF prev;
+   NAF next;
    NarfSector tmp_length;
    NarfSector other_length;
    NarfSector i;
@@ -2053,7 +2069,7 @@ bool narf_append(const char *key, const void *data, NarfByteSize size) {
 
    read_buffer(naf);
    og_bytes = node->bytes;
-   
+ 
    naf = narf_realloc(key, og_bytes + size);
 
    if (naf == END) {
