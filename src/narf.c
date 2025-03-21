@@ -11,7 +11,11 @@
 #include <stdio.h>
 #include <math.h>
 #else
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+#define static_assert(x,y) _Static_assert(x,y)
+#else
 #define static_assert(x,y)
+#endif
 #define assert(x)
 #endif
 
