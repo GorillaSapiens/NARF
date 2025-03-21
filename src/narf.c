@@ -57,19 +57,19 @@ static_assert(sizeof(MBR) == 512, "MBRPartitionEntry wrong size");
 //! it is intentionally small.
 typedef struct PACKED {
    union {
-      uint32_t signature;  // SIGNATURE
-      uint8_t sigbytes[4];
+      uint32_t m_signature;  // SIGNATURE
+      uint8_t  m_sigbytes[4];
    };
-   uint32_t version;       // VERSION
-   NarfByteSize sector_size;   // sector size in bytes
-   NarfSector   total_sectors; // total size of storage in sectors
-   NAF root;               // sector of root node
-   NAF first;              // sector of first node in key order
-   NAF last;               // sector of last node in key order
-   NAF chain;              // previously allocated but free now
-   NarfSector   count;         // count of total number of allocated NAF
-   NarfSector   vacant;        // number of first unallocated sector
-   NarfSector   start;         // where the root sector lives
+   uint32_t m_version;       // VERSION
+   NarfByteSize m_sector_size;   // sector size in bytes
+   NarfSector   m_total_sectors; // total size of storage in sectors
+   NAF m_root;               // sector of root node
+   NAF m_first;              // sector of first node in key order
+   NAF m_last;               // sector of last node in key order
+   NAF m_chain;              // previously allocated but free now
+   NarfSector   m_count;         // count of total number of allocated NAF
+   NarfSector   m_vacant;        // number of first unallocated sector
+   NarfSector   m_start;         // where the root sector lives
 } Root;
 static_assert(sizeof(Root) == 2 * sizeof(uint32_t) +
       1 * sizeof(NarfByteSize) +
@@ -78,19 +78,19 @@ static_assert(sizeof(Root) == 2 * sizeof(uint32_t) +
 
 //! @brief A Node structure to hold NAF details
 typedef struct PACKED {
-   NAF parent;      // parent NAF
-   NAF left;        // left sibling NAF
-   NAF right;       // right sibling NAF
-   NAF prev;        // previous ordered NAF
-   NAF next;        // next ordered NAF
+   NAF m_parent;      // parent NAF
+   NAF m_left;        // left sibling NAF
+   NAF m_right;       // right sibling NAF
+   NAF m_prev;        // previous ordered NAF
+   NAF m_next;        // next ordered NAF
 
-   uint8_t metadata[32]; // not used by NARF
+   uint8_t m_metadata[32]; // not used by NARF
 
-   NarfSector   start;       // data start sector
-   NarfSector   length;      // data length in sectors
-   NarfByteSize bytes;       // data size in bytes
+   NarfSector   m_start;       // data start sector
+   NarfSector   m_length;      // data length in sectors
+   NarfByteSize m_bytes;       // data size in bytes
 
-   char key[NARF_SECTOR_SIZE - 5 * sizeof(NAF)
+   char m_key[NARF_SECTOR_SIZE - 5 * sizeof(NAF)
       - 2 * sizeof(NarfSector)
       - 1 * sizeof(NarfByteSize)
       - 32 * sizeof(uint8_t)];
@@ -115,7 +115,7 @@ static bool read_buffer(NAF naf) {
 //! @return true on success
 static bool write_buffer(NAF naf) {
 #ifdef NARF_DEBUG_INTEGRITY
-   assert(!naf || naf == root.start || (node->start == naf + 1));
+   assert(!naf || naf == root.m_start || (node->m_start == naf + 1));
 #endif
    return narf_io_write(naf, buffer);
 }
@@ -396,8 +396,8 @@ bool narf_mount(int partition) {
 
 //! @brief Get the ideal height for our tree.
 static int max_height(void) {
+   NarfSector i = root.m_count;
    int ret = 1;
-   NarfSector i = root.count;
 
    while (i) {
       ++ret;
@@ -413,9 +413,9 @@ static int max_height(void) {
 //!
 //! @return true on success
 static bool verify(void) {
-   if (root.signature != SIGNATURE) return false;
-   if (root.version != VERSION) return false;
-   if (root.sector_size != NARF_SECTOR_SIZE) return false;
+   if (root.m_signature != SIGNATURE) return false;
+   if (root.m_version != VERSION) return false;
+   if (root.m_sector_size != NARF_SECTOR_SIZE) return false;
    return true;
 }
 
@@ -445,9 +445,9 @@ static void narf_pt(NAF naf, int indent, uint32_t pattern) {
 
    if (naf != END) {
       read_buffer(naf);
-      l = node->left;
-      r = node->right;
-      p = strdup(node->key);
+      l = node->m_left;
+      r = node->m_right;
+      p = strdup(node->m_key);
       narf_pt(l, indent + 1, pattern);
    }
 
@@ -498,16 +498,16 @@ static void narf_pt(NAF naf, int indent, uint32_t pattern) {
    }
    else {
       printf("%s %s [%d]", arm, p, naf);
-      if (naf == root.first) {
+      if (naf == root.m_first) {
          printf(" (first)");
       }
-      if (naf == root.last) {
+      if (naf == root.m_last) {
          printf(" (last)");
       }
-      if (naf == root.root) {
+      if (naf == root.m_root) {
          printf(" (root)");
       }
-      if (naf == root.chain) {
+      if (naf == root.m_chain) {
          // seeing this means there's a serious problem
          printf(" (chain)");
       }
@@ -522,30 +522,30 @@ static void narf_pt(NAF naf, int indent, uint32_t pattern) {
 static void print_node(NAF naf) {
    read_buffer(naf);
    printf("naf = %d => '%.*s'\n",
-         naf, (int) sizeof(node->key), node->key);
+         naf, (int) sizeof(node->m_key), node->m_key);
    printf("tree u/l/r  = %d / %d / %d\n",
-         node->parent, node->left, node->right);
+         node->m_parent, node->m_left, node->m_right);
    printf("list p/n    = %d / %d\n",
-         node->prev, node->next);
+         node->m_prev, node->m_next);
    printf("start:len   = %d:%d (%d)\n",
-         node->start, node->length, node->bytes);
+         node->m_start, node->m_length, node->m_bytes);
    printf("metadata    = '%.*s'\n",
-         (int) sizeof(node->metadata), node->metadata);
+         (int) sizeof(node->m_metadata), node->m_metadata);
 }
 
 //! @see narf_debug()
 static void print_chain(void) {
    NAF naf;
-   if (root.chain == END) {
+   if (root.m_chain == END) {
       printf("freechain is empty\n");
    }
    else {
       printf("freechain:\n");
-      naf = root.chain;
+      naf = root.m_chain;
       while (naf != END) {
          read_buffer(naf);
-         printf("%d (%d:%d) -> %d\n", naf, node->start, node->length, node->next);
-         naf = node->next;
+         printf("%d (%d:%d) -> %d\n", naf, node->m_start, node->m_length, node->m_next);
+         naf = node->m_next;
       }
       printf("\n");
    }
@@ -555,56 +555,56 @@ static void print_chain(void) {
 void narf_debug(void) {
    NAF naf;
 
-   printf("root.signature     = %08x '%4s'\n", root.signature, root.sigbytes);
-   if (root.signature != SIGNATURE) {
+   printf("root.m_signature     = %08x '%4s'\n", root.m_signature, root.m_sigbytes);
+   if (root.m_signature != SIGNATURE) {
       printf("bad signature\n");
       return;
    }
 
-   printf("root.version       = %08x\n", root.version);
-   if (root.version != VERSION) {
+   printf("root.m_version       = %08x\n", root.m_version);
+   if (root.m_version != VERSION) {
       printf("bad version\n");
       return;
    }
 
-   printf("root.sector_size   = %d\n", root.sector_size);
-   if (root.sector_size != NARF_SECTOR_SIZE) {
+   printf("root.m_sector_size   = %d\n", root.m_sector_size);
+   if (root.m_sector_size != NARF_SECTOR_SIZE) {
       printf("bad sector size\n");
       return;
    }
 
-   printf("root.total_sectors = %d\n", root.total_sectors);
-   if (root.total_sectors < 2) {
+   printf("root.m_total_sectors = %d\n", root.m_total_sectors);
+   if (root.m_total_sectors < 2) {
       printf("bad total sectors\n");
       return;
    }
 
-   printf("root.vacant        = %d\n", root.vacant);
-   printf("root.chain         = %d\n", root.chain);
-   printf("root.root          = %d\n", root.root);
-   printf("root.first         = %d\n", root.first);
-   printf("root.last          = %d\n", root.last);
-   printf("root.count         = %d\n", root.count);
-   printf("root.start         = %d\n", root.start);
+   printf("root.m_vacant        = %d\n", root.m_vacant);
+   printf("root.m_chain         = %d\n", root.m_chain);
+   printf("root.m_root          = %d\n", root.m_root);
+   printf("root.m_first         = %d\n", root.m_first);
+   printf("root.m_last          = %d\n", root.m_last);
+   printf("root.m_count         = %d\n", root.m_count);
+   printf("root.m_start         = %d\n", root.m_start);
    printf("\n");
 
-   naf = root.first;
+   naf = root.m_first;
    while (naf != END) {
       print_node(naf);
       printf("\n");
 
-      naf = node->next;
+      naf = node->m_next;
    }
 
    print_chain();
    printf("\n");
 
-   if (root.root == END) {
+   if (root.m_root == END) {
       printf("tree is empty\n");
    }
    else {
       printf("tree:\n");
-      narf_pt(root.root, 0, 0);
+      narf_pt(root.m_root, 0, 0);
    }
 }
 #endif
@@ -620,8 +620,8 @@ static void verify_not_on_tree(NAF parent, NAF naf) {
    assert(parent != naf);
 
    read_buffer(parent);
-   l = node->left;
-   r = node->right;
+   l = node->m_left;
+   r = node->m_right;
 
    verify_not_on_tree(l, naf);
    verify_not_on_tree(r, naf);
@@ -629,11 +629,11 @@ static void verify_not_on_tree(NAF parent, NAF naf) {
 
 static void verify_not_in_chain(NAF naf) {
    NAF tmp;
-   tmp = root.chain;
+   tmp = root.m_chain;
    while (tmp != END) {
       read_buffer(tmp);
       assert(naf != tmp);
-      tmp = node->next;
+      tmp = node->m_next;
    }
 }
 
@@ -650,20 +650,20 @@ static void walk_tree(NAF parent, NAF naf) {
 
    // assert parent linkage
    if (parent == END) {
-      assert(root.root == naf);
+      assert(root.m_root == naf);
    }
    else {
       read_buffer(parent);
-      assert((node->left == naf || node->right == naf) &&
-            (node->left != node->right));
+      assert((node->m_left == naf || node->m_right == naf) &&
+            (node->m_left != node->m_right));
    }
 
    read_buffer(naf);
-   l = node->left;
-   r = node->right;
+   l = node->m_left;
+   r = node->m_right;
 
    // assert parent
-   assert(node->parent == parent);
+   assert(node->m_parent == parent);
 
    walk_tree(naf, l);
    walk_tree(naf, r);
@@ -673,11 +673,11 @@ static void walk_tree(NAF parent, NAF naf) {
 static void walk_chain(void) {
    NAF tmp;
    NAF next;
-   tmp = root.chain;
+   tmp = root.m_chain;
    while (tmp != END) {
       read_buffer(tmp);
-      next = node->next;
-      verify_not_on_tree(root.root, tmp);
+      next = node->m_next;
+      verify_not_on_tree(root.m_root, tmp);
       tmp = next;
    }
 }
@@ -687,20 +687,20 @@ static void chain_loop(void) {
    NAF a;
    NAF b;
 
-   a = b = root.chain;
+   a = b = root.m_chain;
 
    while (a != END && b != END) {
 
-      assert(a < root.vacant);
+      assert(a < root.m_vacant);
 
       read_buffer(a);
-      a = node->next;
+      a = node->m_next;
 
       read_buffer(b);
-      b = node->next;
+      b = node->m_next;
       if (b != END) {
          read_buffer(b);
-         b = node->next;
+         b = node->m_next;
       }
 
       if (a != END && b != END) {
@@ -714,17 +714,17 @@ static void order_loop(void) {
    NAF a;
    NAF b;
 
-   a = b = root.first;
+   a = b = root.m_first;
 
    while (a != END && b != END) {
       read_buffer(a);
-      a = node->next;
+      a = node->m_next;
 
       read_buffer(b);
-      b = node->next;
+      b = node->m_next;
       if (b != END) {
          read_buffer(b);
-         b = node->next;
+         b = node->m_next;
       }
 
       if (a != END && b != END) {
@@ -738,22 +738,22 @@ static void reverse_loop(void) {
    NAF a;
    NAF b;
 
-   a = b = root.last;
+   a = b = root.m_last;
 
    while (a != END && b != END) {
       read_buffer(a);
-      a = node->prev;
+      a = node->m_prev;
 
       read_buffer(b);
-      b = node->next;
+      b = node->m_next;
       if (b != END) {
          read_buffer(b);
-         b = node->next;
+         b = node->m_next;
       }
 
       if (a != END) {
          read_buffer(a);
-         b = node->prev;
+         b = node->m_prev;
       }
       if (a != END && b != END) {
          assert (a != b);
@@ -766,26 +766,26 @@ static void walk_order(void) {
    NAF next;
    NAF naf;
 
-   if (root.first == END && root.last == END) {
+   if (root.m_first == END && root.m_last == END) {
       return;
    }
 
-   assert(root.first != END && root.last != END);
+   assert(root.m_first != END && root.m_last != END);
 
    // walk forward
    prev = END;
-   naf = root.first;
+   naf = root.m_first;
 
    while (naf != END) {
       read_buffer(naf);
-      next = node->next;
+      next = node->m_next;
 
-      if (node->prev == END) {
-         assert(root.first == naf);
+      if (node->m_prev == END) {
+         assert(root.m_first == naf);
       }
       else {
-         read_buffer(node->prev);
-         assert(node->next == naf);
+         read_buffer(node->m_prev);
+         assert(node->m_next == naf);
       }
 
       prev = naf;
@@ -794,18 +794,18 @@ static void walk_order(void) {
 
    // walk backward
    next = END;
-   naf = root.last;
+   naf = root.m_last;
 
    while (naf != END) {
       read_buffer(naf);
-      prev = node->prev;
+      prev = node->m_prev;
 
-      if (node->next == END) {
-         assert(root.last == naf);
+      if (node->m_next == END) {
+         assert(root.m_last == naf);
       }
       else {
-         read_buffer(node->next);
-         assert(node->prev == naf);
+         read_buffer(node->m_next);
+         assert(node->m_prev == naf);
       }
 
       next = naf;
@@ -823,7 +823,7 @@ static void verify_integrity(void) {
    printf("verify integrity walk_chain\n");
    walk_chain();
    printf("verify integrity walk_tree\n");
-   walk_tree(END, root.root);
+   walk_tree(END, root.m_root);
    printf("verify integrity prev_next_cohesion\n");
    walk_order();
    // TODO test tree <-> first/last cohesion
@@ -844,14 +844,14 @@ again:
 
    // reset fields
    read_buffer(naf);
-   node->prev = END;
-   node->next = END;
-   node->left = END;
-   node->right = END;
-   node->parent = END;
-   node->bytes = 0;
+   node->m_prev = END;
+   node->m_next = END;
+   node->m_left = END;
+   node->m_right = END;
+   node->m_parent = END;
+   node->m_bytes = 0;
    // do NOT reset "start" and "length"
-   length = node->length;
+   length = node->m_length;
    write_buffer(naf);
 
 #ifdef NARF_DEBUG_INTEGRITY
@@ -861,27 +861,27 @@ again:
 
    // can they be combined with another?
    prev = END;
-   next = root.chain;
+   next = root.m_chain;
    while(next != END) {
 
       read_buffer(next);
 
       // anticipation...
       tmp = next;
-      tmp_length = node->length;
-      next = node->next;
+      tmp_length = node->m_length;
+      next = node->m_next;
 
       // are the two adjacent?
       if ((naf == tmp + tmp_length + 1) ||
             (naf + length + 1 == tmp)) {
          // remove item from chain
          if (prev == END) {
-            root.chain = next;
+            root.m_chain = next;
             narf_sync();
          }
          else {
             read_buffer(prev);
-            node->next = next;
+            node->m_next = next;
             write_buffer(prev);
          }
 #ifdef NARF_DEBUG_INTEGRITY
@@ -892,13 +892,13 @@ again:
          // combine the two
          if (tmp < naf) {
             read_buffer(tmp);
-            node->length += length + 1;
+            node->m_length += length + 1;
             write_buffer(tmp);
             naf = tmp;
          }
          else {
             read_buffer(naf);
-            node->length += tmp_length + 1;
+            node->m_length += tmp_length + 1;
             write_buffer(naf);
          }
          // reinsert
@@ -909,12 +909,12 @@ again:
       // next has already been set!
    }
 
-   // dumbest case, can we rewind root.vacant?
-   if (root.vacant == naf + length + 1) {
+   // dumbest case, can we rewind root.m_vacant?
+   if (root.m_vacant == naf + length + 1) {
 #ifdef NARF_DEBUG_INTEGRITY
       printf("rewind to %d\n", naf);
 #endif
-      root.vacant = naf;
+      root.m_vacant = naf;
       narf_sync();
       return;
    }
@@ -923,44 +923,44 @@ again:
    read_buffer(naf);
 
    // record them in the free chain
-   if (root.chain == END) {
+   if (root.m_chain == END) {
 #ifdef NARF_DEBUG_INTEGRITY
       printf("head of chain\n");
 #endif
       // done above // read_buffer(naf);
-      node->next = root.chain;
+      node->m_next = root.m_chain;
       write_buffer(naf);
 
-      root.chain = naf;
+      root.m_chain = naf;
       narf_sync();
    }
    else {
       // smallest records first
       // done above // read_buffer(naf);
-      length = node->length;
+      length = node->m_length;
 
       prev = END;
-      next = root.chain;
+      next = root.m_chain;
       read_buffer(next);
 
-      while (length > node->length && next != END) {
+      while (length > node->m_length && next != END) {
          prev = next;
-         next = node->next;
+         next = node->m_next;
          if (next != END) {
             read_buffer(next);
          }
       }
       if (prev == END) {
-         root.chain = naf;
+         root.m_chain = naf;
          narf_sync();
       }
       else {
          read_buffer(prev);
-         node->next = naf;
+         node->m_next = naf;
          write_buffer(prev);
       }
       read_buffer(naf);
-      node->next = next;
+      node->m_next = next;
       write_buffer(naf);
    }
 
@@ -984,42 +984,42 @@ static bool narf_insert(NAF naf, const char *key) {
 
    if (!verify()) return false;
 
-   if (root.root == END) {
-      root.root = naf;
-      root.first = naf;
-      root.last = naf;
+   if (root.m_root == END) {
+      root.m_root = naf;
+      root.m_first = naf;
+      root.m_last = naf;
       narf_sync();
    }
    else {
-      p = root.root;
+      p = root.m_root;
       while (1) {
          read_buffer(p);
-         cmp = strncmp(key, node->key, sizeof(node->key));
+         cmp = strncmp(key, node->m_key, sizeof(node->m_key));
          if (cmp < 0) {
-            if (node->left != END) {
-               p = node->left;
+            if (node->m_left != END) {
+               p = node->m_left;
                ++height;
             }
             else {
                // we are the new left of p
-               node->left = naf;
-               tmp = node->prev;
-               node->prev = naf;
+               node->m_left = naf;
+               tmp = node->m_prev;
+               node->m_prev = naf;
                write_buffer(p);
 
                read_buffer(naf);
-               node->parent = p;
-               node->prev = tmp;
-               node->next = p;
+               node->m_parent = p;
+               node->m_prev = tmp;
+               node->m_next = p;
                write_buffer(naf);
 
                if (tmp != END) {
                   read_buffer(tmp);
-                  node->next = naf;
+                  node->m_next = naf;
                   write_buffer(tmp);
                }
                else {
-                  root.first = naf;
+                  root.m_first = naf;
                   narf_sync();
                }
 
@@ -1027,30 +1027,30 @@ static bool narf_insert(NAF naf, const char *key) {
             }
          }
          else if (cmp > 0) {
-            if (node->right != END) {
-               p = node->right;
+            if (node->m_right != END) {
+               p = node->m_right;
                ++height;
             }
             else {
                // we are the new right of p
-               node->right = naf;
-               tmp = node->next;
-               node->next = naf;
+               node->m_right = naf;
+               tmp = node->m_next;
+               node->m_next = naf;
                write_buffer(p);
 
                read_buffer(naf);
-               node->parent = p;
-               node->next = tmp;
-               node->prev = p;
+               node->m_parent = p;
+               node->m_next = tmp;
+               node->m_prev = p;
                write_buffer(naf);
 
                if (tmp != END) {
                   read_buffer(tmp);
-                  node->prev = naf;
+                  node->m_prev = naf;
                   write_buffer(tmp);
                }
                else {
-                  root.last = naf;
+                  root.m_last = naf;
                   narf_sync();
                }
 
@@ -1080,22 +1080,22 @@ bool narf_mkfs(NarfSector start, NarfSector size) {
    if (!narf_io_open()) return false;
 
    memset(buffer, 0, sizeof(buffer));
-   root.signature     = SIGNATURE;
-   root.version       = VERSION;
-   root.sector_size   = NARF_SECTOR_SIZE;
-   root.total_sectors = size;
-   root.vacant        = start + 1;
-   root.root          = END;
-   root.first         = END;
-   root.last          = END;
-   root.chain         = END;
-   root.count         = 0;
-   root.start         = start;
+   root.m_signature     = SIGNATURE;
+   root.m_version       = VERSION;
+   root.m_sector_size   = NARF_SECTOR_SIZE;
+   root.m_total_sectors = size;
+   root.m_vacant        = start + 1;
+   root.m_root          = END;
+   root.m_first         = END;
+   root.m_last          = END;
+   root.m_chain         = END;
+   root.m_count         = 0;
+   root.m_start         = start;
    memcpy(buffer, &root, sizeof(root));
    write_buffer(start);
 
 #ifdef NARF_DEBUG
-   printf("keysize %ld\n", sizeof(node->key));
+   printf("keysize %ld\n", sizeof(node->m_key));
 #endif
 
    return true;
@@ -1109,7 +1109,7 @@ bool narf_init(NarfSector start) {
    memcpy(&root, buffer, sizeof(root));
 
 #ifdef NARF_DEBUG
-   printf("keysize %ld\n", sizeof(node->key));
+   printf("keysize %ld\n", sizeof(node->m_key));
 #endif
 
    return verify();
@@ -1120,12 +1120,12 @@ bool narf_sync(void) {
    if (!verify()) return false;
    memset(buffer, 0, sizeof(buffer));
    memcpy(buffer, &root, sizeof(root));
-   return write_buffer(root.start);
+   return write_buffer(root.m_start);
 }
 
 //! @see narf.h
 NAF narf_find(const char *key) {
-   NAF naf = root.root;
+   NAF naf = root.m_root;
    int cmp;
 
    if (!verify()) return false;
@@ -1135,12 +1135,12 @@ NAF narf_find(const char *key) {
          return naf;
       }
       read_buffer(naf);
-      cmp = strncmp(key, node->key, sizeof(node->key));
+      cmp = strncmp(key, node->m_key, sizeof(node->m_key));
       if (cmp < 0) {
-         naf = node->left;
+         naf = node->m_left;
       }
       else if (cmp > 0) {
-         naf = node->right;
+         naf = node->m_right;
       }
       else {
          return naf;
@@ -1156,26 +1156,26 @@ NAF narf_dirfirst(const char *dirname, const char *sep) {
 
    if (!verify()) return false;
 
-   if (root.root == END) return END;
+   if (root.m_root == END) return END;
 
-   naf = root.root;
+   naf = root.m_root;
 
    while(1) {
       read_buffer(naf);
-      cmp = strncmp(dirname, node->key, sizeof(node->key));
+      cmp = strncmp(dirname, node->m_key, sizeof(node->m_key));
       if (cmp < 0) {
-         if (node->left != END) {
-            naf = node->left;
+         if (node->m_left != END) {
+            naf = node->m_left;
          }
          else {
             // the current node comes AFTER us
-            naf = node->prev;
+            naf = node->m_prev;
             break;
          }
       }
       else if (cmp > 0) {
-         if (node->right != END) {
-            naf = node->right;
+         if (node->m_right != END) {
+            naf = node->m_right;
          }
          else {
             // the current node comes BEFORE us
@@ -1203,10 +1203,10 @@ NAF narf_dirnext(const char *dirname, const char *sep, NAF naf) {
 
    if (naf != END) {
       read_buffer(naf);
-      naf = node->next;
+      naf = node->m_next;
    }
    else {
-      naf = root.first;
+      naf = root.m_first;
    }
 
    if (naf == END) {
@@ -1220,20 +1220,20 @@ NAF narf_dirnext(const char *dirname, const char *sep, NAF naf) {
    // and it is the first node after us.
 
    dirname_len = strlen(dirname);
-   if (strncmp(dirname, node->key, dirname_len)) {
+   if (strncmp(dirname, node->m_key, dirname_len)) {
       // not a match at all!
       return END;
    }
 
    sep_len = strlen(sep);
-   while (!strncmp(dirname, node->key, dirname_len)) {
+   while (!strncmp(dirname, node->m_key, dirname_len)) {
       // beginning matches
-      p = strstr(node->key + dirname_len, sep);
+      p = strstr(node->m_key + dirname_len, sep);
       if (p == NULL || p[sep_len] == 0) {
          // no sep, or only one sep at end
          return naf;
       }
-      naf = node->next;
+      naf = node->m_next;
       if (naf != END) {
          read_buffer(naf);
       }
@@ -1267,15 +1267,15 @@ static void trim_excess(NAF naf, NarfSector length) {
 
    read_buffer(naf);
 
-   excess = node->length - length;
-   extra = node->start + length;
+   excess = node->m_length - length;
+   extra = node->m_start + length;
 
-   node->length = length;
+   node->m_length = length;
    write_buffer(naf);
 
    read_buffer(extra);
-   node->start = extra + 1;
-   node->length = excess - 1;
+   node->m_start = extra + 1;
+   node->m_length = excess - 1;
    write_buffer(extra);
 
    narf_chain(extra);
@@ -1287,34 +1287,34 @@ static NAF narf_unchain(NarfSector length) {
    NAF naf;
 
    prev = END;
-   next = root.chain;
+   next = root.m_chain;
    while(next != END) {
       read_buffer(next);
-      if (node->length >= length) {
+      if (node->m_length >= length) {
 
 #ifdef NARF_DEBUG_INTEGRITY
          printf("NEED %d FOUND %d %d:%d\n",
-               length, next, node->start, node->length);
+               length, next, node->m_start, node->m_length);
          print_node(next);
 #endif
 
          // this will do nicely
          naf = next;
-         next = node->next;
+         next = node->m_next;
 
          // pull it out
          if (prev == END) {
-            root.chain = next;
+            root.m_chain = next;
             narf_sync();
          }
          else {
             read_buffer(prev);
-            node->next = next;
+            node->m_next = next;
             write_buffer(prev);
          }
 
          read_buffer(naf);
-         if (node->length > length) {
+         if (node->m_length > length) {
             // we need to trim the excess.
             trim_excess(naf, length);
          }
@@ -1327,7 +1327,7 @@ static NAF narf_unchain(NarfSector length) {
          return naf;
       }
       prev = next;
-      next = node->next;
+      next = node->m_next;
    }
    return END;
 }
@@ -1353,37 +1353,37 @@ NAF narf_alloc(const char *key, NarfByteSize bytes) {
    if (naf == END) {
       // nothing on the chain was suitable
 
-      if (root.vacant + length + 1 > root.total_sectors) {
+      if (root.m_vacant + length + 1 > root.m_total_sectors) {
          // NO ROOM!!!
          return END;
       }
 
-      naf = root.vacant;
-      ++root.vacant;
-      node->start  = root.vacant;
-      node->length = length;
-      root.vacant += length;
+      naf = root.m_vacant;
+      ++root.m_vacant;
+      node->m_start  = root.m_vacant;
+      node->m_length = length;
+      root.m_vacant += length;
       write_buffer(naf);
    }
 
    // reset fields except start and length
    read_buffer(naf);
-   node->parent = END;
-   node->left   = END;
-   node->right  = END;
-   node->prev    = END;
-   node->next    = END;
-   node->bytes  = bytes;
-   memset(node->metadata, 0, sizeof(node->metadata));
-   strncpy(node->key, key, sizeof(node->key));
+   node->m_parent = END;
+   node->m_left   = END;
+   node->m_right  = END;
+   node->m_prev    = END;
+   node->m_next    = END;
+   node->m_bytes  = bytes;
+   memset(node->m_metadata, 0, sizeof(node->m_metadata));
+   strncpy(node->m_key, key, sizeof(node->m_key));
    write_buffer(naf);
 
 #ifdef NARF_DEBUG_INTEGRITY
    printf("alloc %08x %08x %d %d\n",
-         naf, node->start, node->length, node->bytes);
+         naf, node->m_start, node->m_length, node->m_bytes);
 #endif
 
-   ++root.count;
+   ++root.m_count;
    narf_sync();
    narf_insert(naf, key);
 
@@ -1418,48 +1418,48 @@ static void narf_move(NAF dst, NAF src, NarfSector length, NarfByteSize bytes) {
 
    // move into our new home
    read_buffer(src);
-   og_start = node->start;
-   og_length = node->length;
-   start = node->start = dst + 1;
-   node->length = length;
-   node->bytes = bytes;
-   prev = node->prev;
-   next = node->next;
-   parent = node->parent;
-   left = node->left;
-   right = node->right;
+   og_start = node->m_start;
+   og_length = node->m_length;
+   start = node->m_start = dst + 1;
+   node->m_length = length;
+   node->m_bytes = bytes;
+   prev = node->m_prev;
+   next = node->m_next;
+   parent = node->m_parent;
+   left = node->m_left;
+   right = node->m_right;
    write_buffer(dst);
 
    // fix up prev
    if (prev != END) {
       read_buffer(prev);
-      node->next = dst;
+      node->m_next = dst;
       write_buffer(prev);
    }
    else {
-      root.first = dst;
+      root.m_first = dst;
       narf_sync();
    }
 
    // fix up next
    if (next != END) {
       read_buffer(next);
-      node->prev = dst;
+      node->m_prev = dst;
       write_buffer(next);
    }
    else {
-      root.last = dst;
+      root.m_last = dst;
       narf_sync();
    }
 
    // fix up parent
    if (parent != END) {
       read_buffer(parent);
-      if (node->left == src) {
-         node->left = dst;
+      if (node->m_left == src) {
+         node->m_left = dst;
       }
-      else if (node->right == src) {
-         node->right = dst;
+      else if (node->m_right == src) {
+         node->m_right = dst;
       }
       else {
          // this should never happen
@@ -1468,21 +1468,21 @@ static void narf_move(NAF dst, NAF src, NarfSector length, NarfByteSize bytes) {
       write_buffer(parent);
    }
    else {
-      root.root = dst;
+      root.m_root = dst;
       narf_sync();
    }
 
    // fix up left
    if (left != END) {
       read_buffer(left);
-      node->parent = dst;
+      node->m_parent = dst;
       write_buffer(left);
    }
 
    // fix up right
    if (right != END) {
       read_buffer(right);
-      node->parent = dst;
+      node->m_parent = dst;
       write_buffer(right);
    }
 
@@ -1518,23 +1518,23 @@ NAF narf_realloc(const char *key, NarfByteSize bytes) {
 
    read_buffer(naf);
    length = (bytes + NARF_SECTOR_SIZE - 1) / NARF_SECTOR_SIZE;
-   og_length = node->length;
+   og_length = node->m_length;
 
    // do we need to change at all?
    if (og_length == length) {
-      node->bytes = bytes;
+      node->m_bytes = bytes;
       write_buffer(naf);
       return naf;
    }
 
-   if (bytes < node->bytes) {
+   if (bytes < node->m_bytes) {
       // we need to shrink
-      node->bytes = bytes;
-      node->length = length;
+      node->m_bytes = bytes;
+      node->m_length = length;
       write_buffer(naf);
 
-      node->length = og_length - length - 1;
-      node->start = naf + length + 2;
+      node->m_length = og_length - length - 1;
+      node->m_start = naf + length + 2;
       write_buffer(naf + length + 1);
       narf_chain(naf + length + 1);
 
@@ -1563,13 +1563,13 @@ NAF narf_realloc(const char *key, NarfByteSize bytes) {
 
       // all options exhausted, move into vacant
 
-      if (root.vacant + length + 1 > root.total_sectors) {
+      if (root.m_vacant + length + 1 > root.m_total_sectors) {
          // NO ROOM!!!
          return END;
       }
 
-      tmp = root.vacant;
-      root.vacant += length + 1;
+      tmp = root.m_vacant;
+      root.m_vacant += length + 1;
       narf_sync();
       narf_move(tmp, naf, length, bytes);
 
@@ -1596,17 +1596,17 @@ NAF narf_realloc(const char *key, NarfByteSize bytes) {
 static void skip_naf(NAF parent, NAF naf, NAF child) {
    if (child != END) {
       read_buffer(child);
-      node->parent = parent;
+      node->m_parent = parent;
       write_buffer(child);
    }
 
    if (parent != END) {
       read_buffer(parent);
-      if (node->left == naf) {
-         node->left = child;
+      if (node->m_left == naf) {
+         node->m_left = child;
       }
-      else if (node->right == naf) {
-         node->right = child;
+      else if (node->m_right == naf) {
+         node->m_right = child;
       }
       else {
          // this should never happen
@@ -1615,7 +1615,7 @@ static void skip_naf(NAF parent, NAF naf, NAF child) {
       write_buffer(parent);
    }
    else {
-      root.root = child;
+      root.m_root = child;
       narf_sync();
    }
 
@@ -1646,33 +1646,33 @@ bool narf_free(const char *key) {
 
    // unlink from list
    read_buffer(naf);
-   prev = node->prev;
-   next = node->next;
+   prev = node->m_prev;
+   next = node->m_next;
 #ifdef NARF_SMART_FREE
-   left = node->left;
-   right = node->right;
+   left = node->m_left;
+   right = node->m_right;
 #endif // !NARF_SMART_FREE
-   node->prev = END;
-   node->next = END;
+   node->m_prev = END;
+   node->m_next = END;
    write_buffer(naf);
 
    if (next != END) {
       read_buffer(next);
-      node->prev = prev;
+      node->m_prev = prev;
       write_buffer(next);
    }
    else {
-      root.last = prev;
+      root.m_last = prev;
       narf_sync();
    }
 
    if (prev != END) {
       read_buffer(prev);
-      node->next = next;
+      node->m_next = next;
       write_buffer(prev);
    }
    else {
-      root.first = next;
+      root.m_first = next;
       narf_sync();
    }
 
@@ -1680,9 +1680,9 @@ bool narf_free(const char *key) {
    // remove from tree
 
    read_buffer(naf);
-   left = node->left;
-   right = node->right;
-   prev = node->parent; // note reuse of variable
+   left = node->m_left;
+   right = node->m_right;
+   prev = node->m_parent; // note reuse of variable
 
    while (left != END && right != END) {
       // wobble down the chain until we have a free sibling
@@ -1693,53 +1693,53 @@ bool narf_free(const char *key) {
          // well this is awkward!
          // pick random direction...
          if (naf & 1) {
-            node->right = naf;
+            node->m_right = naf;
          }
          else {
-            node->left = naf;
+            node->m_left = naf;
          }
       }
 
-      if (node->left == naf) {
+      if (node->m_left == naf) {
          if (prev != END) {
-            node->left = left;
+            node->m_left = left;
             write_buffer(prev);
          }
          else {
-            root.root = left;
+            root.m_root = left;
             narf_sync();
          }
 
          read_buffer(left);
-         beta = node->right;
-         node->right = naf;
-         node->parent = prev;
+         beta = node->m_right;
+         node->m_right = naf;
+         node->m_parent = prev;
          write_buffer(left);
 
          read_buffer(naf);
-         prev = node->parent = left;
-         left = node->left = beta;
+         prev = node->m_parent = left;
+         left = node->m_left = beta;
          write_buffer(naf);
       }
-      else if (node->right == naf) {
+      else if (node->m_right == naf) {
          if (prev != END) {
-            node->right = right;
+            node->m_right = right;
             write_buffer(prev);
          }
          else {
-            root.root = right;
+            root.m_root = right;
             narf_sync();
          }
 
          read_buffer(right);
-         beta = node->left;
-         node->left = naf;
-         node->parent = prev;
+         beta = node->m_left;
+         node->m_left = naf;
+         node->m_parent = prev;
          write_buffer(right);
 
          read_buffer(naf);
-         prev = node->parent = right;
-         right = node->right = beta;
+         prev = node->m_parent = right;
+         right = node->m_right = beta;
          write_buffer(naf);
       }
       else {
@@ -1748,9 +1748,9 @@ bool narf_free(const char *key) {
       }
 
       read_buffer(naf);
-      left = node->left;
-      right = node->right;
-      prev = node->parent; // note reuse of variable
+      left = node->m_left;
+      right = node->m_right;
+      prev = node->m_parent; // note reuse of variable
    }
 
    if (left != END && right == END) {
@@ -1763,14 +1763,14 @@ bool narf_free(const char *key) {
       skip_naf(prev, naf, END);
    }
 
-   --root.count;
+   --root.m_count;
    narf_sync();
 
    // add to the free chain
    narf_chain(naf);
 
 #else
-   --root.count;
+   --root.m_count;
    narf_sync();
    narf_rebalance();
    narf_chain(naf);
@@ -1781,10 +1781,10 @@ bool narf_free(const char *key) {
 
 //! @see narf.h
 bool narf_rebalance(void) {
-   static char key[sizeof(((Node *) 0)->key)]; // TODO/FIX EXPENSIVE !!!
-   NAF head = root.first;
+   static char key[sizeof(((Node *) 0)->m_key)]; // TODO/FIX EXPENSIVE !!!
+   NAF head = root.m_first;
 
-   NAF naf = root.first;
+   NAF naf = root.m_first;
    NarfSector count = 0;
    NarfSector target = 0;
    NarfSector spot = 0;
@@ -1800,12 +1800,12 @@ bool narf_rebalance(void) {
    while (naf != END) {
       ++count;
       read_buffer(naf);
-      naf = node->next;
+      naf = node->m_next;
    }
 
-   root.root = END;
-   root.first = END;
-   root.last = END;
+   root.m_root = END;
+   root.m_first = END;
+   root.m_last = END;
    narf_sync();
 
    while (denominator < count) {
@@ -1818,31 +1818,31 @@ bool narf_rebalance(void) {
       while (numerator < denominator && naf != END) {
          read_buffer(naf);
          while (naf != END) {
-            next = node->next;
+            next = node->m_next;
             if (spot == target) {
-               prev = node->prev;
+               prev = node->m_prev;
 
                if (head == naf) {
                   head = next;
                }
                if (prev != END) {
                   read_buffer(prev);
-                  node->next = next;
+                  node->m_next = next;
                   write_buffer(prev);
                }
                if (next != END) {
                   read_buffer(next);
-                  node->prev = prev;
+                  node->m_prev = prev;
                   write_buffer(next);
                }
 
                read_buffer(naf);
-               node->prev = END;
-               node->next = END;
-               node->left = END;
-               node->right = END;
-               node->parent = END;
-               strncpy(key, node->key, sizeof(node->key));
+               node->m_prev = END;
+               node->m_next = END;
+               node->m_left = END;
+               node->m_right = END;
+               node->m_parent = END;
+               strncpy(key, node->m_key, sizeof(node->m_key));
                write_buffer(naf);
 
                narf_insert(naf, key);
@@ -1866,13 +1866,13 @@ bool narf_rebalance(void) {
    naf = head;
    while (naf != END) {
       read_buffer(naf);
-      next = node->next;
-      node->prev = END;
-      node->next = END;
-      node->left = END;
-      node->right = END;
-      node->parent = END;
-      strncpy(key, node->key, sizeof(node->key));
+      next = node->m_next;
+      node->m_prev = END;
+      node->m_next = END;
+      node->m_left = END;
+      node->m_right = END;
+      node->m_parent = END;
+      strncpy(key, node->m_key, sizeof(node->m_key));
       write_buffer(naf);
 
       narf_insert(naf, key);
@@ -1900,22 +1900,22 @@ bool narf_defrag(void) {
    NarfSector other_length;
    NarfSector i;
 
-   while (root.chain != END) {
-      tmp = root.chain;
+   while (root.m_chain != END) {
+      tmp = root.m_chain;
       read_buffer(tmp);
-      root.chain = node->next;
-      tmp_length = node->length;
+      root.m_chain = node->m_next;
+      tmp_length = node->m_length;
       narf_sync();
 
       other = tmp + tmp_length + 1;
       read_buffer(other);
-      other_length = node->length;
-      parent = node->parent;
-      left = node->left;
-      right = node->right;
-      prev = node->prev;
-      next = node->next;
-      node->start = tmp + 1;
+      other_length = node->m_length;
+      parent = node->m_parent;
+      left = node->m_left;
+      right = node->m_right;
+      prev = node->m_prev;
+      next = node->m_next;
+      node->m_start = tmp + 1;
       write_buffer(tmp);
 
       for (i = 0; i < other_length; ++i) {
@@ -1925,11 +1925,11 @@ bool narf_defrag(void) {
 
       if (parent != END) {
          read_buffer(parent);
-         if (node->left == other) {
-            node->left = tmp;
+         if (node->m_left == other) {
+            node->m_left = tmp;
          }
-         else if (node->right == other) {
-            node->right = tmp;
+         else if (node->m_right == other) {
+            node->m_right = tmp;
          }
          else {
             // this should never happen
@@ -1938,47 +1938,47 @@ bool narf_defrag(void) {
          write_buffer(parent);
       }
       else {
-         root.root = tmp;
+         root.m_root = tmp;
          narf_sync();
       }
 
       if (left != END) {
          read_buffer(left);
-         node->parent = tmp;
+         node->m_parent = tmp;
          write_buffer(left);
       }
 
       if (right != END) {
          read_buffer(right);
-         node->parent = tmp;
+         node->m_parent = tmp;
          write_buffer(right);
       }
 
       if (prev != END) {
          read_buffer(prev);
-         node->next = tmp;
+         node->m_next = tmp;
          write_buffer(prev);
       }
       else {
-         root.first = tmp;
+         root.m_first = tmp;
          narf_sync();
       }
 
       if (next != END) {
          read_buffer(next);
-         node->prev = tmp;
+         node->m_prev = tmp;
          write_buffer(next);
       }
       else {
-         root.last = tmp;
+         root.m_last = tmp;
          narf_sync();
       }
 
       other = tmp + other_length + 1;
 
       read_buffer(other);
-      node->start = other + 1;
-      node->length = tmp_length;
+      node->m_start = other + 1;
+      node->m_length = tmp_length;
       write_buffer(other);
 
       narf_chain(other);
@@ -1995,61 +1995,61 @@ bool narf_defrag(void) {
 const char *narf_key(NAF naf) {
    if (!verify() || naf == END) return NULL;
    read_buffer(naf);
-   return node->key;
+   return node->m_key;
 }
 
 //! @see narf.h
 NarfSector narf_sector(NAF naf) {
    if (!verify() || naf == END) return END;
    read_buffer(naf);
-   return node->start;
+   return node->m_start;
 }
 
 //! @see narf.h
 NarfByteSize narf_size(NAF naf) {
    if (!verify() || naf == END) return 0;
    read_buffer(naf);
-   return node->bytes;
+   return node->m_bytes;
 }
 
 //! @see narf.h
 NAF narf_first(void) {
    if (!verify()) return END;
-   return root.first;
+   return root.m_first;
 }
 
 //! @see narf.h
 NAF narf_next(NAF naf) {
    if (!verify() || naf == END) return END;
    read_buffer(naf);
-   return node->next;
+   return node->m_next;
 }
 
 //! @see narf.h
 NAF narf_last(void) {
    if (!verify()) return END;
-   return root.last;
+   return root.m_last;
 }
 
 //! @see narf.h
 NAF narf_previous(NAF naf) {
    if (!verify() || naf == END) return END;
    read_buffer(naf);
-   return node->prev;
+   return node->m_prev;
 }
 
 //! @see narf.h
 void *narf_metadata(NAF naf) {
    if (!verify() || naf == END) return NULL;
    read_buffer(naf);
-   return node->metadata;
+   return node->m_metadata;
 }
 
 //! @see narf.h
 bool narf_set_metadata(NAF naf, void *data) {
    if (!verify() || naf == END) return false;
    read_buffer(naf);
-   memcpy(node->metadata, data, sizeof(node->metadata));
+   memcpy(node->m_metadata, data, sizeof(node->m_metadata));
    write_buffer(naf);
    return true;
 }
@@ -2068,7 +2068,7 @@ bool narf_append(const char *key, const void *data, NarfByteSize size) {
    }
 
    read_buffer(naf);
-   og_bytes = node->bytes;
+   og_bytes = node->m_bytes;
  
    naf = narf_realloc(key, og_bytes + size);
 
@@ -2077,7 +2077,7 @@ bool narf_append(const char *key, const void *data, NarfByteSize size) {
    }
 
    read_buffer(naf);
-   start = node->start;
+   start = node->m_start;
 
    begin = og_bytes % NARF_SECTOR_SIZE;
    current = og_bytes / NARF_SECTOR_SIZE;
