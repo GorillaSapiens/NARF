@@ -36,6 +36,12 @@
 // This is faster, but takes up more code space
 #define NARF_SMART_FREE
 
+// Uncomment this for narf_rebalance() to use malloc memory
+// for temporary key storage.  Leave it commented to use
+// function static storage.  It is generally too large to
+// store on the stack on small systems.
+#define MALLOC_REBALANCE
+
 // Uncomment this for utf-8 code point based key comparison
 //
 // you probably don't need this.  i can't think of any reason

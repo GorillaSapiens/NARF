@@ -101,6 +101,8 @@ typedef struct PACKED {
 } Node;
 static_assert(sizeof(Node) == NARF_SECTOR_SIZE, "Node wrong size");
 
+#define KEYSIZE (sizeof(((Node *) 0)->m_key))
+
 static uint8_t buffer[NARF_SECTOR_SIZE] = { 0 };
 static Root root = { 0 };
 static Node *node = (Node *) buffer;
@@ -526,7 +528,7 @@ static void narf_pt(NAF naf, int indent, uint32_t pattern) {
 static void print_node(NAF naf) {
    read_buffer(naf);
    printf("naf = %d => '%.*s'\n",
-         naf, (int) sizeof(node->m_key), node->m_key);
+         naf, (int) KEYSIZE, node->m_key);
    printf("tree u/l/r  = %d / %d / %d\n",
          node->m_parent, node->m_left, node->m_right);
    printf("list p/n    = %d / %d\n",
@@ -998,7 +1000,7 @@ static bool narf_insert(NAF naf, const char *key) {
       p = root.m_root;
       while (1) {
          read_buffer(p);
-         cmp = strncmp(key, node->m_key, sizeof(node->m_key));
+         cmp = strncmp(key, node->m_key, KEYSIZE);
          if (cmp < 0) {
             if (node->m_left != END) {
                p = node->m_left;
@@ -1099,7 +1101,7 @@ bool narf_mkfs(NarfSector start, NarfSector size) {
    write_buffer(start);
 
 #ifdef NARF_DEBUG
-   printf("keysize %ld\n", sizeof(node->m_key));
+   printf("keysize %ld\n", KEYSIZE);
 #endif
 
    return true;
@@ -1113,7 +1115,7 @@ bool narf_init(NarfSector start) {
    memcpy(&root, buffer, sizeof(root));
 
 #ifdef NARF_DEBUG
-   printf("keysize %ld\n", sizeof(node->m_key));
+   printf("keysize %ld\n", KEYSIZE);
 #endif
 
    return verify();
@@ -1139,7 +1141,7 @@ NAF narf_find(const char *key) {
          return naf;
       }
       read_buffer(naf);
-      cmp = strncmp(key, node->m_key, sizeof(node->m_key));
+      cmp = strncmp(key, node->m_key, KEYSIZE);
       if (cmp < 0) {
          naf = node->m_left;
       }
@@ -1166,7 +1168,7 @@ NAF narf_dirfirst(const char *dirname, const char *sep) {
 
    while(1) {
       read_buffer(naf);
-      cmp = strncmp(dirname, node->m_key, sizeof(node->m_key));
+      cmp = strncmp(dirname, node->m_key, KEYSIZE);
       if (cmp < 0) {
          if (node->m_left != END) {
             naf = node->m_left;
@@ -1379,7 +1381,7 @@ NAF narf_alloc(const char *key, NarfByteSize bytes) {
    node->m_next    = END;
    node->m_bytes  = bytes;
    memset(node->m_metadata, 0, sizeof(node->m_metadata));
-   strncpy(node->m_key, key, sizeof(node->m_key));
+   strncpy(node->m_key, key, KEYSIZE);
    write_buffer(naf);
 
 #ifdef NARF_DEBUG_INTEGRITY
@@ -1785,7 +1787,11 @@ bool narf_free(const char *key) {
 
 //! @see narf.h
 bool narf_rebalance(void) {
-   static char key[sizeof(((Node *) 0)->m_key)]; // TODO/FIX EXPENSIVE !!!
+#ifdef MALLOC_REBALANCE
+   char *key;
+#else
+   static char key[KEYSIZE]; // TODO/FIX EXPENSIVE !!!
+#endif
    NAF head = root.m_first;
 
    NAF naf = root.m_first;
@@ -1799,7 +1805,13 @@ bool narf_rebalance(void) {
    NAF prev;
    NAF next;
 
-   if (!verify()) return false;
+   if (!verify()) {
+      return false;
+   }
+
+#ifdef MALLOC_REBALANCE
+   key = malloc(KEYSIZE);
+#endif
 
    while (naf != END) {
       ++count;
@@ -1846,7 +1858,7 @@ bool narf_rebalance(void) {
                node->m_left = END;
                node->m_right = END;
                node->m_parent = END;
-               strncpy(key, node->m_key, sizeof(node->m_key));
+               strncpy(key, node->m_key, KEYSIZE);
                write_buffer(naf);
 
                narf_insert(naf, key);
@@ -1876,13 +1888,17 @@ bool narf_rebalance(void) {
       node->m_left = END;
       node->m_right = END;
       node->m_parent = END;
-      strncpy(key, node->m_key, sizeof(node->m_key));
+      strncpy(key, node->m_key, KEYSIZE);
       write_buffer(naf);
 
       narf_insert(naf, key);
 
       naf = next;
    }
+
+#ifdef MALLOC_REBALANCE
+   free(key);
+#endif
 
 #ifdef NARF_DEBUG_INTEGRITY
    verify_integrity();
