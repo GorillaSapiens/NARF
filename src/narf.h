@@ -382,7 +382,7 @@ bool narf_append(const char *key, const void *data, NarfByteSize size);
 
 #ifdef NARF_DEBUG
 //! @brief Print some debug info
-void narf_debug(void);
+void narf_debug(NAF naf);
 #endif
 
 #endif

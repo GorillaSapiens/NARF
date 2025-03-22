@@ -563,9 +563,7 @@ static void print_chain(void) {
 }
 
 //! @see narf.h
-void narf_debug(void) {
-   NAF naf;
-
+void narf_debug(NAF naf) {
    printf("root.m_signature     = %08x '%4s'\n", root.m_signature, root.m_sigbytes);
    if (root.m_signature != SIGNATURE) {
       printf("bad signature\n");
@@ -599,23 +597,31 @@ void narf_debug(void) {
    printf("root.m_start         = %d\n", root.m_start);
    printf("\n");
 
-   naf = root.m_first;
-   while (naf != END) {
+   if (naf != END) {
       print_node(naf);
       printf("\n");
+   }
+   else {
+      naf = root.m_first;
+      while (naf != END) {
+         print_node(naf);
+         printf("\n");
 
-      naf = node->m_next;
+         naf = node->m_next;
+      }
    }
 
    print_chain();
    printf("\n");
 
-   if (root.m_root == END) {
-      printf("tree is empty\n");
-   }
-   else {
-      printf("tree:\n");
-      narf_pt(root.m_root, 0, 0);
+   if (naf == END) {
+      if (root.m_root == END) {
+         printf("tree is empty\n");
+      }
+      else {
+         printf("tree:\n");
+         narf_pt(root.m_root, 0, 0);
+      }
    }
 }
 #endif

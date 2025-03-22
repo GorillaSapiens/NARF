@@ -56,7 +56,6 @@ void do_pack_dive(const char *realpath, const char *path, DIR *dir) {
 
 void do_pack(const char *dirname) {
    DIR *dir = opendir(dirname);
-   narf_alloc("/", 0);
    do_pack_dive(dirname, "", dir);
    closedir(dir);
 }
@@ -115,8 +114,11 @@ void process_cmd(char *buffer) {
             tf[result ASSIGN narf_rebalance()]);
    }
 #ifdef NARF_DEBUG
+   else if (!strncmp(buffer, "debug ", 6)) {
+      narf_debug(atoi(buffer + 6));
+   }
    else if (!strncmp(buffer, "debug", 5)) {
-      narf_debug();
+      narf_debug(-1);
    }
 #endif
    else if (!strncmp(buffer, "sync", 4)) {
@@ -306,7 +308,7 @@ void gremlins(int s, int n) {
       printf("\n");
       process_cmd(buf);
       printf("\nAFTER:\n");
-      narf_debug();
+      narf_debug(-1);
       printf("\n");
    }
 
