@@ -40,7 +40,7 @@
 // for temporary key storage.  Leave it commented to use
 // function static storage.  It is generally too large to
 // store on the stack on small systems.
-#define MALLOC_REBALANCE
+#define NARF_MALLOC
 
 // Uncomment this for utf-8 code point based key comparison
 //

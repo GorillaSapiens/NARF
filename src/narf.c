@@ -2,8 +2,13 @@
 #include <stdbool.h>
 #include <string.h>
 
+#include "narf_conf.h"
 #include "narf.h"
 #include "narf_io.h"
+
+#ifdef NARF_MALLOC
+   #include <stdlib.h>
+#endif
 
 #ifdef NARF_DEBUG
    #include <assert.h>
@@ -20,9 +25,9 @@
 #endif
 
 #ifdef __GNUC__
-#define PACKED __attribute__((packed))
+   #define PACKED __attribute__((packed))
 #else
-#define PACKED
+   #define PACKED
 #endif
 
 #define SIGNATURE 0x4652414E // FRAN => NARF
@@ -1787,7 +1792,7 @@ bool narf_free(const char *key) {
 
 //! @see narf.h
 bool narf_rebalance(void) {
-#ifdef MALLOC_REBALANCE
+#ifdef NARF_MALLOC
    char *key;
 #else
    static char key[KEYSIZE]; // TODO/FIX EXPENSIVE !!!
@@ -1809,7 +1814,7 @@ bool narf_rebalance(void) {
       return false;
    }
 
-#ifdef MALLOC_REBALANCE
+#ifdef NARF_MALLOC
    key = malloc(KEYSIZE);
 #endif
 
@@ -1896,7 +1901,7 @@ bool narf_rebalance(void) {
       naf = next;
    }
 
-#ifdef MALLOC_REBALANCE
+#ifdef NARF_MALLOC
    free(key);
 #endif
 
