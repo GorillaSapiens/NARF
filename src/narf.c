@@ -2094,7 +2094,7 @@ bool narf_append(const char *key, const void *data, NarfByteSize size) {
 
    read_buffer(naf);
    og_bytes = node->m_bytes;
- 
+
    naf = narf_realloc(key, og_bytes + size);
 
    if (naf == END) {
