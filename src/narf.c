@@ -360,7 +360,7 @@ int narf_findpart(void) {
    int i;
    MBR *mbr;
 
-   if (!narf_io_open()) return false;
+   if (!narf_io_open()) return -1;
 
    mbr = (MBR *) buffer;
    read_buffer(0);
@@ -1139,7 +1139,7 @@ NAF narf_find(const char *key) {
    NAF naf = root.m_root;
    int cmp;
 
-   if (!verify()) return false;
+   if (!verify()) return END;
 
    while(1) {
       if (naf == END) {
@@ -1165,7 +1165,7 @@ NAF narf_dirfirst(const char *dirname, const char *sep) {
    NAF naf;
    int cmp;
 
-   if (!verify()) return false;
+   if (!verify()) return END;
 
    if (root.m_root == END) return END;
 
@@ -1210,7 +1210,7 @@ NAF narf_dirnext(const char *dirname, const char *sep, NAF naf) {
    uint32_t sep_len;
    char *p;
 
-   if (!verify()) return false;
+   if (!verify()) return END;
 
    if (naf != END) {
       read_buffer(naf);
@@ -1355,7 +1355,7 @@ NAF narf_alloc(const char *key, NarfByteSize bytes) {
    naf = narf_find(key);
 
    if (naf != END) {
-      return false;
+      return END;
    }
 
    // first check if we can allocate from the chain

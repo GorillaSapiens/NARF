@@ -57,7 +57,7 @@ void do_pack_dive(const char *realpath, const char *path, DIR *dir) {
 void do_pack(const char *dirname) {
    DIR *dir = opendir(dirname);
    narf_alloc("/", 0);
-   do_pack_dive(dirname, "/", dir);
+   do_pack_dive(dirname, "", dir);
    closedir(dir);
 }
 
