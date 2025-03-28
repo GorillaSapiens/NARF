@@ -6,12 +6,14 @@
 
 #include "narf_conf.h"
 
+///////////////////////////////////////////////////////
 //! @brief Type for NARF sectors
 //! @see narf_conf.h
 //!
 //! This is provided in the narf_conf.h file
 typedef NARF_SECTOR_ADDRESS_TYPE NarfSector;
 
+///////////////////////////////////////////////////////
 //! @brief Type for NARF entries
 //!
 //! A NAF is Not A File.  It is an entry containing
@@ -24,15 +26,18 @@ typedef NARF_SECTOR_ADDRESS_TYPE NarfSector;
 //! containing data.
 typedef NarfSector NAF;
 
+///////////////////////////////////////////////////////
 //! @brief Type for sizes in bytes
 typedef NARF_SIZE_TYPE NarfByteSize;
 
+///////////////////////////////////////////////////////
 //! @brief An invalid NAF
 //!
 //! This usually indicates an error.
 #define INVALID_NAF ((NAF) -1)
 
 #ifdef NARF_MBR_UTILS
+///////////////////////////////////////////////////////
 //! @brief Write a new blank MBR to the media
 //! @see narf_partition
 //! @see narf_format
@@ -47,6 +52,7 @@ typedef NARF_SIZE_TYPE NarfByteSize;
 //! @return true for success
 bool narf_mbr(const char *message);
 
+///////////////////////////////////////////////////////
 //! @brief Write a new partition table entry to the media
 //! @see narf_mbr
 //! @see narf_format
@@ -62,6 +68,7 @@ bool narf_mbr(const char *message);
 //! @return true for success
 bool narf_partition(int partition);
 
+///////////////////////////////////////////////////////
 //! @brief Format a partition with a new NARF
 //! @see narf_mbr
 //! @see narf_partition
@@ -75,6 +82,7 @@ bool narf_partition(int partition);
 //! table.
 bool narf_format(int partition);
 
+///////////////////////////////////////////////////////
 //! @brief Find a NARF partition
 //! @see narf_mbr
 //! @see narf_partition
@@ -85,6 +93,7 @@ bool narf_format(int partition);
 //! @return A number (1-4) of the partition containint NARF, or -1
 int narf_findpart(void);
 
+///////////////////////////////////////////////////////
 //! @brief Mount a NARF partition
 //! @see narf_mbr
 //! @see narf_partition
@@ -101,6 +110,7 @@ int narf_findpart(void);
 bool narf_mount(int partition);
 #endif
 
+///////////////////////////////////////////////////////
 //! @brief Create a new NARF
 //!
 //! This is for nonremovable media like flash memory.
@@ -122,6 +132,7 @@ bool narf_mount(int partition);
 //! @return true for success
 bool narf_mkfs(NarfSector start, NarfSector size);
 
+///////////////////////////////////////////////////////
 //! @brief Initialize an existing NARF
 //!
 //! This is for nonremovable media like flash memory.
@@ -140,6 +151,7 @@ bool narf_mkfs(NarfSector start, NarfSector size);
 //! @return true for success
 bool narf_init(NarfSector start);
 
+///////////////////////////////////////////////////////
 //! @brief Sync the NARF to disk
 //!
 //! Flushes any in memory informaion out to the device.
@@ -150,6 +162,7 @@ bool narf_init(NarfSector start);
 //! @return true for success
 bool narf_sync(void);
 
+///////////////////////////////////////////////////////
 //! @brief Find the NAF matching the key
 //! @see narf_key()
 //!
@@ -159,6 +172,7 @@ bool narf_sync(void);
 //! @return The NAF of the key, or INVAID_NAF if not found
 NAF narf_find(const char *key);
 
+///////////////////////////////////////////////////////
 //! @brief Get the first NAF in directory
 //! @see narf_dirnext()
 //!
@@ -178,6 +192,7 @@ NAF narf_find(const char *key);
 NAF narf_dirfirst(const char *dirname,
                   const char *sep);
 
+///////////////////////////////////////////////////////
 //! @brief Get the next NAF in directory
 //! @see narf_dirfirst()
 //!
@@ -199,6 +214,7 @@ NAF narf_dirnext(const char *dirname,
                  const char *sep,
                  NAF         naf);
 
+///////////////////////////////////////////////////////
 //! @brief Allocate storage for key
 //! @see narf_realloc()
 //! @see narf_free()
@@ -217,6 +233,7 @@ NAF narf_dirnext(const char *dirname,
 NAF narf_alloc(const char *key,
                NarfByteSize    bytes);
 
+///////////////////////////////////////////////////////
 //! @brief Grow or shrink storage for key
 //! @see narf_alloc()
 //! @see narf_free()
@@ -234,6 +251,7 @@ NAF narf_alloc(const char *key,
 NAF narf_realloc(const char *key,
                  NarfByteSize    bytes);
 
+///////////////////////////////////////////////////////
 //! @brief Free storage for key
 //! @see narf_alloc()
 //! @see narf_realloc()
@@ -248,6 +266,7 @@ NAF narf_realloc(const char *key,
 //! @return true for success
 bool narf_free(const char *key);
 
+///////////////////////////////////////////////////////
 //! @brief Rebalance the entire tree
 //! @see narf_alloc()
 //! @see narf_free()
@@ -261,6 +280,7 @@ bool narf_free(const char *key);
 //! @return true for success
 bool narf_rebalance(void);
 
+///////////////////////////////////////////////////////
 //! @brief Defragment and compact the NARF
 //! @see narf_free()
 //!
@@ -269,6 +289,7 @@ bool narf_rebalance(void);
 //! narf_free()
 bool narf_defrag(void);
 
+///////////////////////////////////////////////////////
 //! @brief Get the key corresponding to a NAF
 //! @see narf_find()
 //!
@@ -282,18 +303,21 @@ bool narf_defrag(void);
 //! @return the key for the NAF
 const char *narf_key(NAF naf);
 
+///////////////////////////////////////////////////////
 //! @brief Get the first data sector reserved for this NAF
 //!
 //! @param naf The NAF
 //! @return a sector number or -1
 NarfSector narf_sector(NAF naf);
 
+///////////////////////////////////////////////////////
 //! @brief Get the data size in bytes for this NAF
 //!
 //! @param naf The NAF
 //! @return the size in bytes
 NarfByteSize narf_size(NAF naf);
 
+///////////////////////////////////////////////////////
 //! @brief Get the first NAF in key order
 //! @see narf_next()
 //! @see narf_last()
@@ -305,6 +329,7 @@ NarfByteSize narf_size(NAF naf);
 //! @return the first NAF in key order
 NAF narf_first(void);
 
+///////////////////////////////////////////////////////
 //! @brief Get the next NAF in key order
 //! @see narf_first()
 //! @see narf_last()
@@ -317,6 +342,7 @@ NAF narf_first(void);
 //! @return the NAF after the current, in key order
 NAF narf_next(NAF naf);
 
+///////////////////////////////////////////////////////
 //! @brief Get the last NAF in key order
 //! @see narf_previous()
 //! @see narf_first()
@@ -328,6 +354,7 @@ NAF narf_next(NAF naf);
 //! @return the last NAF in key order
 NAF narf_last(void);
 
+///////////////////////////////////////////////////////
 //! @brief Get the previous NAF in key order
 //! @see narf_last()
 //! @see narf_last()
@@ -340,6 +367,7 @@ NAF narf_last(void);
 //! @return the NAF before the current, in key order
 NAF narf_previous(NAF naf);
 
+///////////////////////////////////////////////////////
 //! @brief Get metadata associated with NAF
 //! @see narf_set_metadata()
 //!
@@ -362,6 +390,7 @@ NAF narf_previous(NAF naf);
 //! @return A pointer to an array of 32 bytes
 void *narf_metadata(NAF naf);
 
+///////////////////////////////////////////////////////
 //! @brief Set metadata associated with NAF
 //! @see narf_metadata()
 //!
@@ -372,6 +401,7 @@ void *narf_metadata(NAF naf);
 //! @return true on success, false on failure
 bool narf_set_metadata(NAF naf, void *data);
 
+///////////////////////////////////////////////////////
 //! @brief Append data to a NAF
 //!
 //! @param key The key holding data to append to
@@ -381,6 +411,7 @@ bool narf_set_metadata(NAF naf, void *data);
 bool narf_append(const char *key, const void *data, NarfByteSize size);
 
 #ifdef NARF_DEBUG
+///////////////////////////////////////////////////////
 //! @brief Print some debug info
 void narf_debug(NAF naf);
 #endif

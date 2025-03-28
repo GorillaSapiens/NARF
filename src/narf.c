@@ -35,6 +35,7 @@
 
 #define END INVALID_NAF // i hate typing
 
+///////////////////////////////////////////////////////
 //! @brief Classic MBR Partition Entry (16 bytes)
 typedef struct PACKED {
    uint8_t  boot_indicator;       // 0x80 if bootable, 0x00 if not
@@ -51,6 +52,7 @@ typedef struct PACKED {
 static_assert(sizeof(MBRPartitionEntry) == 16, "MBRPartitionEntry wrong size");
 #define NARF_PART_TYPE 0x6E // lowercase 'n' (uppercase is taken)
 
+///////////////////////////////////////////////////////
 //! @brief Classic MBR sector (512 bytes)
 typedef struct PACKED {
    uint8_t boot_code[446];       // Boot code (446 bytes)
@@ -60,6 +62,7 @@ typedef struct PACKED {
 static_assert(sizeof(MBR) == 512, "MBRPartitionEntry wrong size");
 #define MBR_SIGNATURE 0xAA55
 
+///////////////////////////////////////////////////////
 //! @brief The Root structure for our Not A Real Filesystem
 //!
 //! it is kept in memory, and flushed out with narf_sync().
@@ -72,6 +75,7 @@ typedef struct PACKED {
    uint32_t m_version;       // VERSION
    NarfByteSize m_sector_size;   // sector size in bytes
    NarfSector   m_total_sectors; // total size of storage in sectors
+ 
    NAF m_root;               // sector of root node
    NAF m_first;              // sector of first node in key order
    NAF m_last;               // sector of last node in key order
@@ -85,6 +89,7 @@ static_assert(sizeof(Root) == 2 * sizeof(uint32_t) +
       4 * sizeof(NarfSector) +
       4 * sizeof(NAF), "Root wrong size");
 
+///////////////////////////////////////////////////////
 //! @brief A Node structure to hold NAF details
 typedef struct PACKED {
    NAF m_parent;      // parent NAF
@@ -112,6 +117,7 @@ static uint8_t buffer[NARF_SECTOR_SIZE] = { 0 };
 static Root root = { 0 };
 static Node *node = (Node *) buffer;
 
+///////////////////////////////////////////////////////
 //! @brief Read a NAF into our buffer
 //!
 //! @param naf The naf to read
@@ -120,6 +126,7 @@ static bool read_buffer(NAF naf) {
    return narf_io_read(naf, buffer);
 }
 
+///////////////////////////////////////////////////////
 //! @brief Write a NAF from buffer to disk
 //!
 //! @param naf The NAF to write
@@ -131,7 +138,8 @@ static bool write_buffer(NAF naf) {
    return narf_io_write(naf, buffer);
 }
 
-// @see write_buffer()
+///////////////////////////////////////////////////////
+//! @see write_buffer()
 static bool write_data(NAF naf) {
    return narf_io_write(naf, buffer);
 }
@@ -139,6 +147,7 @@ static bool write_data(NAF naf) {
 #ifdef UTF8_STRNCMP
 #define strncmp utf8_strncmp
 
+///////////////////////////////////////////////////////
 //! @brief Decode UTF-8
 //!
 //! Decode a UTF-8 sequence into a Unicode code point (handles incomplete
@@ -177,6 +186,7 @@ static int32_t utf8_decode_safe(const char **s, const char *end) {
    return codepoint;
 }
 
+///////////////////////////////////////////////////////
 //! @brief UTF-8 aware strncmp
 //!
 //! compares up to n bytes, ensuring character integrity
@@ -210,6 +220,7 @@ static int32_t utf8_strncmp(const char *s1, const char *s2, size_t n) {
 
 #ifdef NARF_MBR_UTILS
 
+///////////////////////////////////////////////////////
 // derived from bootloader.{asm|bin}
 static const uint8_t boot_code_stub[] = {
    0xeb, 0x00, 0xb8, 0xc0, 0x07, 0x8e, 0xd8, 0x8e,
@@ -220,6 +231,7 @@ static const uint8_t boot_code_stub[] = {
 static const char boot_code_msg[] =
    "NARF! not bootable.\r\n";
 
+///////////////////////////////////////////////////////
 //! @brief Write a new blank MBR to the media
 //! @see narf_partition
 //! @see narf_format
@@ -249,6 +261,7 @@ bool narf_mbr(const char *message) {
    return true;
 }
 
+///////////////////////////////////////////////////////
 //! @brief Write a new partition table entry to the media
 //! @see narf_mbr
 //! @see narf_format
@@ -309,6 +322,7 @@ bool narf_partition(int partition) {
    return true;
 }
 
+///////////////////////////////////////////////////////
 //! @brief Format a partition with a new NARF
 //! @see narf_mbr
 //! @see narf_partition
@@ -348,6 +362,7 @@ bool narf_format(int partition) {
          mbr->partitions[partition].partition_size);
 }
 
+///////////////////////////////////////////////////////
 //! @brief Find a NARF partition
 //! @see narf_mbr
 //! @see narf_partition
@@ -374,6 +389,7 @@ int narf_findpart(void) {
    return 0;
 }
 
+///////////////////////////////////////////////////////
 //! @brief Mount a NARF partition
 //! @see narf_mbr
 //! @see narf_partition
@@ -405,6 +421,7 @@ bool narf_mount(int partition) {
 }
 #endif
 
+///////////////////////////////////////////////////////
 //! @brief Get the ideal height for our tree.
 static int max_height(void) {
    NarfSector i = root.m_count;
@@ -418,6 +435,7 @@ static int max_height(void) {
    return ret;
 }
 
+///////////////////////////////////////////////////////
 //! @brief Verify we're working with a valid filesystem
 //!
 //! determines if init() or mkfs() was called and filesystem is valid
@@ -440,6 +458,7 @@ static bool verify(void) {
 #define NIL   "❌"
 #endif
 
+///////////////////////////////////////////////////////
 //! @brief Helper used to pretty print the NARF tree.
 //!
 //! @param naf The current NAF being printed
@@ -529,6 +548,7 @@ static void narf_pt(NAF naf, int indent, uint32_t pattern) {
    narf_pt(r, indent + 1, (pattern ^ (3 << (indent))) & ~1);
 }
 
+///////////////////////////////////////////////////////
 //! @see narf_debug
 static void print_node(NAF naf) {
    read_buffer(naf);
@@ -544,6 +564,7 @@ static void print_node(NAF naf) {
          (int) sizeof(node->m_metadata), node->m_metadata);
 }
 
+///////////////////////////////////////////////////////
 //! @see narf_debug()
 static void print_chain(void) {
    NAF naf;
@@ -562,6 +583,7 @@ static void print_chain(void) {
    }
 }
 
+///////////////////////////////////////////////////////
 //! @see narf.h
 void narf_debug(NAF naf) {
    printf("root.m_signature     = %08x '%4s'\n", root.m_signature, root.m_sigbytes);
@@ -627,6 +649,7 @@ void narf_debug(NAF naf) {
 #endif
 
 #ifdef NARF_DEBUG_INTEGRITY
+///////////////////////////////////////////////////////
 static void verify_not_on_tree(NAF parent, NAF naf) {
    NAF l;
    NAF r;
@@ -644,6 +667,7 @@ static void verify_not_on_tree(NAF parent, NAF naf) {
    verify_not_on_tree(r, naf);
 }
 
+///////////////////////////////////////////////////////
 static void verify_not_in_chain(NAF naf) {
    NAF tmp;
    tmp = root.m_chain;
@@ -654,6 +678,7 @@ static void verify_not_in_chain(NAF naf) {
    }
 }
 
+///////////////////////////////////////////////////////
 //! @brief if it's in the tree, it should not be in chain
 static void walk_tree(NAF parent, NAF naf) {
    NAF l;
@@ -686,6 +711,7 @@ static void walk_tree(NAF parent, NAF naf) {
    walk_tree(naf, r);
 }
 
+///////////////////////////////////////////////////////
 //! @brief if it's in the chain, it should not be in tree
 static void walk_chain(void) {
    NAF tmp;
@@ -699,6 +725,7 @@ static void walk_chain(void) {
    }
 }
 
+///////////////////////////////////////////////////////
 //! @brief detect a loop in the chain linked list
 static void chain_loop(void) {
    NAF a;
@@ -726,6 +753,7 @@ static void chain_loop(void) {
    }
 }
 
+///////////////////////////////////////////////////////
 //! @brief detect a loop in the ordered linked list
 static void order_loop(void) {
    NAF a;
@@ -750,6 +778,7 @@ static void order_loop(void) {
    }
 }
 
+///////////////////////////////////////////////////////
 //! @brief detect a loop in the reverse order linked list
 static void reverse_loop(void) {
    NAF a;
@@ -778,6 +807,7 @@ static void reverse_loop(void) {
    }
 }
 
+///////////////////////////////////////////////////////
 static void walk_order(void) {
    NAF prev;
    NAF next;
@@ -830,6 +860,7 @@ static void walk_order(void) {
    }
 }
 
+///////////////////////////////////////////////////////
 static void verify_integrity(void) {
    printf("verify integrity order_loop\n");
    order_loop();
@@ -847,6 +878,7 @@ static void verify_integrity(void) {
 }
 #endif
 
+///////////////////////////////////////////////////////
 //! @brief add a naf to the free chain
 //!
 //! @param naf The NAF to add
@@ -986,6 +1018,7 @@ again:
 #endif
 }
 
+///////////////////////////////////////////////////////
 //! @brief Insert NAF into the tree and list.
 //!
 //! Forces rebalance if tree is too tall.
@@ -1092,6 +1125,7 @@ static bool narf_insert(NAF naf, const char *key) {
    return true;
 }
 
+///////////////////////////////////////////////////////
 //! @see narf.h
 bool narf_mkfs(NarfSector start, NarfSector size) {
    if (!narf_io_open()) return false;
@@ -1118,6 +1152,7 @@ bool narf_mkfs(NarfSector start, NarfSector size) {
    return true;
 }
 
+///////////////////////////////////////////////////////
 //! @see narf.h
 bool narf_init(NarfSector start) {
    if (!narf_io_open()) return false;
@@ -1132,6 +1167,7 @@ bool narf_init(NarfSector start) {
    return verify();
 }
 
+///////////////////////////////////////////////////////
 //! @see narf.h
 bool narf_sync(void) {
    if (!verify()) return false;
@@ -1140,6 +1176,7 @@ bool narf_sync(void) {
    return write_buffer(root.m_start);
 }
 
+///////////////////////////////////////////////////////
 //! @see narf.h
 NAF narf_find(const char *key) {
    NAF naf = root.m_root;
@@ -1166,6 +1203,7 @@ NAF narf_find(const char *key) {
    // TODO FIX detect endless loops???
 }
 
+///////////////////////////////////////////////////////
 //! @see narf.h
 NAF narf_dirfirst(const char *dirname, const char *sep) {
    NAF naf;
@@ -1210,6 +1248,7 @@ NAF narf_dirfirst(const char *dirname, const char *sep) {
    return narf_dirnext(dirname, sep, naf);
 }
 
+///////////////////////////////////////////////////////
 //! @see narf.h
 NAF narf_dirnext(const char *dirname, const char *sep, NAF naf) {
    uint32_t dirname_len;
@@ -1262,6 +1301,7 @@ NAF narf_dirnext(const char *dirname, const char *sep, NAF naf) {
    return END;
 }
 
+///////////////////////////////////////////////////////
 //! @brief Trim a naf length down
 //! @see narf_alloc
 //! @see narf_realloc
@@ -1298,6 +1338,7 @@ static void trim_excess(NAF naf, NarfSector length) {
    narf_chain(extra);
 }
 
+///////////////////////////////////////////////////////
 static NAF narf_unchain(NarfSector length) {
    NAF prev;
    NAF next;
@@ -1349,6 +1390,7 @@ static NAF narf_unchain(NarfSector length) {
    return END;
 }
 
+///////////////////////////////////////////////////////
 //! @see narf.h
 NAF narf_alloc(const char *key, NarfByteSize bytes) {
    NAF naf;
@@ -1411,6 +1453,7 @@ NAF narf_alloc(const char *key, NarfByteSize bytes) {
    return naf;
 }
 
+///////////////////////////////////////////////////////
 //! @brief Move a NAF, copying all data
 //! @see narf_realloc
 //!
@@ -1513,6 +1556,7 @@ static void narf_move(NAF dst, NAF src, NarfSector length, NarfByteSize bytes) {
    narf_chain(src);
 }
 
+///////////////////////////////////////////////////////
 //! @see narf.h
 NAF narf_realloc(const char *key, NarfByteSize bytes) {
    NAF naf;
@@ -1602,6 +1646,7 @@ NAF narf_realloc(const char *key, NarfByteSize bytes) {
 }
 
 #ifdef NARF_SMART_FREE
+///////////////////////////////////////////////////////
 //! @brief A helper function used by narf_free()
 //! @see narf_free()
 //!
@@ -1642,6 +1687,7 @@ static void skip_naf(NAF parent, NAF naf, NAF child) {
 }
 #endif // NARF_SMART_FREE
 
+///////////////////////////////////////////////////////
 //! @see narf.h
 bool narf_free(const char *key) {
    NAF naf;
@@ -1796,6 +1842,7 @@ bool narf_free(const char *key) {
    return true;
 }
 
+///////////////////////////////////////////////////////
 //! @see narf.h
 bool narf_rebalance(void) {
 #ifdef NARF_MALLOC
@@ -1918,6 +1965,7 @@ bool narf_rebalance(void) {
    return true;
 }
 
+///////////////////////////////////////////////////////
 //! @see narf.h
 bool narf_defrag(void) {
    NAF tmp;
@@ -2022,6 +2070,7 @@ bool narf_defrag(void) {
    return true;
 }
 
+///////////////////////////////////////////////////////
 //! @see narf.h
 const char *narf_key(NAF naf) {
    if (!verify() || naf == END) return NULL;
@@ -2029,6 +2078,7 @@ const char *narf_key(NAF naf) {
    return node->m_key;
 }
 
+///////////////////////////////////////////////////////
 //! @see narf.h
 NarfSector narf_sector(NAF naf) {
    if (!verify() || naf == END) return END;
@@ -2036,6 +2086,7 @@ NarfSector narf_sector(NAF naf) {
    return node->m_start;
 }
 
+///////////////////////////////////////////////////////
 //! @see narf.h
 NarfByteSize narf_size(NAF naf) {
    if (!verify() || naf == END) return 0;
@@ -2043,12 +2094,14 @@ NarfByteSize narf_size(NAF naf) {
    return node->m_bytes;
 }
 
+///////////////////////////////////////////////////////
 //! @see narf.h
 NAF narf_first(void) {
    if (!verify()) return END;
    return root.m_first;
 }
 
+///////////////////////////////////////////////////////
 //! @see narf.h
 NAF narf_next(NAF naf) {
    if (!verify() || naf == END) return END;
@@ -2056,12 +2109,14 @@ NAF narf_next(NAF naf) {
    return node->m_next;
 }
 
+///////////////////////////////////////////////////////
 //! @see narf.h
 NAF narf_last(void) {
    if (!verify()) return END;
    return root.m_last;
 }
 
+///////////////////////////////////////////////////////
 //! @see narf.h
 NAF narf_previous(NAF naf) {
    if (!verify() || naf == END) return END;
@@ -2069,6 +2124,7 @@ NAF narf_previous(NAF naf) {
    return node->m_prev;
 }
 
+///////////////////////////////////////////////////////
 //! @see narf.h
 void *narf_metadata(NAF naf) {
    if (!verify() || naf == END) return NULL;
@@ -2076,6 +2132,7 @@ void *narf_metadata(NAF naf) {
    return node->m_metadata;
 }
 
+///////////////////////////////////////////////////////
 //! @see narf.h
 bool narf_set_metadata(NAF naf, void *data) {
    if (!verify() || naf == END) return false;
@@ -2085,6 +2142,7 @@ bool narf_set_metadata(NAF naf, void *data) {
    return true;
 }
 
+///////////////////////////////////////////////////////
 //! @see narf.h
 bool narf_append(const char *key, const void *data, NarfByteSize size) {
    NarfByteSize og_bytes;
