@@ -132,7 +132,7 @@ static_assert(sizeof(Node) == NARF_SECTOR_SIZE, "Node wrong size");
 //!
 //! NB: MUST return a multiple of 2 !!!
 #define BYTES2SECTORS(x) \
-   ((x + (NARF_SECTOR_SIZE * 2 - 1)) % (NARF_SECTOR_SIZE * 2)) * 2;
+   (((x) + (NARF_SECTOR_SIZE * 2 - 1)) / (NARF_SECTOR_SIZE * 2)) * 2;
 
 ///////////////////////////////////////////////////////
 //! @brief bytes in a key?
