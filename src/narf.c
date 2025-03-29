@@ -1948,13 +1948,9 @@ static void skip_naf(NAF parent, NAF naf, NAF child) {
 //! @see narf.h
 bool narf_free(const char *key) {
    NAF naf;
-   NAF prev;
-   NAF next;
-#ifdef NARF_SMART_FREE
-   NAF left;
-   NAF right;
-   NAF beta;
-#endif // NARF_SMART_FREE
+   NAF parent, child, left, right;
+   NAF prev, next;
+   NAF repl;
 
    if (!verify()) return false;
 
@@ -1964,14 +1960,111 @@ bool narf_free(const char *key) {
       return false;
    }
 
+   narf_begin();
+
+   // unlink from tree
+   read_buffer(naf);
+   parent = node->m_parent;
+   left   = node->m_left;
+   right  = node->m_right;
+   prev   = node->m_prev;
+   next   = node->m_next;
+
+   if (left != END && right != END) {
+      // two children
+
+      // excise the prev from the tree
+
+      repl = prev;
+      read_buffer(repl);
+      parent = node->m_parent;
+      child = node->m_left;
+
+      if (child != END) {
+         read_buffer(child);
+         node->m_parent = parent;
+         write_buffer(child);
+      }
+
+      read_buffer(parent);
+      if (node->m_left == repl) {
+         node->m_left = child;
+      }
+      else if (node->m_right == repl) {
+         node->m_right = child;
+      }
+      else {
+         assert(0);
+      }
+      write_buffer(parent);
+
+      // use repl to replace us
+
+      read_buffer(naf);
+      parent = node->m_parent;
+      left   = node->m_left;
+      right  = node->m_right;
+
+      read_buffer(repl);
+      node->m_left = left;
+      node->m_right = right;
+      node->m_parent = parent;
+      write_buffer(repl);
+
+      if (parent == END) {
+         root.m_root = repl;
+      }
+      else {
+         read_buffer(parent);
+         if (node->m_left == naf) {
+            node->m_left = repl;
+         }
+         else if (node->m_right == naf) {
+            node->m_right = repl;
+         }
+         else {
+            assert(0);
+         }
+         write_buffer(parent);
+      }
+
+      if (left != END) {
+         read_buffer(left);
+         node->m_parent = repl;
+         write_buffer(left);
+      }
+
+      if (right != END) {
+         read_buffer(right);
+         node->m_parent = repl;
+         write_buffer(right);
+      }
+   }
+   else {
+      // one or no children
+      child = (left == END) ? right : left;
+      if (parent == END) {
+         root.m_root = child;
+      }
+      else {
+         read_buffer(parent);
+         if (node->m_left == naf) {
+            node->m_left = child;
+         }
+         else if (node->m_right == naf) {
+            node->m_right = child;
+         }
+         else {
+            assert(0);
+         }
+         write_buffer(parent);
+      }
+   }
+
    // unlink from list
    read_buffer(naf);
    prev = node->m_prev;
    next = node->m_next;
-#ifdef NARF_SMART_FREE
-   left = node->m_left;
-   right = node->m_right;
-#endif // !NARF_SMART_FREE
    node->m_prev = END;
    node->m_next = END;
    write_buffer(naf);
@@ -1983,7 +2076,6 @@ bool narf_free(const char *key) {
    }
    else {
       root.m_last = prev;
-      narf_sync();
    }
 
    if (prev != END) {
@@ -1993,108 +2085,14 @@ bool narf_free(const char *key) {
    }
    else {
       root.m_first = next;
-      narf_sync();
    }
 
-#ifdef NARF_SMART_FREE
-   // remove from tree
-
-   read_buffer(naf);
-   left = node->m_left;
-   right = node->m_right;
-   prev = node->m_parent; // note reuse of variable
-
-   while (left != END && right != END) {
-      // wobble down the chain until we have a free sibling
-      if (prev != END) {
-         read_buffer(prev);
-      }
-      else {
-         // well this is awkward!
-         // pick random direction...
-         if (naf & 1) {
-            node->m_right = naf;
-         }
-         else {
-            node->m_left = naf;
-         }
-      }
-
-      if (node->m_left == naf) {
-         if (prev != END) {
-            node->m_left = left;
-            write_buffer(prev);
-         }
-         else {
-            root.m_root = left;
-            narf_sync();
-         }
-
-         read_buffer(left);
-         beta = node->m_right;
-         node->m_right = naf;
-         node->m_parent = prev;
-         write_buffer(left);
-
-         read_buffer(naf);
-         prev = node->m_parent = left;
-         left = node->m_left = beta;
-         write_buffer(naf);
-      }
-      else if (node->m_right == naf) {
-         if (prev != END) {
-            node->m_right = right;
-            write_buffer(prev);
-         }
-         else {
-            root.m_root = right;
-            narf_sync();
-         }
-
-         read_buffer(right);
-         beta = node->m_left;
-         node->m_left = naf;
-         node->m_parent = prev;
-         write_buffer(right);
-
-         read_buffer(naf);
-         prev = node->m_parent = right;
-         right = node->m_right = beta;
-         write_buffer(naf);
-      }
-      else {
-         // this should never happen
-         assert(0);
-      }
-
-      read_buffer(naf);
-      left = node->m_left;
-      right = node->m_right;
-      prev = node->m_parent; // note reuse of variable
-   }
-
-   if (left != END && right == END) {
-      skip_naf(prev, naf, left);
-   }
-   else if (left == END && right != END) {
-      skip_naf(prev, naf, right);
-   }
-   else if (left == END && right == END) {
-      skip_naf(prev, naf, END);
-   }
-
-   --root.m_count;
-   narf_sync();
-
-   // add to the free chain
    narf_chain(naf);
-
-#else
    --root.m_count;
-   narf_sync();
-   narf_rebalance();
-   narf_chain(naf);
-#endif // NARF_SMART_FREE
+
+   narf_end();
+
+   //narf_rebalance();
 
    return true;
 }

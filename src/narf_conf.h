@@ -32,10 +32,6 @@
 // Uncomment for unicode line drawing characters in debug functions
 #define USE_UTF8_LINE_DRAWING
 
-// Uncomment this for "smart" free implementation
-// This is faster, but takes up more code space
-#define NARF_SMART_FREE
-
 // Uncomment this for narf_rebalance() to use malloc memory
 // for temporary key storage.  Leave it commented to use
 // function static storage.  It is generally too large to
