@@ -192,8 +192,8 @@ static bool read_buffer(NAF naf) {
    node_lo->m_random = lrand48();
    node_hi->m_random = lrand48();
 
-   if (!narf_io_read(naf, buffer_lo)) return false;
-   if (!narf_io_read(naf + 1, buffer_hi)) return false;
+   if (!narf_io_read(root.m_start + naf, buffer_lo)) return false;
+   if (!narf_io_read(root.m_start + naf + 1, buffer_hi)) return false;
 
    ck_lo = crc32(buffer_lo, NARF_SECTOR_SIZE - sizeof(uint32_t));
    ck_hi = crc32(buffer_hi, NARF_SECTOR_SIZE - sizeof(uint32_t));
@@ -220,8 +220,11 @@ static bool read_buffer(NAF naf) {
                }
                else {
                   // they are the same.
+
                   // this should not happen.
+                  // hrm....
                   assert(0);
+
                   // random time.
                   if (lrand48() & 1) {
                      goto lo_is_good;
@@ -285,7 +288,7 @@ static bool write_buffer(NAF naf) {
    node->m_random = lrand48();
    node->m_checksum = crc32(node, NARF_SECTOR_SIZE - sizeof(uint32_t));
 
-   return narf_io_write(naf + (write_to_hi ? 1 : 0), buffer);
+   return narf_io_write(root.m_start + naf + (write_to_hi ? 1 : 0), buffer);
 }
 
 #define strncmp utf8_strncmp
@@ -1270,7 +1273,7 @@ bool narf_mkfs(NarfSector start, NarfSector size) {
    root.m_version       = VERSION;
    root.m_sector_size   = NARF_SECTOR_SIZE;
    root.m_total_sectors = size;
-   root.m_vacant        = start + 2;
+   root.m_vacant        = 2;
    root.m_root          = END;
    root.m_first         = END;
    root.m_last          = END;
@@ -1635,7 +1638,12 @@ NAF narf_alloc(const char *key, NarfByteSize bytes) {
    narf_begin();
 
    // first check if we can allocate from the chain
-   naf = narf_unchain(length);
+   if (length > 0) {
+      naf = narf_unchain(length);
+   }
+   else {
+      naf = END;
+   }
 
    if (naf == END) {
       // nothing on the chain was suitable
@@ -1657,7 +1665,7 @@ NAF narf_alloc(const char *key, NarfByteSize bytes) {
       narf_io_write(naf + 1, buffer_hi);
       
       root.m_vacant += 2;
-      node->m_start  = root.m_vacant;
+      node->m_start  = length ? root.m_vacant : END;
       node->m_length = length;
       root.m_vacant += length;
       write_buffer(naf);
@@ -2173,6 +2181,7 @@ bool narf_rebalance(void) {
 ///////////////////////////////////////////////////////
 //! @see narf.h
 bool narf_defrag(void) {
+#if 0
    NAF tmp;
    NAF other;
    NAF parent;
@@ -2261,7 +2270,15 @@ bool narf_defrag(void) {
       // we're building a new node from junk data,
       // and we're just going to chain it,
       // so there's no point in doing a read here.
-      // read_buffer(other);
+
+      // in fact, we need to destructively blank
+      // some stuff.
+
+      memset(buffer_lo, 0, NARF_SECTOR_SIZE);
+      memset(buffer_hi, 0, NARF_SECTOR_SIZE);
+      narf_io_write(other, buffer_lo);
+      narf_io_write(other + 1, buffer_hi);
+
       node->m_start = other + 2;
       node->m_length = tmp_length;
       write_buffer(other);
@@ -2274,7 +2291,7 @@ bool narf_defrag(void) {
 #ifdef NARF_DEBUG_INTEGRITY
    verify_integrity();
 #endif
-
+#endif
    return true;
 }
 

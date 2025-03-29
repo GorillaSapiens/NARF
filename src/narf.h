@@ -242,10 +242,8 @@ NAF narf_dirnext(const char *dirname,
 //!
 //! Create and allocate storage for a key.
 //!
-//! If the insertion depth of the internal binary
-//! tree exceeds 48, a rebalance is performed.
-//! (48 is 1.5 times the ideal height of a tree
-//! with 2^32 nodes)
+//! bytes may be zero, in which case a NAF is allocated
+//! with no data.
 //!
 //! narf_alloc() is power loss robust.
 //!
@@ -261,11 +259,13 @@ NAF narf_alloc(const char *key,
 //! @see narf_free()
 //! @see narf_rebalance()
 //!
-//! Grow or shrink the key's data allocation.  Like it's
-//! C stdlib namesake, it may move the NAF. If
-//! a NAF for the key does not exist, narf_alloc()
-//! is called to create one.  If bytes == 0,
-//! narf_free() is called and INVALID_NAF is returned.
+//! Grow or shrink the key's data allocation.
+//! Will NOT move the NAF.  If a NAF for the
+//! key does not exist, narf_alloc() is called
+//! to create one.
+//!
+//! realloc of 0 bytes does NOT remove the entry,
+//! it must still be removed with narf_free()
 //!
 //! narf_realloc() is power loss robust.
 //!
