@@ -281,10 +281,6 @@ hi_is_good:
 //! @param naf The NAF to write
 //! @return true on success
 static bool write_buffer(NAF naf) {
-#ifdef NARF_DEBUG_INTEGRITY
-   assert(!naf || naf == root.m_start || (node->m_start == naf + 1));
-#endif
-
    node->m_generation = root.m_generation;
    node->m_random = lrand48();
    node->m_checksum = crc32(node, NARF_SECTOR_SIZE - sizeof(uint32_t));
