@@ -121,12 +121,6 @@ void process_cmd(char *buffer) {
       narf_debug(-1);
    }
 #endif
-   else if (!strncmp(buffer, "sync", 4)) {
-      bool result;
-
-      printf("narf_sync()=%s\n",
-            tf[result ASSIGN narf_sync()]);
-   }
    else if (!strncmp(buffer, "alloc ", 6)) {
       char key[256];
       int size;
@@ -352,9 +346,6 @@ int main(int argc, char **argv) {
       printf("narf_io_sectors()=%08X\n", narf_io_sectors());
 
       loop();
-
-      // always sync() before closing the io layer
-      printf("narf_sync()=%d\n", result ASSIGN narf_sync());
 
       printf("narf_io_close()=%d\n", result ASSIGN narf_io_close());
    }

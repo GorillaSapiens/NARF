@@ -66,7 +66,7 @@ static_assert(sizeof(MBR) == 512, "MBRPartitionEntry wrong size");
 ///////////////////////////////////////////////////////
 //! @brief The Root structure for our Not A Real Filesystem
 //!
-//! it is kept in memory, and flushed out with narf_sync().
+//! it is kept in memory, and flushed out with narf_end().
 //! it is intentionally small.
 typedef struct PACKED {
    union {
@@ -1081,7 +1081,6 @@ again:
          // remove item from chain
          if (prev == END) {
             root.m_chain = next;
-            narf_sync();
          }
          else {
             read_buffer(prev);
@@ -1119,7 +1118,6 @@ again:
       printf("rewind to %d\n", naf);
 #endif
       root.m_vacant = naf;
-      narf_sync();
       return;
    }
 
@@ -1136,7 +1134,6 @@ again:
       write_buffer(naf);
 
       root.m_chain = naf;
-      narf_sync();
    }
    else {
       // smallest records first
@@ -1156,7 +1153,6 @@ again:
       }
       if (prev == END) {
          root.m_chain = naf;
-         narf_sync();
       }
       else {
          read_buffer(prev);
@@ -1224,7 +1220,6 @@ static bool narf_insert(NAF naf, const char *key) {
                }
                else {
                   root.m_first = naf;
-                  narf_sync();
                }
 
                break;
@@ -1255,7 +1250,6 @@ static bool narf_insert(NAF naf, const char *key) {
                }
                else {
                   root.m_last = naf;
-                  narf_sync();
                }
 
                break;
@@ -1421,13 +1415,6 @@ void narf_end(void) {
       write_root_to_hi = !write_root_to_hi;
       narf_io_write(root.m_start + (write_root_to_hi ? 0 : 1), &root);
    }
-}
-
-
-///////////////////////////////////////////////////////
-//! @see narf.h
-bool narf_sync(void) {
-   return true;
 }
 
 ///////////////////////////////////////////////////////
@@ -1617,7 +1604,6 @@ static NAF narf_unchain(NarfSector length) {
          // pull it out
          if (prev == END) {
             root.m_chain = next;
-            narf_sync();
          }
          else {
             read_buffer(prev);
@@ -1765,7 +1751,6 @@ static void narf_move(NAF dst, NAF src, NarfSector length, NarfByteSize bytes) {
    }
    else {
       root.m_first = dst;
-      narf_sync();
    }
 
    // fix up next
@@ -1776,7 +1761,6 @@ static void narf_move(NAF dst, NAF src, NarfSector length, NarfByteSize bytes) {
    }
    else {
       root.m_last = dst;
-      narf_sync();
    }
 
    // fix up parent
@@ -1796,7 +1780,6 @@ static void narf_move(NAF dst, NAF src, NarfSector length, NarfByteSize bytes) {
    }
    else {
       root.m_root = dst;
-      narf_sync();
    }
 
    // fix up left
@@ -1898,7 +1881,6 @@ NAF narf_realloc(const char *key, NarfByteSize bytes) {
 
       tmp = root.m_vacant;
       root.m_vacant += length + 1;
-      narf_sync();
       narf_move(tmp, naf, length, bytes);
 
 #ifdef NARF_DEBUG_INTEGRITY
@@ -1945,7 +1927,6 @@ static void skip_naf(NAF parent, NAF naf, NAF child) {
    }
    else {
       root.m_root = child;
-      narf_sync();
    }
 
 #ifdef NARF_DEBUG_INTEGRITY
@@ -2145,7 +2126,6 @@ bool narf_rebalance(void) {
    root.m_root = END;
    root.m_first = END;
    root.m_last = END;
-   narf_sync();
 
    while (denominator < count) {
       // odd multiples of denominator
@@ -2249,7 +2229,6 @@ bool narf_defrag(void) {
       read_buffer(tmp);
       root.m_chain = node->m_next;
       tmp_length = node->m_length;
-      narf_sync();
 
       other = tmp + tmp_length + 1;
       read_buffer(other);
@@ -2283,7 +2262,6 @@ bool narf_defrag(void) {
       }
       else {
          root.m_root = tmp;
-         narf_sync();
       }
 
       if (left != END) {
@@ -2305,7 +2283,6 @@ bool narf_defrag(void) {
       }
       else {
          root.m_first = tmp;
-         narf_sync();
       }
 
       if (next != END) {
@@ -2315,7 +2292,6 @@ bool narf_defrag(void) {
       }
       else {
          root.m_last = tmp;
-         narf_sync();
       }
 
       other = tmp + other_length + 1;

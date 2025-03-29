@@ -152,17 +152,6 @@ bool narf_mkfs(NarfSector start, NarfSector size);
 bool narf_init(NarfSector start);
 
 ///////////////////////////////////////////////////////
-//! @brief Sync the NARF to disk
-//!
-//! Flushes any in memory informaion out to the device.
-//!
-//! This MUST be called before narf_io_close() is
-//! called.
-//!
-//! @return true for success
-bool narf_sync(void);
-
-///////////////////////////////////////////////////////
 //! @brief Find the NAF matching the key
 //! @see narf_key()
 //!
