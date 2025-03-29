@@ -1068,8 +1068,8 @@ again:
       next = node->m_next;
 
       // are the two adjacent?
-      if ((naf == tmp + tmp_length + 1) ||
-            (naf + length + 1 == tmp)) {
+      if ((naf == tmp + tmp_length + 2) ||
+            (naf + length + 2 == tmp)) {
          // remove item from chain
          if (prev == END) {
             root.m_chain = next;
@@ -1087,13 +1087,13 @@ again:
          // combine the two
          if (tmp < naf) {
             read_buffer(tmp);
-            node->m_length += length + 1;
+            node->m_length += length + 2;
             write_buffer(tmp);
             naf = tmp;
          }
          else {
             read_buffer(naf);
-            node->m_length += tmp_length + 1;
+            node->m_length += tmp_length + 2;
             write_buffer(naf);
          }
          // reinsert
@@ -1105,7 +1105,7 @@ again:
    }
 
    // dumbest case, can we rewind root.m_vacant?
-   if (root.m_vacant == naf + length + 1) {
+   if (root.m_vacant == naf + length + 2) {
 #ifdef NARF_DEBUG_INTEGRITY
       printf("rewind to %d\n", naf);
 #endif
@@ -1558,8 +1558,8 @@ static void trim_excess(NAF naf, NarfSector length) {
    write_buffer(naf);
 
    read_buffer(extra);
-   node->m_start = extra + 1;
-   node->m_length = excess - 1;
+   node->m_start = extra + 2;
+   node->m_length = excess - 2;
    write_buffer(extra);
 
    narf_chain(extra);
@@ -1719,7 +1719,7 @@ static void narf_move(NAF dst, NAF src, NarfSector length, NarfByteSize bytes) {
    read_buffer(src);
    og_start = node->m_start;
    og_length = node->m_length;
-   start = node->m_start = dst + 1;
+   start = node->m_start = dst + 2;
    node->m_length = length;
    node->m_bytes = bytes;
    prev = node->m_prev;
@@ -1835,10 +1835,10 @@ NAF narf_realloc(const char *key, NarfByteSize bytes) {
       node->m_length = length;
       write_buffer(naf);
 
-      node->m_length = og_length - length - 1;
-      node->m_start = naf + length + 2;
-      write_buffer(naf + length + 1);
-      narf_chain(naf + length + 1);
+      node->m_length = og_length - length - 2;
+      node->m_start = naf + length + 4;
+      write_buffer(naf + length + 2);
+      narf_chain(naf + length + 2);
 
       narf_end();
 
@@ -1868,14 +1868,14 @@ NAF narf_realloc(const char *key, NarfByteSize bytes) {
 
       // all options exhausted, move into vacant
 
-      if (root.m_vacant + length + 1 > root.m_total_sectors) {
+      if (root.m_vacant + length + 2 > root.m_total_sectors) {
          // NO ROOM!!!
          narf_rollback();
          return END;
       }
 
       tmp = root.m_vacant;
-      root.m_vacant += length + 1;
+      root.m_vacant += length + 2;
       narf_move(tmp, naf, length, bytes);
 
       narf_end();
@@ -2192,7 +2192,7 @@ bool narf_defrag(void) {
       root.m_chain = node->m_next;
       tmp_length = node->m_length;
 
-      other = tmp + tmp_length + 1;
+      other = tmp + tmp_length + 2;
       read_buffer(other);
       other_length = node->m_length;
       parent = node->m_parent;
@@ -2200,12 +2200,12 @@ bool narf_defrag(void) {
       right = node->m_right;
       prev = node->m_prev;
       next = node->m_next;
-      node->m_start = tmp + 1;
+      node->m_start = tmp + 2;
       write_buffer(tmp);
 
       for (i = 0; i < other_length; ++i) {
-         narf_io_read(other + i + 1, buffer_lo);
-         narf_io_write(tmp + i + 1, buffer_lo); // bypass integrity
+         narf_io_read(other + i + 2, buffer_lo);
+         narf_io_write(tmp + i + 2, buffer_lo); // bypass integrity
       }
 
       if (parent != END) {
@@ -2256,10 +2256,13 @@ bool narf_defrag(void) {
          root.m_last = tmp;
       }
 
-      other = tmp + other_length + 1;
+      other = tmp + other_length + 2;
 
-      read_buffer(other);
-      node->m_start = other + 1;
+      // we're building a new node from junk data,
+      // and we're just going to chain it,
+      // so there's no point in doing a read here.
+      // read_buffer(other);
+      node->m_start = other + 2;
       node->m_length = tmp_length;
       write_buffer(other);
 
