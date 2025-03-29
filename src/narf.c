@@ -31,7 +31,7 @@
 #endif
 
 #define SIGNATURE 0x4652414E // FRAN => NARF
-#define VERSION 0x00000000
+#define VERSION 0x00000001
 
 #define END INVALID_NAF // i hate typing
 
@@ -50,6 +50,7 @@ typedef struct PACKED {
    uint32_t partition_size;       // Size of the partition (LBA)
 } MBRPartitionEntry;
 static_assert(sizeof(MBRPartitionEntry) == 16, "MBRPartitionEntry wrong size");
+
 #define NARF_PART_TYPE 0x6E // lowercase 'n' (uppercase is taken)
 
 ///////////////////////////////////////////////////////
@@ -73,9 +74,10 @@ typedef struct PACKED {
       uint8_t  m_sigbytes[4];
    };
    uint32_t m_version;       // VERSION
+
    NarfByteSize m_sector_size;   // sector size in bytes
    NarfSector   m_total_sectors; // total size of storage in sectors
- 
+
    NAF m_root;               // sector of root node
    NAF m_first;              // sector of first node in key order
    NAF m_last;               // sector of last node in key order
@@ -83,11 +85,19 @@ typedef struct PACKED {
    NarfSector   m_count;         // count of total number of allocated NAF
    NarfSector   m_vacant;        // number of first unallocated sector
    NarfSector   m_start;         // where the root sector lives
+
+   // TODO FIX this is wasted space, fix it.
+   uint8_t      m_reserved[ NARF_SECTOR_SIZE -
+                            1 * sizeof(NarfByteSize) -
+                            4 * sizeof(NarfSector) -
+                            4 * sizeof(NAF) -
+                            5 * sizeof(uint32_t) ];
+
+   uint32_t     m_generation;  // the generation number
+   uint32_t     m_random;      // lfsr sequence number
+   uint32_t     m_checksum;    // crc32
 } Root;
-static_assert(sizeof(Root) == 2 * sizeof(uint32_t) +
-      1 * sizeof(NarfByteSize) +
-      4 * sizeof(NarfSector) +
-      4 * sizeof(NAF), "Root wrong size");
+static_assert(sizeof(Root) == NARF_SECTOR_SIZE, "Root wrong size");
 
 ///////////////////////////////////////////////////////
 //! @brief A Node structure to hold NAF details
@@ -98,24 +108,69 @@ typedef struct PACKED {
    NAF m_prev;        // previous ordered NAF
    NAF m_next;        // next ordered NAF
 
-   uint8_t m_metadata[32]; // not used by NARF
-
    NarfSector   m_start;       // data start sector
    NarfSector   m_length;      // data length in sectors
    NarfByteSize m_bytes;       // data size in bytes
 
-   char m_key[NARF_SECTOR_SIZE - 5 * sizeof(NAF)
-      - 2 * sizeof(NarfSector)
-      - 1 * sizeof(NarfByteSize)
-      - 32 * sizeof(uint8_t)];
+   uint8_t m_metadata[128]; // not used by NARF
+
+   char         m_key     [ NARF_SECTOR_SIZE -
+                            5 * sizeof(NAF) -
+                            2 * sizeof(NarfSector) -
+                            1 * sizeof(NarfByteSize) -
+                            128 -
+                            3 * sizeof(uint32_t) ];
+
+   uint32_t     m_generation;  // the generation number
+   uint32_t     m_random;      // lfsr sequence number
+   uint32_t     m_checksum;    // crc32
 } Node;
 static_assert(sizeof(Node) == NARF_SECTOR_SIZE, "Node wrong size");
 
+///////////////////////////////////////////////////////
+//! @brief sectors needed for bytes
+//!
+//! NB: MUST return a multiple of 2 !!!
+#define BYTES2SECTORS(x) \
+   ((x + (NARF_SECTOR_SIZE * 2 - 1)) % (NARF_SECTOR_SIZE * 2)) * 2;
+
+///////////////////////////////////////////////////////
+//! @brief bytes in a key?
 #define KEYSIZE (sizeof(((Node *) 0)->m_key))
 
-static uint8_t buffer[NARF_SECTOR_SIZE] = { 0 };
+static uint32_t entropy = 0xdeadbeef;
+
+static uint8_t buffer_lo[NARF_SECTOR_SIZE] = { 0 };
+static uint8_t buffer_hi[NARF_SECTOR_SIZE] = { 0 };
+static uint8_t *buffer = buffer_lo;
+
+static bool write_to_hi = false;
+static bool write_root_to_hi;
+
 static Root root = { 0 };
-static Node *node = (Node *) buffer;
+static Root * const root_hi = (Root *) buffer_hi;
+static Root * const root_lo = (Root *) buffer_lo;
+
+static Node * const node_hi = (Node *) buffer_hi;
+static Node * const node_lo = (Node *) buffer_lo;
+static Node *node = node_lo;
+
+///////////////////////////////////////////////////////
+//! @brief crc32 checksum
+uint32_t crc32(const void *data, int length) {
+    uint32_t crc = 0xFFFFFFFF; // Initial value
+    int i;
+    for (i = 0; i < length; i++) {
+        crc ^= *((uint8_t *)data++); // XOR with input byte
+        for (int j = 0; j < 8; j++) { // Process 8 bits
+            if (crc & 1)
+                crc = (crc >> 1) ^ 0xEDB88320; // Polynomial for CRC-32
+            else
+                crc >>= 1;
+        }
+    }
+    return ~crc; // Final XOR
+}
 
 ///////////////////////////////////////////////////////
 //! @brief Read a NAF into our buffer
@@ -123,7 +178,101 @@ static Node *node = (Node *) buffer;
 //! @param naf The naf to read
 //! @return true on success
 static bool read_buffer(NAF naf) {
-   return narf_io_read(naf, buffer);
+   int32_t tmp;
+   uint32_t gen_lo;
+   uint32_t gen_hi;
+   uint32_t ck_lo;
+   uint32_t ck_hi;
+
+   // we don't want to get confused by failed reads
+   // and stale data.  we also want to increase entropy.
+   // so we load the buffers with random data before
+   // we do a read.  this will frustrate crc32 check
+   // later.
+   node_lo->m_random = lrand48();
+   node_hi->m_random = lrand48();
+
+   if (!narf_io_read(naf, buffer_lo)) return false;
+   if (!narf_io_read(naf + 1, buffer_hi)) return false;
+
+   ck_lo = crc32(buffer_lo, NARF_SECTOR_SIZE - sizeof(uint32_t));
+   ck_hi = crc32(buffer_hi, NARF_SECTOR_SIZE - sizeof(uint32_t));
+
+   if (ck_lo == node_lo->m_checksum) {
+      if (ck_hi == node_hi->m_checksum) {
+
+         // both checksums good, we can trust the data
+         gen_lo = node_lo->m_generation;
+         gen_hi = node_hi->m_generation;
+
+         if (gen_lo <= root.m_generation) {
+            if (gen_hi <= root.m_generation) {
+               // both good
+
+               tmp = gen_lo - gen_hi;
+               if (tmp > 0) {
+                  // lo is more recent
+                  goto lo_is_good;
+               }
+               else if (tmp < 0) {
+                  // hi is more recent
+                  goto hi_is_good;
+               }
+               else {
+                  // they are the same.
+                  // this should not happen.
+                  assert(0);
+                  // random time.
+                  if (lrand48() & 1) {
+                     goto lo_is_good;
+                  }
+                  else {
+                     goto hi_is_good;
+                  }
+               }
+            }
+            else {
+               // only lo good
+               goto lo_is_good;
+            }
+         }
+         else {
+            if (gen_hi <= root.m_generation) {
+               // only hi good
+               goto hi_is_good;
+            }
+            else {
+               // this should never happen
+               assert(0);
+               return false;
+            }
+         }
+      }
+      else {
+         // only lo is good
+lo_is_good: 
+         buffer = buffer_lo;
+         node = node_lo;
+         write_to_hi = (node->m_generation != root.m_generation);
+      }
+   }
+   else {
+      if (ck_hi == node_hi->m_checksum) {
+         // only hi is good
+hi_is_good: 
+         buffer = buffer_hi;
+         node = node_hi;
+         write_to_hi = (node->m_generation == root.m_generation);
+      }
+      else {
+         // this should never happen
+         assert(0);
+         return false;
+      }
+   }
+
+   // oi.  if we're here, both buffers are the same
+   return true;
 }
 
 ///////////////////////////////////////////////////////
@@ -135,16 +284,19 @@ static bool write_buffer(NAF naf) {
 #ifdef NARF_DEBUG_INTEGRITY
    assert(!naf || naf == root.m_start || (node->m_start == naf + 1));
 #endif
-   return narf_io_write(naf, buffer);
+
+   node->m_generation = root.m_generation;
+   node->m_random = lrand48();
+   node->m_checksum = crc32(node, NARF_SECTOR_SIZE - sizeof(uint32_t));
+
+   if (write_to_hi) {
+      return narf_io_write(naf + 1, buffer_hi);
+   }
+   else {
+      return narf_io_write(naf, buffer_lo);
+   }
 }
 
-///////////////////////////////////////////////////////
-//! @see write_buffer()
-static bool write_data(NAF naf) {
-   return narf_io_write(naf, buffer);
-}
-
-#ifdef UTF8_STRNCMP
 #define strncmp utf8_strncmp
 
 ///////////////////////////////////////////////////////
@@ -152,6 +304,8 @@ static bool write_data(NAF naf) {
 //!
 //! Decode a UTF-8 sequence into a Unicode code point (handles incomplete
 //! sequences)
+//!
+//! also adds entropy by inserting calls to lrand48()
 //!
 static int32_t utf8_decode_safe(const char **s, const char *end) {
    const unsigned char *p = (const unsigned char *) *s;
@@ -182,6 +336,10 @@ static int32_t utf8_decode_safe(const char **s, const char *end) {
       return -1; // Invalid UTF-8 sequence
    }
 
+   if (codepoint & 1) {
+      entropy ^= lrand48();
+   }
+
    *s += num_bytes;
    return codepoint;
 }
@@ -191,7 +349,7 @@ static int32_t utf8_decode_safe(const char **s, const char *end) {
 //!
 //! compares up to n bytes, ensuring character integrity
 //!
-static int32_t utf8_strncmp(const char *s1, const char *s2, size_t n) {
+static int16_t utf8_strncmp(const char *s1, const char *s2, size_t n) {
    const char *end1 = s1 + n;
    const char *end2 = s2 + n;
 
@@ -210,13 +368,12 @@ static int32_t utf8_strncmp(const char *s1, const char *s2, size_t n) {
          break;
       }
       if (cp1 != cp2) {
-         return cp1 - cp2;
+         return (cp1 > cp2) ? 1 : -1; // cp1 - cp2;
       }
    }
 
    return 0;
 }
-#endif
 
 #ifdef NARF_MBR_UTILS
 
@@ -245,18 +402,18 @@ static const char boot_code_msg[] =
 //! @param message Custom boot_code message, or NULL for default
 //! @return true for success
 bool narf_mbr(const char *message) {
-   MBR *mbr = (MBR *) buffer;
+   MBR *mbr = (MBR *) buffer_lo;
 
    if (!narf_io_open()) return false;
 
-   memset(buffer, 0, sizeof(buffer));
-   memcpy(buffer, boot_code_stub, sizeof(boot_code_stub));
+   memset(buffer_lo, 0, sizeof(buffer_lo));
+   memcpy(buffer_lo, boot_code_stub, sizeof(boot_code_stub));
    if (message == NULL) {
       message = boot_code_msg;
    }
-   strcpy((char *)(buffer + sizeof(boot_code_stub)), message);
+   strcpy((char *)(buffer_lo + sizeof(boot_code_stub)), message);
    mbr->signature = MBR_SIGNATURE;
-   write_buffer(0);
+   narf_io_write(0, buffer_lo);
 
    return true;
 }
@@ -285,8 +442,8 @@ bool narf_partition(int partition) {
 
    start = 1;
    end = narf_io_sectors();
-   mbr = (MBR *) buffer;
-   read_buffer(0);
+   mbr = (MBR *) buffer_lo;
+   narf_io_read(0, buffer_lo);
 
    if (partition < 1 || partition > 4) {
       return false;
@@ -317,7 +474,7 @@ bool narf_partition(int partition) {
    mbr->partitions[partition].start_lba = start;
    mbr->partitions[partition].partition_size = end - start;
 
-   write_buffer(0);
+   narf_io_write(0, buffer_lo);
 
    return true;
 }
@@ -339,8 +496,8 @@ bool narf_format(int partition) {
 
    if (!narf_io_open()) return false;
 
-   mbr = (MBR *) buffer;
-   read_buffer(0);
+   mbr = (MBR *) buffer_lo;
+   narf_io_read(0, buffer_lo);
 
    if (partition < 1 || partition > 4) {
 #ifdef NARF_DEBUG
@@ -377,8 +534,8 @@ int narf_findpart(void) {
 
    if (!narf_io_open()) return -1;
 
-   mbr = (MBR *) buffer;
-   read_buffer(0);
+   mbr = (MBR *) buffer_lo;
+   narf_io_read(0, buffer_lo);
 
    for (i = 0; i < 4; i++) {
       if (mbr->partitions[i].partition_type == NARF_PART_TYPE) {
@@ -408,8 +565,8 @@ bool narf_mount(int partition) {
 
    if (!narf_io_open()) return false;
 
-   mbr = (MBR *) buffer;
-   read_buffer(0);
+   mbr = (MBR *) buffer_lo;
+   narf_io_read(0, buffer_lo);
 
    --partition;
 
@@ -562,6 +719,8 @@ static void print_node(NAF naf) {
          node->m_start, node->m_length, node->m_bytes);
    printf("metadata    = '%.*s'\n",
          (int) sizeof(node->m_metadata), node->m_metadata);
+   printf("g-r-c       = %d-%08x-%08x\n",
+         node->m_generation, node->m_random, node->m_checksum);
 }
 
 ///////////////////////////////////////////////////////
@@ -617,6 +776,8 @@ void narf_debug(NAF naf) {
    printf("root.m_last          = %d\n", root.m_last);
    printf("root.m_count         = %d\n", root.m_count);
    printf("root.m_start         = %d\n", root.m_start);
+   printf("root.g-r-c           = %d-%08x-%08x\n",
+         root.m_generation, root.m_random, root.m_checksum);
    printf("\n");
 
    if (naf != END) {
@@ -1038,7 +1199,6 @@ static bool narf_insert(NAF naf, const char *key) {
       root.m_root = naf;
       root.m_first = naf;
       root.m_last = naf;
-      narf_sync();
    }
    else {
       p = root.m_root;
@@ -1130,20 +1290,32 @@ static bool narf_insert(NAF naf, const char *key) {
 bool narf_mkfs(NarfSector start, NarfSector size) {
    if (!narf_io_open()) return false;
 
-   memset(buffer, 0, sizeof(buffer));
+   memset(buffer_lo, 0, NARF_SECTOR_SIZE);
+
    root.m_signature     = SIGNATURE;
    root.m_version       = VERSION;
    root.m_sector_size   = NARF_SECTOR_SIZE;
    root.m_total_sectors = size;
-   root.m_vacant        = start + 1;
+   root.m_vacant        = start + 2;
    root.m_root          = END;
    root.m_first         = END;
    root.m_last          = END;
    root.m_chain         = END;
    root.m_count         = 0;
    root.m_start         = start;
-   memcpy(buffer, &root, sizeof(root));
-   write_buffer(start);
+
+   root.m_generation    = 0;
+   root.m_random        = lrand48();
+   root.m_checksum      = crc32(&root, NARF_SECTOR_SIZE - sizeof(uint32_t));
+
+   memcpy(buffer_lo, &root, sizeof(root));
+   narf_io_write(start, buffer_lo);
+
+   root.m_random        = lrand48();
+   root.m_checksum      = crc32(&root, NARF_SECTOR_SIZE - sizeof(uint32_t));
+
+   memcpy(buffer_lo, &root, sizeof(root));
+   narf_io_write(start + 1, buffer_lo);
 
 #ifdef NARF_DEBUG
    printf("keysize %ld\n", KEYSIZE);
@@ -1155,25 +1327,102 @@ bool narf_mkfs(NarfSector start, NarfSector size) {
 ///////////////////////////////////////////////////////
 //! @see narf.h
 bool narf_init(NarfSector start) {
-   if (!narf_io_open()) return false;
-
-   read_buffer(start);
-   memcpy(&root, buffer, sizeof(root));
+   bool ret;
+   int32_t tmp;
+   uint32_t gen_lo;
+   uint32_t gen_hi;
+   uint32_t ck_lo;
+   uint32_t ck_hi;
 
 #ifdef NARF_DEBUG
    printf("keysize %ld\n", KEYSIZE);
 #endif
 
+   if (!narf_io_open()) return false;
+
+   ret = narf_io_read(start, buffer_lo);
+   if (!ret) return false;
+
+   ret = narf_io_read(start + 1, buffer_hi);
+   if (!ret) return false;
+
+   ck_lo = crc32(root_lo, NARF_SECTOR_SIZE - sizeof(uint32_t));
+   ck_hi = crc32(root_hi, NARF_SECTOR_SIZE - sizeof(uint32_t));
+
+   if (ck_lo == root_lo->m_checksum) {
+      if (ck_hi == root_hi->m_checksum) {
+         // both good, compare generations
+         gen_lo = root_lo->m_generation;
+         gen_hi = root_hi->m_generation;
+
+         tmp = gen_lo - gen_hi;
+         if (tmp > 0) {
+            goto lo_is_good;
+         }
+         else if (tmp < 0) {
+            goto hi_is_good;
+         }
+         else {
+            if (lrand48() & 1) {
+               goto lo_is_good;
+            }
+            else {
+               goto hi_is_good;
+            }
+         }
+      }
+      else {
+         // lo good
+lo_is_good:
+         memcpy(&root, root_lo, sizeof(Root));
+         write_root_to_hi = true;
+      }
+   }
+   else {
+      if (ck_hi == root_hi->m_checksum) {
+         // hi good
+hi_is_good:
+         memcpy(&root, root_hi, sizeof(Root));
+         write_root_to_hi = false;
+      }
+      else {
+         // none good
+
+         // we can't do anything in this case
+         assert(0);
+         return false;
+      }
+   }
+
    return verify();
 }
 
 ///////////////////////////////////////////////////////
+//! @brief begin a transaction
+void narf_begin(void) {
+   ++root.m_generation;
+}
+
+///////////////////////////////////////////////////////
+//! @brief abort a transaction
+void narf_abort(void) {
+   --root.m_generation;
+}
+
+///////////////////////////////////////////////////////
+//! @brief end a transaction
+void narf_end(void) {
+   root.m_random = lrand48();
+   root.m_checksum = crc32(&root, NARF_SECTOR_SIZE - sizeof(uint32_t));
+   write_root_to_hi = !write_root_to_hi;
+   narf_io_write(root.m_start + (write_root_to_hi ? 0 : 1), &root);
+}
+
+
+///////////////////////////////////////////////////////
 //! @see narf.h
 bool narf_sync(void) {
-   if (!verify()) return false;
-   memset(buffer, 0, sizeof(buffer));
-   memcpy(buffer, &root, sizeof(root));
-   return write_buffer(root.m_start);
+   return true;
 }
 
 ///////////////////////////////////////////////////////
@@ -1396,7 +1645,7 @@ NAF narf_alloc(const char *key, NarfByteSize bytes) {
    NAF naf;
    NarfSector length;
 
-   length = (bytes + NARF_SECTOR_SIZE - 1) / NARF_SECTOR_SIZE;
+   length = BYTES2SECTORS(bytes);
 
    if (!verify()) return END;
 
@@ -1406,19 +1655,31 @@ NAF narf_alloc(const char *key, NarfByteSize bytes) {
       return END;
    }
 
+   narf_begin();
+
    // first check if we can allocate from the chain
    naf = narf_unchain(length);
 
    if (naf == END) {
       // nothing on the chain was suitable
 
-      if (root.m_vacant + length + 1 > root.m_total_sectors) {
+      if (root.m_vacant + length + 2 > root.m_total_sectors) {
          // NO ROOM!!!
+         narf_abort();
          return END;
       }
 
       naf = root.m_vacant;
-      ++root.m_vacant;
+
+      // special case when expanding,
+      // initialize the storage to zero
+      // and zero out our buffers
+      memset(buffer_lo, 0, NARF_SECTOR_SIZE);
+      narf_io_write(naf, buffer_lo);
+      memset(buffer_hi, 0, NARF_SECTOR_SIZE);
+      narf_io_write(naf + 1, buffer_hi);
+      
+      root.m_vacant += 2;
       node->m_start  = root.m_vacant;
       node->m_length = length;
       root.m_vacant += length;
@@ -1430,8 +1691,8 @@ NAF narf_alloc(const char *key, NarfByteSize bytes) {
    node->m_parent = END;
    node->m_left   = END;
    node->m_right  = END;
-   node->m_prev    = END;
-   node->m_next    = END;
+   node->m_prev   = END;
+   node->m_next   = END;
    node->m_bytes  = bytes;
    memset(node->m_metadata, 0, sizeof(node->m_metadata));
    strncpy(node->m_key, key, KEYSIZE);
@@ -1443,8 +1704,9 @@ NAF narf_alloc(const char *key, NarfByteSize bytes) {
 #endif
 
    ++root.m_count;
-   narf_sync();
    narf_insert(naf, key);
+
+   narf_end();
 
 #ifdef NARF_DEBUG_INTEGRITY
    verify_integrity();
@@ -1548,8 +1810,8 @@ static void narf_move(NAF dst, NAF src, NarfSector length, NarfByteSize bytes) {
 
    // copy the data
    for (i = 0; i < og_length; i++) {
-      read_buffer(og_start + i);
-      write_data(start + i); // write_data bypasses integrity check
+      narf_io_read(og_start + i, buffer_lo);
+      narf_io_write(start + i, buffer_lo); // bypass integrity
    }
 
    // chain the old naf
@@ -1578,7 +1840,7 @@ NAF narf_realloc(const char *key, NarfByteSize bytes) {
    }
 
    read_buffer(naf);
-   length = (bytes + NARF_SECTOR_SIZE - 1) / NARF_SECTOR_SIZE;
+   length = BYTES2SECTORS(bytes);
    og_length = node->m_length;
 
    // do we need to change at all?
@@ -1998,8 +2260,8 @@ bool narf_defrag(void) {
       write_buffer(tmp);
 
       for (i = 0; i < other_length; ++i) {
-         read_buffer(other + i + 1);
-         write_data(tmp + i + 1);
+         narf_io_read(other + i + 1, buffer_lo);
+         narf_io_write(tmp + i + 1, buffer_lo); // bypass integrity
       }
 
       if (parent != END) {
@@ -2169,16 +2431,16 @@ bool narf_append(const char *key, const void *data, NarfByteSize size) {
    start = node->m_start;
 
    begin = og_bytes % NARF_SECTOR_SIZE;
-   current = og_bytes / NARF_SECTOR_SIZE;
+   current = og_bytes / NARF_SECTOR_SIZE; // TODO FIX ???
    remain = NARF_SECTOR_SIZE - begin;
 
    while (size) {
-      read_buffer(start + current);
+      narf_io_read(start + current, buffer_lo);
       if (remain > size) {
          remain = size;
       }
       memcpy(buffer + begin, data, remain);
-      write_data(start + current);
+      narf_io_write(start + current, buffer_lo); // bypass integrity
 
       // advance all our pointers
       data = (uint8_t *) data + remain;

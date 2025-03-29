@@ -42,19 +42,4 @@
 // store on the stack on small systems.
 #define NARF_MALLOC
 
-// Uncomment this for utf-8 code point based key comparison
-//
-// you probably don't need this.  i can't think of any reason
-// anyone would need this. UTF-8 ensures that higher code
-// points have higher byte values.  multibyte characters are
-// encoded in a way that preserves ordering.  this define has
-// slightly different handling in the edge case where a UTF-8
-// character is malformed, which could happen in the case of
-// the complete key not fitting in the alloted space.
-//
-// i'll leave it here, commented, to serve as a model in case
-// someone wants to do some different kind of key ordering.
-//
-//#define UTF8_STRNCMP
-
 #endif
