@@ -289,12 +289,7 @@ static bool write_buffer(NAF naf) {
    node->m_random = lrand48();
    node->m_checksum = crc32(node, NARF_SECTOR_SIZE - sizeof(uint32_t));
 
-   if (write_to_hi) {
-      return narf_io_write(naf + 1, buffer_hi);
-   }
-   else {
-      return narf_io_write(naf, buffer_lo);
-   }
+   return narf_io_write(naf + (write_to_hi ? 1 : 0), buffer);
 }
 
 #define strncmp utf8_strncmp
