@@ -360,6 +360,7 @@ static int16_t utf8_strncmp(const char *s1, const char *s2, size_t n) {
       }
       if (cp1 == -2 || cp2 == -2) {
          // Reached byte limit safely
+         assert(0);
          break;
       }
       if (cp1 != cp2) {
@@ -367,6 +368,8 @@ static int16_t utf8_strncmp(const char *s1, const char *s2, size_t n) {
       }
    }
 
+   if (*s1 > *s2) return 1;
+   if (*s1 < *s2) return -1;
    return 0;
 }
 
@@ -1392,25 +1395,36 @@ hi_is_good:
    return verify();
 }
 
+static int semaphore = 0;
+
 ///////////////////////////////////////////////////////
 //! @brief begin a transaction
 void narf_begin(void) {
-   ++root.m_generation;
+   if (!semaphore) {
+      ++root.m_generation;
+   }
+   ++semaphore;
 }
 
 ///////////////////////////////////////////////////////
 //! @brief abort a transaction
 void narf_abort(void) {
-   --root.m_generation;
+   --semaphore;
+   if (!semaphore) {
+      --root.m_generation;
+   }
 }
 
 ///////////////////////////////////////////////////////
 //! @brief end a transaction
 void narf_end(void) {
-   root.m_random = lrand48();
-   root.m_checksum = crc32(&root, NARF_SECTOR_SIZE - sizeof(uint32_t));
-   write_root_to_hi = !write_root_to_hi;
-   narf_io_write(root.m_start + (write_root_to_hi ? 0 : 1), &root);
+   --semaphore;
+   if (!semaphore) {
+      root.m_random = lrand48();
+      root.m_checksum = crc32(&root, NARF_SECTOR_SIZE - sizeof(uint32_t));
+      write_root_to_hi = !write_root_to_hi;
+      narf_io_write(root.m_start + (write_root_to_hi ? 0 : 1), &root);
+   }
 }
 
 
