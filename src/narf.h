@@ -48,6 +48,9 @@ typedef NARF_SIZE_TYPE NarfByteSize;
 //!
 //! existing MBR is overwritten and blanked
 //!
+//! narf_mbr() is NOT power loss robust, because there is
+//! only one MBR on the disk.
+//!
 //! @param message Custom boot_code message, or NULL for default
 //! @return true for success
 bool narf_mbr(const char *message);
@@ -63,6 +66,9 @@ bool narf_mbr(const char *message);
 //!
 //! existing partition data is overwritten.
 //! all available space is used for the new partition.
+//!
+//! narf_partition() is NOT power loss robust, because
+//! there is only one partition table on the disk.
 //!
 //! @param partition The partition number (1-4) to occupy
 //! @return true for success
@@ -80,6 +86,11 @@ bool narf_partition(int partition);
 //!
 //! calls narf_mkfs() with correct parameters based on partition
 //! table.
+//!
+//! @see narf_mkfs for power lost robustness.
+//!
+//! @param partition The partition (1-4) to format
+//! @return true on success
 bool narf_format(int partition);
 
 ///////////////////////////////////////////////////////
@@ -89,6 +100,9 @@ bool narf_format(int partition);
 //! @see narf_format
 //! @see narf_findpart
 //! @see narf_mount
+//!
+//! narf_findpart() is power loss robust because it does
+//! not write to the media.
 //!
 //! @return A number (1-4) of the partition containint NARF, or -1
 int narf_findpart(void);
@@ -104,6 +118,9 @@ int narf_findpart(void);
 //!
 //! calls narf_init with correct parameters based on partition
 //! table.
+//!
+//! narf_mount() is power loss robust because it does
+//! not write to the media.
 //!
 //! @param partition The partition (1-4) to mount
 //! @return true for success
@@ -127,6 +144,8 @@ bool narf_mount(int partition);
 //! One of either narf_mkfs() or narf_init() must
 //! be called before other functions can be used
 //!
+//! narf_mkfs() is power loss robust.
+//!
 //! @param start The first sector
 //! @paran size The number of sectors
 //! @return true for success
@@ -147,6 +166,9 @@ bool narf_mkfs(NarfSector start, NarfSector size);
 //! One of either narf_mkfs() or narf_init() must
 //! be called before other functions can be used
 //!
+//! narf_init() is power loss robust because it does
+//! not write to the media.
+//!
 //! @param start The first sector
 //! @return true for success
 bool narf_init(NarfSector start);
@@ -156,6 +178,9 @@ bool narf_init(NarfSector start);
 //! @see narf_key()
 //!
 //! Given a key, find the NAF corresponding to the key.
+//!
+//! narf_find() is power loss robust because it does
+//! not write to the media.
 //!
 //! @param key The key to look for
 //! @return The NAF of the key, or INVAID_NAF if not found
@@ -174,6 +199,9 @@ NAF narf_find(const char *key);
 //! paths in a real file system.
 //!
 //! For rational use, dirname should end with sep.
+//!
+//! narf_dirfirst() is power loss robust because it does
+//! not write to the media.
 //!
 //! @param dirname Directory name with trailing separator
 //! @param sep Directory separator
@@ -194,6 +222,9 @@ NAF narf_dirfirst(const char *dirname,
 //! paths in a real file system.
 //!
 //! For rational use, dirname should end with sep.
+//!
+//! narf_dirnext() is power loss robust because it does
+//! not write to the media.
 //!
 //! @param dirname Directory name with trailing separator
 //! @param sep Directory separator
@@ -216,6 +247,8 @@ NAF narf_dirnext(const char *dirname,
 //! (48 is 1.5 times the ideal height of a tree
 //! with 2^32 nodes)
 //!
+//! narf_alloc() is power loss robust.
+//!
 //! @param key The key we're allocating for
 //! @param bytes The size in bytes to reserve for data
 //! @return The new NAF
@@ -228,11 +261,13 @@ NAF narf_alloc(const char *key,
 //! @see narf_free()
 //! @see narf_rebalance()
 //!
-//! Grow or shrink the key allocation.  Like it's
+//! Grow or shrink the key's data allocation.  Like it's
 //! C stdlib namesake, it may move the NAF. If
 //! a NAF for the key does not exist, narf_alloc()
 //! is called to create one.  If bytes == 0,
 //! narf_free() is called and INVALID_NAF is returned.
+//!
+//! narf_realloc() is power loss robust.
 //!
 //! @param key The key we're reallocating
 //! @param bytes The new size in bytes to reserve for data
@@ -249,7 +284,7 @@ NAF narf_realloc(const char *key,
 //! Frees up (deletes) space allocated by narf_alloc(),
 //! including the key itself.
 //!
-//! This will always call narf_rebalance()
+//! narf_free() is power loss robust.
 //!
 //! @param key The key we're freeing
 //! @return true for success
@@ -266,6 +301,8 @@ bool narf_free(const char *key);
 //! Other NARF functions (narf_alloc(), narf_free())
 //! may call this for you under some circumstances.
 //!
+//! narf_rebalance() is power loss robust.
+//!
 //! @return true for success
 bool narf_rebalance(void);
 
@@ -276,6 +313,9 @@ bool narf_rebalance(void);
 //! This makes the NARF as small as possible by
 //! removing any gaps that may have been left by
 //! narf_free()
+//!
+//! narf_defrag() is power loss robust.
+//!
 bool narf_defrag(void);
 
 ///////////////////////////////////////////////////////
@@ -289,11 +329,17 @@ bool narf_defrag(void);
 //!
 //! This is the inverse function of narf_find().
 //!
+//! narf_key() is power loss robust because it does
+//! not write to the media.
+//!
 //! @return the key for the NAF
 const char *narf_key(NAF naf);
 
 ///////////////////////////////////////////////////////
 //! @brief Get the first data sector reserved for this NAF
+//!
+//! narf_sector() is power loss robust because it does
+//! not write to the media.
 //!
 //! @param naf The NAF
 //! @return a sector number or -1
@@ -301,6 +347,9 @@ NarfSector narf_sector(NAF naf);
 
 ///////////////////////////////////////////////////////
 //! @brief Get the data size in bytes for this NAF
+//!
+//! narf_size() is power loss robust because it does
+//! not write to the media.
 //!
 //! @param naf The NAF
 //! @return the size in bytes
@@ -315,6 +364,9 @@ NarfByteSize narf_size(NAF naf);
 //! This is useful if you need to traverse all
 //! NAFs in key order.
 //!
+//! narf_first() is power loss robust because it does
+//! not write to the media.
+//!
 //! @return the first NAF in key order
 NAF narf_first(void);
 
@@ -326,6 +378,9 @@ NAF narf_first(void);
 //!
 //! This is useful if you need to traverse all
 //! NAFs in key order.
+//!
+//! narf_next() is power loss robust because it does
+//! not write to the media.
 //!
 //! @param naf the current NAF
 //! @return the NAF after the current, in key order
@@ -340,6 +395,9 @@ NAF narf_next(NAF naf);
 //! This is useful if you need to traverse all
 //! NAFs in reverse key order.
 //!
+//! narf_last() is power loss robust because it does
+//! not write to the media.
+//!
 //! @return the last NAF in key order
 NAF narf_last(void);
 
@@ -351,6 +409,9 @@ NAF narf_last(void);
 //!
 //! This is useful if you need to traverse all
 //! NAFs in reverse key order.
+//!
+//! narf_previous() is power loss robust because it does
+//! not write to the media.
 //!
 //! @param naf the current NAF
 //! @return the NAF before the current, in key order
@@ -375,6 +436,9 @@ NAF narf_previous(NAF naf);
 //! metadata is destroyed on narf_free() or if
 //! narf_realloc() is called with a zero size.
 //!
+//! narf_metadata() is power loss robust because it does
+//! not write to the media.
+//!
 //! @param naf The NAF to get the metadata from
 //! @return A pointer to an array of 32 bytes
 void *narf_metadata(NAF naf);
@@ -385,6 +449,8 @@ void *narf_metadata(NAF naf);
 //!
 //! see narf_metadata() for details
 //!
+//! narf_set_metadata() is power loss robust.
+//!
 //! @param naf The NAF to set metadata for
 //! @param data Pointer to array of 32 bytes
 //! @return true on success, false on failure
@@ -392,6 +458,14 @@ bool narf_set_metadata(NAF naf, void *data);
 
 ///////////////////////////////////////////////////////
 //! @brief Append data to a NAF
+//! @see narf_realloc()
+//!
+//! may call narf_realloc() to get more space
+//!
+//! reallocation is power loss robust.
+//!
+//! narf_append() is NOT power loss robust
+//! because it is merely a convenience function.
 //!
 //! @param key The key holding data to append to
 //! @param data Pointer to the data

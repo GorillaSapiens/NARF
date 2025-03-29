@@ -474,17 +474,7 @@ bool narf_partition(int partition) {
 }
 
 ///////////////////////////////////////////////////////
-//! @brief Format a partition with a new NARF
-//! @see narf_mbr
-//! @see narf_partition
-//! @see narf_findpart
-//! @see narf_mount
-//! @see narf_mkfs
-//!
-//! DESTRUCTIVE !!!
-//!
-//! calls narf_mkfs() with correct parameters based on partition
-//! table.
+//! @see narf.h
 bool narf_format(int partition) {
    MBR *mbr;
 
@@ -572,6 +562,7 @@ bool narf_mount(int partition) {
 }
 #endif
 
+#if 0
 ///////////////////////////////////////////////////////
 //! @brief Get the ideal height for our tree.
 static int max_height(void) {
@@ -585,6 +576,7 @@ static int max_height(void) {
 
    return ret;
 }
+#endif
 
 ///////////////////////////////////////////////////////
 //! @brief Verify we're working with a valid filesystem
@@ -1172,8 +1164,6 @@ again:
 ///////////////////////////////////////////////////////
 //! @brief Insert NAF into the tree and list.
 //!
-//! Forces rebalance if tree is too tall.
-//!
 //! @return true for success
 static bool narf_insert(NAF naf, const char *key) {
    NAF tmp;
@@ -1260,10 +1250,6 @@ static bool narf_insert(NAF naf, const char *key) {
             assert(0);
          }
       }
-   }
-
-   if (height > max_height() + 2) {
-      narf_rebalance();
    }
 
 #ifdef NARF_DEBUG_INTEGRITY
@@ -1397,8 +1383,8 @@ void narf_begin(void) {
 }
 
 ///////////////////////////////////////////////////////
-//! @brief abort a transaction
-void narf_abort(void) {
+//! @brief rollb back a transaction
+void narf_rollback(void) {
    --semaphore;
    if (!semaphore) {
       --root.m_generation;
@@ -1656,7 +1642,7 @@ NAF narf_alloc(const char *key, NarfByteSize bytes) {
 
       if (root.m_vacant + length + 2 > root.m_total_sectors) {
          // NO ROOM!!!
-         narf_abort();
+         narf_rollback();
          return END;
       }
 
@@ -1827,6 +1813,8 @@ NAF narf_realloc(const char *key, NarfByteSize bytes) {
       return END;
    }
 
+   narf_begin();
+
    read_buffer(naf);
    length = BYTES2SECTORS(bytes);
    og_length = node->m_length;
@@ -1835,6 +1823,9 @@ NAF narf_realloc(const char *key, NarfByteSize bytes) {
    if (og_length == length) {
       node->m_bytes = bytes;
       write_buffer(naf);
+
+      narf_end();
+
       return naf;
    }
 
@@ -1848,6 +1839,8 @@ NAF narf_realloc(const char *key, NarfByteSize bytes) {
       node->m_start = naf + length + 2;
       write_buffer(naf + length + 1);
       narf_chain(naf + length + 1);
+
+      narf_end();
 
 #ifdef NARF_DEBUG_INTEGRITY
       verify_integrity();
@@ -1864,11 +1857,12 @@ NAF narf_realloc(const char *key, NarfByteSize bytes) {
          // move into our new home
          narf_move(tmp, naf, length, bytes);
 
+         narf_end();
+
 #ifdef NARF_DEBUG_INTEGRITY
          verify_integrity();
 #endif
 
-         // return the new
          return tmp;
       }
 
@@ -1876,12 +1870,15 @@ NAF narf_realloc(const char *key, NarfByteSize bytes) {
 
       if (root.m_vacant + length + 1 > root.m_total_sectors) {
          // NO ROOM!!!
+         narf_rollback();
          return END;
       }
 
       tmp = root.m_vacant;
       root.m_vacant += length + 1;
       narf_move(tmp, naf, length, bytes);
+
+      narf_end();
 
 #ifdef NARF_DEBUG_INTEGRITY
       verify_integrity();
@@ -1893,47 +1890,6 @@ NAF narf_realloc(const char *key, NarfByteSize bytes) {
    // this should never happen
    assert(0);
 }
-
-#ifdef NARF_SMART_FREE
-///////////////////////////////////////////////////////
-//! @brief A helper function used by narf_free()
-//! @see narf_free()
-//!
-//! replaces references to naf in parent with child
-//!
-//! @param parent The parent of naf
-//! @param naf The naf we're skipping
-//! @param child The new child
-static void skip_naf(NAF parent, NAF naf, NAF child) {
-   if (child != END) {
-      read_buffer(child);
-      node->m_parent = parent;
-      write_buffer(child);
-   }
-
-   if (parent != END) {
-      read_buffer(parent);
-      if (node->m_left == naf) {
-         node->m_left = child;
-      }
-      else if (node->m_right == naf) {
-         node->m_right = child;
-      }
-      else {
-         // this should never happen
-         assert(0);
-      }
-      write_buffer(parent);
-   }
-   else {
-      root.m_root = child;
-   }
-
-#ifdef NARF_DEBUG_INTEGRITY
-   verify_integrity();
-#endif
-}
-#endif // NARF_SMART_FREE
 
 ///////////////////////////////////////////////////////
 //! @see narf.h
@@ -2083,8 +2039,6 @@ bool narf_free(const char *key) {
 
    narf_end();
 
-   //narf_rebalance();
-
    return true;
 }
 
@@ -2096,6 +2050,7 @@ bool narf_rebalance(void) {
 #else
    static char key[KEYSIZE]; // TODO/FIX EXPENSIVE !!!
 #endif
+
    NAF head = root.m_first;
 
    NAF naf = root.m_first;
@@ -2117,11 +2072,14 @@ bool narf_rebalance(void) {
    key = malloc(KEYSIZE);
 #endif
 
+   // get an accurate count of nodes
    while (naf != END) {
       ++count;
       read_buffer(naf);
       naf = node->m_next;
    }
+
+   narf_begin();
 
    root.m_root = END;
    root.m_first = END;
@@ -2199,6 +2157,8 @@ bool narf_rebalance(void) {
       naf = next;
    }
 
+   narf_end();
+
 #ifdef NARF_MALLOC
    free(key);
 #endif
@@ -2223,6 +2183,8 @@ bool narf_defrag(void) {
    NarfSector tmp_length;
    NarfSector other_length;
    NarfSector i;
+
+   narf_begin();
 
    while (root.m_chain != END) {
       tmp = root.m_chain;
@@ -2304,6 +2266,8 @@ bool narf_defrag(void) {
       narf_chain(other);
    }
 
+   narf_end();
+
 #ifdef NARF_DEBUG_INTEGRITY
    verify_integrity();
 #endif
@@ -2377,9 +2341,15 @@ void *narf_metadata(NAF naf) {
 //! @see narf.h
 bool narf_set_metadata(NAF naf, void *data) {
    if (!verify() || naf == END) return false;
+
+   narf_begin();
+
    read_buffer(naf);
    memcpy(node->m_metadata, data, sizeof(node->m_metadata));
    write_buffer(naf);
+
+   narf_end();
+
    return true;
 }
 
