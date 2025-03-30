@@ -734,7 +734,7 @@ static void print_chain(void) {
 ///////////////////////////////////////////////////////
 //! @see narf.h
 void narf_debug(NAF naf) {
-   printf("root.m_signature     = %08x '%4s'\n", root.m_signature, root.m_sigbytes);
+   printf("root.m_signature     = %08x '%.4s'\n", root.m_signature, root.m_sigbytes);
    if (root.m_signature != SIGNATURE) {
       printf("bad signature\n");
       return;
@@ -1378,7 +1378,7 @@ static int semaphore = 0;
 
 ///////////////////////////////////////////////////////
 //! @brief begin a transaction
-void narf_begin(void) {
+static void narf_begin(void) {
    if (!semaphore) {
       ++root.m_generation;
    }
@@ -1386,8 +1386,8 @@ void narf_begin(void) {
 }
 
 ///////////////////////////////////////////////////////
-//! @brief rollb back a transaction
-void narf_rollback(void) {
+//! @brief roll back a transaction
+static void narf_rollback(void) {
    --semaphore;
    if (!semaphore) {
       --root.m_generation;
@@ -1396,7 +1396,7 @@ void narf_rollback(void) {
 
 ///////////////////////////////////////////////////////
 //! @brief end a transaction
-void narf_end(void) {
+static void narf_end(void) {
    --semaphore;
    if (!semaphore) {
       root.m_random = lrand48();
@@ -1532,43 +1532,6 @@ NAF narf_dirnext(const char *dirname, const char *sep, NAF naf) {
 }
 
 ///////////////////////////////////////////////////////
-//! @brief Trim a naf length down
-//! @see narf_alloc
-//! @see narf_realloc
-//!
-//! adds excess unused space to the chain.
-//! this is a helper function for narf_alloc()
-//! and narf_realloc()
-//!
-//! @param naf The NAF to trim
-//! @param length The desired length
-static void trim_excess(NAF naf, NarfSector length) {
-   NAF extra;
-   NarfSector excess;
-
-#ifdef NARF_DEBUG_INTEGRITY
-   printf("TRIMMING %d %d\n", naf, length);
-   print_chain();
-   printf("\n");
-#endif
-
-   read_buffer(naf);
-
-   excess = node->m_length - length;
-   extra = node->m_start + length;
-
-   node->m_length = length;
-   write_buffer(naf);
-
-   read_buffer(extra);
-   node->m_start = extra + 2;
-   node->m_length = excess - 2;
-   write_buffer(extra);
-
-   narf_chain(extra);
-}
-
-///////////////////////////////////////////////////////
 static NAF narf_unchain(NarfSector length) {
    NAF prev;
    NAF next;
@@ -1600,13 +1563,6 @@ static NAF narf_unchain(NarfSector length) {
             write_buffer(prev);
          }
 
-         read_buffer(naf);
-         if (node->m_length > length) {
-            // we need to trim the excess.
-            trim_excess(naf, length);
-         }
-         read_buffer(naf);
-
 #ifdef NARF_DEBUG_INTEGRITY
          verify_integrity();
 #endif
@@ -1617,6 +1573,39 @@ static NAF narf_unchain(NarfSector length) {
       next = node->m_next;
    }
    return END;
+}
+
+//////////////////////////////////////////////////////
+//! @brief create a new NAF of given length
+//! @see narf_alloc
+//! @see narf_realloc
+//!
+//! assumes narf_begin() has been called
+static NAF narf_new(NarfSector length) {
+   NAF naf;
+
+   if (root.m_vacant + length + 2 > root.m_total_sectors) {
+      // NO ROOM!!!
+      return END;
+   }
+
+   naf = root.m_vacant;
+
+   // special case
+   // initialize the storage to zero
+   // and zero out our buffers
+   memset(buffer_lo, 0, NARF_SECTOR_SIZE);
+   narf_io_write(naf, buffer_lo);
+   memset(buffer_hi, 0, NARF_SECTOR_SIZE);
+   narf_io_write(naf + 1, buffer_hi);
+
+   root.m_vacant += 2;
+   node->m_start  = length ? root.m_vacant : END;
+   node->m_length = length;
+   root.m_vacant += length;
+   write_buffer(naf);
+
+   return naf;
 }
 
 ///////////////////////////////////////////////////////
@@ -1648,27 +1637,12 @@ NAF narf_alloc(const char *key, NarfByteSize bytes) {
    if (naf == END) {
       // nothing on the chain was suitable
 
-      if (root.m_vacant + length + 2 > root.m_total_sectors) {
-         // NO ROOM!!!
+      naf = narf_new(length);
+
+      if (naf == END) {
          narf_rollback();
          return END;
       }
-
-      naf = root.m_vacant;
-
-      // special case when expanding,
-      // initialize the storage to zero
-      // and zero out our buffers
-      memset(buffer_lo, 0, NARF_SECTOR_SIZE);
-      narf_io_write(naf, buffer_lo);
-      memset(buffer_hi, 0, NARF_SECTOR_SIZE);
-      narf_io_write(naf + 1, buffer_hi);
-      
-      root.m_vacant += 2;
-      node->m_start  = length ? root.m_vacant : END;
-      node->m_length = length;
-      root.m_vacant += length;
-      write_buffer(naf);
    }
 
    // reset fields except start and length
@@ -1701,103 +1675,38 @@ NAF narf_alloc(const char *key, NarfByteSize bytes) {
 }
 
 ///////////////////////////////////////////////////////
-//! @brief Move a NAF, copying all data
-//! @see narf_realloc
-//!
-//! move and relink a NAF, adjusting size and
-//! copying old data.
-//! this is a helper function for narf_realloc()
-//!
-//! @param dst The destination for the NAF
-//! @param src The source for the NAF
-//! @param length The desired length
-//! @param bytes The desired bytes
-static void narf_move(NAF dst, NAF src, NarfSector length, NarfByteSize bytes) {
-   NAF prev;
-   NAF next;
-   NAF parent;
-   NAF left;
-   NAF right;
-   NarfSector og_start;
-   NarfSector start;
-   NarfSector og_length;
+//! @brief copy data and swap data pointers
+void narf_copyswap(NAF alpha, NAF beta, NarfByteSize bytes) {
+   NarfSector alpha_start;
+   NarfSector alpha_length;
+   NarfSector beta_start;
+   NarfSector beta_length;
+
    NarfSector i;
 
-   // move into our new home
-   read_buffer(src);
-   og_start = node->m_start;
-   og_length = node->m_length;
-   start = node->m_start = dst + 2;
-   node->m_length = length;
+   read_buffer(alpha);
+   alpha_start = node->m_start;
+   alpha_length = node->m_length;
+
+   read_buffer(beta);
+   beta_start = node->m_start;
+   beta_length = node->m_length;
+
+   for (i = 0; i < alpha_length; ++i) {
+      narf_io_read(root.m_start + alpha_start + i, buffer_lo);
+      narf_io_write(root.m_start + beta_start + i, buffer_lo);
+   }
+
+   read_buffer(alpha);
+   node->m_start = beta_start;
+   node->m_length = beta_length;
    node->m_bytes = bytes;
-   prev = node->m_prev;
-   next = node->m_next;
-   parent = node->m_parent;
-   left = node->m_left;
-   right = node->m_right;
-   write_buffer(dst);
+   write_buffer(alpha);
 
-   // fix up prev
-   if (prev != END) {
-      read_buffer(prev);
-      node->m_next = dst;
-      write_buffer(prev);
-   }
-   else {
-      root.m_first = dst;
-   }
-
-   // fix up next
-   if (next != END) {
-      read_buffer(next);
-      node->m_prev = dst;
-      write_buffer(next);
-   }
-   else {
-      root.m_last = dst;
-   }
-
-   // fix up parent
-   if (parent != END) {
-      read_buffer(parent);
-      if (node->m_left == src) {
-         node->m_left = dst;
-      }
-      else if (node->m_right == src) {
-         node->m_right = dst;
-      }
-      else {
-         // this should never happen
-         assert(0);
-      }
-      write_buffer(parent);
-   }
-   else {
-      root.m_root = dst;
-   }
-
-   // fix up left
-   if (left != END) {
-      read_buffer(left);
-      node->m_parent = dst;
-      write_buffer(left);
-   }
-
-   // fix up right
-   if (right != END) {
-      read_buffer(right);
-      node->m_parent = dst;
-      write_buffer(right);
-   }
-
-   // copy the data
-   for (i = 0; i < og_length; i++) {
-      narf_io_read(og_start + i, buffer_lo);
-      narf_io_write(start + i, buffer_lo); // bypass integrity
-   }
-
-   // chain the old naf
-   narf_chain(src);
+   read_buffer(beta);
+   node->m_start = alpha_start;
+   node->m_length = alpha_length;
+   write_buffer(beta);
 }
 
 ///////////////////////////////////////////////////////
@@ -1805,8 +1714,8 @@ static void narf_move(NAF dst, NAF src, NarfSector length, NarfByteSize bytes) {
 NAF narf_realloc(const char *key, NarfByteSize bytes) {
    NAF naf;
    NAF tmp;
-   NarfSector length;
-   NarfSector og_length;
+   NarfSector new_length;
+   NarfSector naf_length;
 
    if (!verify()) return END;
 
@@ -1816,83 +1725,46 @@ NAF narf_realloc(const char *key, NarfByteSize bytes) {
       return narf_alloc(key, bytes);
    }
 
-   if (bytes == 0) {
-      narf_free(key);
-      return END;
-   }
-
    narf_begin();
 
    read_buffer(naf);
-   length = BYTES2SECTORS(bytes);
-   og_length = node->m_length;
+   new_length = BYTES2SECTORS(bytes);
+   naf_length = node->m_length;
 
    // do we need to change at all?
-   if (og_length == length) {
+   if (naf_length >= new_length) {
+      // NB: we don't shrink, even if we could!
       node->m_bytes = bytes;
       write_buffer(naf);
-
       narf_end();
-
-      return naf;
-   }
-
-   if (bytes < node->m_bytes) {
-      // we need to shrink
-      node->m_bytes = bytes;
-      node->m_length = length;
-      write_buffer(naf);
-
-      node->m_length = og_length - length - 2;
-      node->m_start = naf + length + 4;
-      write_buffer(naf + length + 2);
-      narf_chain(naf + length + 2);
-
-      narf_end();
-
-#ifdef NARF_DEBUG_INTEGRITY
-      verify_integrity();
-#endif
-
       return naf;
    }
    else {
       // we need to grow
 
       // first check if we can allocate from the chain
-      tmp = narf_unchain(length);
-      if (tmp != END) {
-         // move into our new home
-         narf_move(tmp, naf, length, bytes);
+      tmp = narf_unchain(new_length);
 
-         narf_end();
+      if (tmp == END) {
+         // nothing found
 
-#ifdef NARF_DEBUG_INTEGRITY
-         verify_integrity();
-#endif
+         tmp = narf_new(new_length);
 
-         return tmp;
+         if (tmp == END) {
+            // NO ROOM!!!
+            narf_rollback();
+            return END;
+         }
       }
 
-      // all options exhausted, move into vacant
-
-      if (root.m_vacant + length + 2 > root.m_total_sectors) {
-         // NO ROOM!!!
-         narf_rollback();
-         return END;
-      }
-
-      tmp = root.m_vacant;
-      root.m_vacant += length + 2;
-      narf_move(tmp, naf, length, bytes);
-
+      narf_copyswap(naf, tmp, bytes);
+      narf_chain(tmp);
       narf_end();
 
 #ifdef NARF_DEBUG_INTEGRITY
       verify_integrity();
 #endif
-
-      return tmp;
+      return naf;
    }
 
    // this should never happen
@@ -1927,6 +1799,7 @@ bool narf_free(const char *key) {
 
    if (left != END && right != END) {
       // two children
+      printf("two children\n");
 
       // excise the prev from the tree
 
@@ -1997,7 +1870,10 @@ bool narf_free(const char *key) {
    }
    else {
       // one or no children
+      printf("not two children\n");
+
       child = (left == END) ? right : left;
+
       if (parent == END) {
          root.m_root = child;
       }
@@ -2013,6 +1889,12 @@ bool narf_free(const char *key) {
             assert(0);
          }
          write_buffer(parent);
+
+         if (child != END) {
+            read_buffer(child);
+            node->m_parent = parent;
+            write_buffer(child);
+         }
       }
    }
 
