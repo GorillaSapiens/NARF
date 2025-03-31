@@ -1762,8 +1762,6 @@ bool narf_free(const char *key) {
 
    narf_begin();
 
-   --root.m_count;
-
    // unlink from tree
    read_buffer(naf);
    parent = node->m_parent;
