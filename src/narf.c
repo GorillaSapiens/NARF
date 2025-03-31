@@ -1942,6 +1942,8 @@ bool narf_rebalance(void) {
       naf = node->m_next;
    }
 
+   assert(count == root.m_count);
+
    narf_begin();
 
    root.m_root = END;
