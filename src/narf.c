@@ -83,13 +83,15 @@ typedef struct PACKED {
    NAF m_last;               // sector of last node in key order
    NAF m_chain;              // previously allocated but free now
    NarfSector   m_count;         // count of total number of allocated NAF
-   NarfSector   m_vacant;        // number of first unallocated sector
-   NarfSector   m_start;         // where the root sector lives
+   NarfSector   m_bottom;        // relative number of first unallocated sector
+   NarfSector   m_top;           // relative number of last unallocated sector + 1
+
+   NarfSector   m_origin;        // absolute number where the root sector lives
 
    // TODO FIX this is wasted space, fix it.
    uint8_t      m_reserved[ NARF_SECTOR_SIZE -
                             1 * sizeof(NarfByteSize) -
-                            4 * sizeof(NarfSector) -
+                            5 * sizeof(NarfSector) -
                             4 * sizeof(NAF) -
                             5 * sizeof(uint32_t) ];
 
@@ -192,8 +194,8 @@ static bool read_buffer(NAF naf) {
    node_lo->m_random = lrand48();
    node_hi->m_random = lrand48();
 
-   if (!narf_io_read(root.m_start + naf, buffer_lo)) return false;
-   if (!narf_io_read(root.m_start + naf + 1, buffer_hi)) return false;
+   if (!narf_io_read(root.m_origin + naf, buffer_lo)) return false;
+   if (!narf_io_read(root.m_origin + naf + 1, buffer_hi)) return false;
 
    ck_lo = crc32(buffer_lo, NARF_SECTOR_SIZE - sizeof(uint32_t));
    ck_hi = crc32(buffer_hi, NARF_SECTOR_SIZE - sizeof(uint32_t));
@@ -288,7 +290,7 @@ static bool write_buffer(NAF naf) {
    node->m_random = lrand48();
    node->m_checksum = crc32(node, NARF_SECTOR_SIZE - sizeof(uint32_t));
 
-   return narf_io_write(root.m_start + naf + (write_to_hi ? 1 : 0), buffer);
+   return narf_io_write(root.m_origin + naf + (write_to_hi ? 1 : 0), buffer);
 }
 
 #define strncmp utf8_strncmp
@@ -752,19 +754,20 @@ void narf_debug(NAF naf) {
       return;
    }
 
-   printf("root.m_total_sectors = %d\n", root.m_total_sectors);
+   printf("root.m_total_sectors = 0x%08x (%10d)\n", root.m_total_sectors, root.m_total_sectors);
    if (root.m_total_sectors < 2) {
       printf("bad total sectors\n");
       return;
    }
 
-   printf("root.m_vacant        = %d\n", root.m_vacant);
-   printf("root.m_chain         = %d\n", root.m_chain);
-   printf("root.m_root          = %d\n", root.m_root);
-   printf("root.m_first         = %d\n", root.m_first);
-   printf("root.m_last          = %d\n", root.m_last);
+   printf("root.m_bottom        = 0x%08x (%10d)\n", root.m_bottom, root.m_bottom);
+   printf("root.m_top           = 0x%08x (%10d)\n", root.m_top, root.m_top);
+   printf("root.m_chain         = 0x%08x (%10d)\n", root.m_chain, root.m_chain);
+   printf("root.m_root          = 0x%08x (%10d)\n", root.m_root, root.m_root);
+   printf("root.m_first         = 0x%08x (%10d)\n", root.m_first, root.m_first);
+   printf("root.m_last          = 0x%08x (%10d)\n", root.m_last, root.m_last);
    printf("root.m_count         = %d\n", root.m_count);
-   printf("root.m_start         = %d\n", root.m_start);
+   printf("root.m_origin        = 0x%08x (%10d)\n", root.m_origin, root.m_origin);
    printf("root.g-r-c           = %d-%08x-%08x\n",
          root.m_generation, root.m_random, root.m_checksum);
    printf("\n");
@@ -884,9 +887,6 @@ static void chain_loop(void) {
    a = b = root.m_chain;
 
    while (a != END && b != END) {
-
-      assert(a < root.m_vacant);
-
       read_buffer(a);
       a = node->m_next;
 
@@ -962,6 +962,7 @@ static void walk_order(void) {
    NAF prev;
    NAF next;
    NAF naf;
+   int count;
 
    if (root.m_first == END && root.m_last == END) {
       return;
@@ -970,6 +971,7 @@ static void walk_order(void) {
    assert(root.m_first != END && root.m_last != END);
 
    // walk forward
+   count = 0;
    prev = END;
    naf = root.m_first;
 
@@ -990,10 +992,12 @@ static void walk_order(void) {
    }
 
    // walk backward
+   count = 0;
    next = END;
    naf = root.m_last;
 
    while (naf != END) {
+      count++;
       read_buffer(naf);
       prev = node->m_prev;
 
@@ -1012,17 +1016,11 @@ static void walk_order(void) {
 
 ///////////////////////////////////////////////////////
 static void verify_integrity(void) {
-   printf("verify integrity order_loop\n");
    order_loop();
-   printf("verify integrity reverse_loop\n");
    reverse_loop();
-   printf("verify integrity chain_loop\n");
    chain_loop();
-   printf("verify integrity walk_chain\n");
    walk_chain();
-   printf("verify integrity walk_tree\n");
    walk_tree(END, root.m_root);
-   printf("verify integrity prev_next_cohesion\n");
    walk_order();
    // TODO test tree <-> first/last cohesion
 }
@@ -1035,133 +1033,71 @@ static void verify_integrity(void) {
 static void narf_chain(NAF naf) {
    NAF prev;
    NAF next;
-   NAF tmp;
-   NarfSector length;
-   NarfSector tmp_length;
+   NarfSector length; // used in multiple places
 
-again:
+   // chain is in order of increasing length
 
-   // reset fields
+   // can we reclaim some bottom space?
    read_buffer(naf);
-   node->m_prev = END;
-   node->m_next = END;
-   node->m_left = END;
-   node->m_right = END;
-   node->m_parent = END;
-   node->m_bytes = 0;
-   // do NOT reset "start" and "length"
-   length = node->m_length;
-   write_buffer(naf);
-
-#ifdef NARF_DEBUG_INTEGRITY
-   printf("chaining...\n");
-   print_node(naf);
-#endif
-
-   // can they be combined with another?
-   prev = END;
-   next = root.m_chain;
-   while(next != END) {
-
-      read_buffer(next);
-
-      // anticipation...
-      tmp = next;
-      tmp_length = node->m_length;
-      next = node->m_next;
-
-      // are the two adjacent?
-      if ((naf == tmp + tmp_length + 2) ||
-            (naf + length + 2 == tmp)) {
-         // remove item from chain
-         if (prev == END) {
-            root.m_chain = next;
-         }
-         else {
-            read_buffer(prev);
-            node->m_next = next;
-            write_buffer(prev);
-         }
-#ifdef NARF_DEBUG_INTEGRITY
-         printf("combining %d %d\n", naf, tmp);
-         print_node(naf);
-         print_node(tmp);
-#endif
-         // combine the two
-         if (tmp < naf) {
-            read_buffer(tmp);
-            node->m_length += length + 2;
-            write_buffer(tmp);
-            naf = tmp;
-         }
-         else {
-            read_buffer(naf);
-            node->m_length += tmp_length + 2;
-            write_buffer(naf);
-         }
-         // reinsert
-         goto again;
-      }
-
-      prev = tmp;
-      // next has already been set!
+   length = node->m_length; // this is from the naf
+   if (node->m_start + length == root.m_bottom) {
+      root.m_bottom -= length;
+      node->m_start = END;
+      length = node->m_length = 0;
+      write_buffer(naf);
    }
 
-   // dumbest case, can we rewind root.m_vacant?
-   if (root.m_vacant == naf + length + 2) {
-#ifdef NARF_DEBUG_INTEGRITY
-      printf("rewind to %d\n", naf);
-#endif
-      root.m_vacant = naf;
+   // can we reclaim some top space?
+   if (length == 0 && naf == root.m_top) {
+      // rare case where we can just drop it on the floor
+      root.m_top += 2;
       return;
    }
 
-   // reset the buffer
-   read_buffer(naf);
-
-   // record them in the free chain
-   if (root.m_chain == END) {
-#ifdef NARF_DEBUG_INTEGRITY
-      printf("head of chain\n");
-#endif
-      // done above // read_buffer(naf);
-      node->m_next = root.m_chain;
-      write_buffer(naf);
-
-      root.m_chain = naf;
+   // get the first node length if possible
+   if (root.m_chain != END) {
+      read_buffer(root.m_chain);
+      length = node->m_length; // this is from first node in chain now
    }
-   else {
-      // smallest records first
-      // done above // read_buffer(naf);
-      length = node->m_length;
 
-      prev = END;
-      next = root.m_chain;
-      read_buffer(next);
+   // some special cases go straight to the front
 
-      while (length > node->m_length && next != END) {
-         prev = next;
-         next = node->m_next;
-         if (next != END) {
-            read_buffer(next);
-         }
+   read_buffer(naf);
+   if (root.m_chain == END || node->m_length <= length) {
+      node->m_next = root.m_chain;
+      root.m_chain = naf;
+      write_buffer(naf);
+      return;
+   }
+
+   length = node->m_length; // this is from naf now
+
+   prev = END;
+   next = root.m_chain;
+   while(1) {
+      if (next != END) {
+         read_buffer(next);
       }
-      if (prev == END) {
-         root.m_chain = naf;
-      }
-      else {
+      if (next == END || node->m_length >= length) {
+         read_buffer(naf);
+         node->m_parent = END;
+         node->m_left = END;
+         node->m_right = END;
+         node->m_prev = END;
+         node->m_next = next;
+         write_buffer(naf);
+
          read_buffer(prev);
          node->m_next = naf;
          write_buffer(prev);
+
+         return;
       }
-      read_buffer(naf);
-      node->m_next = next;
-      write_buffer(naf);
+      prev = next;
+      next = node->m_next;
    }
 
-#ifdef NARF_DEBUG_INTEGRITY
-   verify_integrity();
-#endif
+   assert(0); // we should never get this far
 }
 
 ///////////////////////////////////////////////////////
@@ -1170,7 +1106,7 @@ again:
 //! @return true for success
 static bool narf_insert(NAF naf, const char *key) {
    NAF tmp;
-   NAF p;
+   NAF parent;
    int cmp;
    int height;
 
@@ -1184,26 +1120,26 @@ static bool narf_insert(NAF naf, const char *key) {
       root.m_last = naf;
    }
    else {
-      p = root.m_root;
+      parent = root.m_root;
       while (1) {
-         read_buffer(p);
+         read_buffer(parent);
          cmp = strncmp(key, node->m_key, KEYSIZE);
          if (cmp < 0) {
             if (node->m_left != END) {
-               p = node->m_left;
+               parent = node->m_left;
                ++height;
             }
             else {
-               // we are the new left of p
+               // we are the new left of parent
                node->m_left = naf;
                tmp = node->m_prev;
                node->m_prev = naf;
-               write_buffer(p);
+               write_buffer(parent);
 
                read_buffer(naf);
-               node->m_parent = p;
+               node->m_parent = parent;
                node->m_prev = tmp;
-               node->m_next = p;
+               node->m_next = parent;
                write_buffer(naf);
 
                if (tmp != END) {
@@ -1220,7 +1156,7 @@ static bool narf_insert(NAF naf, const char *key) {
          }
          else if (cmp > 0) {
             if (node->m_right != END) {
-               p = node->m_right;
+               parent = node->m_right;
                ++height;
             }
             else {
@@ -1228,12 +1164,12 @@ static bool narf_insert(NAF naf, const char *key) {
                node->m_right = naf;
                tmp = node->m_next;
                node->m_next = naf;
-               write_buffer(p);
+               write_buffer(parent);
 
                read_buffer(naf);
-               node->m_parent = p;
+               node->m_parent = parent;
                node->m_next = tmp;
-               node->m_prev = p;
+               node->m_prev = parent;
                write_buffer(naf);
 
                if (tmp != END) {
@@ -1273,13 +1209,14 @@ bool narf_mkfs(NarfSector start, NarfSector size) {
    root.m_version       = VERSION;
    root.m_sector_size   = NARF_SECTOR_SIZE;
    root.m_total_sectors = size;
-   root.m_vacant        = 2;
+   root.m_bottom        = 2;
+   root.m_top           = size;
    root.m_root          = END;
    root.m_first         = END;
    root.m_last          = END;
    root.m_chain         = END;
    root.m_count         = 0;
-   root.m_start         = start;
+   root.m_origin         = start;
 
    root.m_generation    = 0;
    root.m_random        = lrand48();
@@ -1371,6 +1308,17 @@ hi_is_good:
       }
    }
 
+   // TODO FIX kill anything from past failed writes
+#if 0 
+   // blank out hi!
+   memset(buffer_hi, 0, sizeof(buffer_hi));
+   narf_io_write(root.m_origin + naf + 1, buffer_hi);
+
+   // blank out lo!
+   memset(buffer_lo, 0, sizeof(buffer_lo));
+   narf_io_write(root.m_origin + naf, buffer_lo);
+#endif
+
    return verify();
 }
 
@@ -1402,7 +1350,7 @@ static void narf_end(void) {
       root.m_random = lrand48();
       root.m_checksum = crc32(&root, NARF_SECTOR_SIZE - sizeof(uint32_t));
       write_root_to_hi = !write_root_to_hi;
-      narf_io_write(root.m_start + (write_root_to_hi ? 0 : 1), &root);
+      narf_io_write(root.m_origin + (write_root_to_hi ? 0 : 1), &root);
    }
 }
 
@@ -1584,25 +1532,50 @@ static NAF narf_unchain(NarfSector length) {
 static NAF narf_new(NarfSector length) {
    NAF naf;
 
-   if (root.m_vacant + length + 2 > root.m_total_sectors) {
-      // NO ROOM!!!
+   if ((root.m_bottom + 2) > (root.m_top - length)) {
+      // OUT OF SPACE COLLISSION!!!
+
+      // TODO FIX can we defrag for more room?
+      // let's just bail for now.
+
       return END;
    }
 
-   naf = root.m_vacant;
+   // maybe we can reclaim a node?
+   naf = narf_unchain(0);
+
+   if (naf == END) {
+      // nope, allocate a new one
+      root.m_top -= 2;
+      naf = root.m_top;
+   }
 
    // special case
+   //
    // initialize the storage to zero
    // and zero out our buffers
-   memset(buffer_lo, 0, NARF_SECTOR_SIZE);
-   narf_io_write(naf, buffer_lo);
-   memset(buffer_hi, 0, NARF_SECTOR_SIZE);
-   narf_io_write(naf + 1, buffer_hi);
 
-   root.m_vacant += 2;
-   node->m_start  = length ? root.m_vacant : END;
+   memset(buffer_lo, 0, NARF_SECTOR_SIZE);
+   narf_io_write(root.m_origin + naf, buffer_lo);
+
+   memset(buffer_hi, 0, NARF_SECTOR_SIZE);
+   narf_io_write(root.m_origin + naf + 1, buffer_hi);
+
+   // we don't know where node is pointing, but it doesn't matter
+   // because everything is nulled out
+
+   node->m_start  = length ? root.m_bottom : END;
    node->m_length = length;
-   root.m_vacant += length;
+
+   root.m_bottom += length;
+ 
+   node->m_parent = END;
+   node->m_left   = END;
+   node->m_right  = END;
+
+   node->m_prev   = END;
+   node->m_next   = END;
+
    write_buffer(naf);
 
    return naf;
@@ -1658,7 +1631,7 @@ NAF narf_alloc(const char *key, NarfByteSize bytes) {
    write_buffer(naf);
 
 #ifdef NARF_DEBUG_INTEGRITY
-   printf("alloc %08x %08x %d %d\n",
+   printf("alloc naf= %08x start=%08x length=%d bytes=%d\n",
          naf, node->m_start, node->m_length, node->m_bytes);
 #endif
 
@@ -1693,8 +1666,8 @@ void narf_copyswap(NAF alpha, NAF beta, NarfByteSize bytes) {
    beta_length = node->m_length;
 
    for (i = 0; i < alpha_length; ++i) {
-      narf_io_read(root.m_start + alpha_start + i, buffer_lo);
-      narf_io_write(root.m_start + beta_start + i, buffer_lo);
+      narf_io_read(root.m_origin + alpha_start + i, buffer_lo);
+      narf_io_write(root.m_origin + beta_start + i, buffer_lo);
    }
 
    read_buffer(alpha);
@@ -1788,6 +1761,8 @@ bool narf_free(const char *key) {
    }
 
    narf_begin();
+
+   --root.m_count;
 
    // unlink from tree
    read_buffer(naf);
@@ -2063,116 +2038,8 @@ bool narf_rebalance(void) {
 ///////////////////////////////////////////////////////
 //! @see narf.h
 bool narf_defrag(void) {
-#if 0
-   NAF tmp;
-   NAF other;
-   NAF parent;
-   NAF left;
-   NAF right;
-   NAF prev;
-   NAF next;
-   NarfSector tmp_length;
-   NarfSector other_length;
-   NarfSector i;
-
-   narf_begin();
-
-   while (root.m_chain != END) {
-      tmp = root.m_chain;
-      read_buffer(tmp);
-      root.m_chain = node->m_next;
-      tmp_length = node->m_length;
-
-      other = tmp + tmp_length + 2;
-      read_buffer(other);
-      other_length = node->m_length;
-      parent = node->m_parent;
-      left = node->m_left;
-      right = node->m_right;
-      prev = node->m_prev;
-      next = node->m_next;
-      node->m_start = tmp + 2;
-      write_buffer(tmp);
-
-      for (i = 0; i < other_length; ++i) {
-         narf_io_read(other + i + 2, buffer_lo);
-         narf_io_write(tmp + i + 2, buffer_lo); // bypass integrity
-      }
-
-      if (parent != END) {
-         read_buffer(parent);
-         if (node->m_left == other) {
-            node->m_left = tmp;
-         }
-         else if (node->m_right == other) {
-            node->m_right = tmp;
-         }
-         else {
-            // this should never happen
-            assert(0);
-         }
-         write_buffer(parent);
-      }
-      else {
-         root.m_root = tmp;
-      }
-
-      if (left != END) {
-         read_buffer(left);
-         node->m_parent = tmp;
-         write_buffer(left);
-      }
-
-      if (right != END) {
-         read_buffer(right);
-         node->m_parent = tmp;
-         write_buffer(right);
-      }
-
-      if (prev != END) {
-         read_buffer(prev);
-         node->m_next = tmp;
-         write_buffer(prev);
-      }
-      else {
-         root.m_first = tmp;
-      }
-
-      if (next != END) {
-         read_buffer(next);
-         node->m_prev = tmp;
-         write_buffer(next);
-      }
-      else {
-         root.m_last = tmp;
-      }
-
-      other = tmp + other_length + 2;
-
-      // we're building a new node from junk data,
-      // and we're just going to chain it,
-      // so there's no point in doing a read here.
-
-      // in fact, we need to destructively blank
-      // some stuff.
-
-      memset(buffer_lo, 0, NARF_SECTOR_SIZE);
-      memset(buffer_hi, 0, NARF_SECTOR_SIZE);
-      narf_io_write(other, buffer_lo);
-      narf_io_write(other + 1, buffer_hi);
-
-      node->m_start = other + 2;
-      node->m_length = tmp_length;
-      write_buffer(other);
-
-      narf_chain(other);
-   }
-
-   narf_end();
-
 #ifdef NARF_DEBUG_INTEGRITY
    verify_integrity();
-#endif
 #endif
    return true;
 }
@@ -2286,12 +2153,12 @@ bool narf_append(const char *key, const void *data, NarfByteSize size) {
    remain = NARF_SECTOR_SIZE - begin;
 
    while (size) {
-      narf_io_read(start + current, buffer_lo);
+      narf_io_read(root.m_origin + start + current, buffer_lo);
       if (remain > size) {
          remain = size;
       }
       memcpy(buffer + begin, data, remain);
-      narf_io_write(start + current, buffer_lo); // bypass integrity
+      narf_io_write(root.m_origin + start + current, buffer_lo); // bypass integrity
 
       // advance all our pointers
       data = (uint8_t *) data + remain;
