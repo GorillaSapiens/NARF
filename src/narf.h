@@ -425,7 +425,7 @@ NAF narf_previous(NAF naf);
 //! overwritten by any subsequent narf_*() call!
 //!
 //! Retrieve the metadata associated with the NAF.
-//! This is an array of 32 bytes.  NARF does not
+//! This is an array of 128 bytes.  NARF does not
 //! do anything with this data, you may assign any
 //! use to it you like.
 //!
@@ -439,8 +439,11 @@ NAF narf_previous(NAF naf);
 //! narf_metadata() is power loss robust because it does
 //! not write to the media.
 //!
+//! returns a pointer that WILL be overwritten by
+//! subsequent narf_*() calls.
+//!
 //! @param naf The NAF to get the metadata from
-//! @return A pointer to an array of 32 bytes
+//! @return A pointer to an array of 128 bytes
 void *narf_metadata(NAF naf);
 
 ///////////////////////////////////////////////////////
@@ -452,7 +455,7 @@ void *narf_metadata(NAF naf);
 //! narf_set_metadata() is power loss robust.
 //!
 //! @param naf The NAF to set metadata for
-//! @param data Pointer to array of 32 bytes
+//! @param data Pointer to array of 128 bytes
 //! @return true on success, false on failure
 bool narf_set_metadata(NAF naf, void *data);
 
