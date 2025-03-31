@@ -2089,7 +2089,8 @@ bool narf_rebalance(void) {
    return true;
 }
 
-void defrag_unchain(NAF naf) {
+///////////////////////////////////////////////////////
+static void defrag_unchain(NAF naf) {
    NAF prev = END;
    NAF next = root.m_chain;
 
@@ -2117,10 +2118,8 @@ void defrag_unchain(NAF naf) {
 //! @brief Combine two adjacent free data spaces
 //!
 //! this is power loss robust
-void defrag_two_free(NAF free1, NAF free2) {
+static void defrag_two_free(NAF free1, NAF free2) {
    NarfSector length;
-
-   printf("%s\n", __func__);
 
    narf_begin();
 
@@ -2148,7 +2147,7 @@ void defrag_two_free(NAF free1, NAF free2) {
 //! @brief handle adjacent free and tree nodes
 //!
 //! this is power loss robust
-void defrag_free_tree(NAF free1, NAF tree2) {
+static void defrag_free_tree(NAF free1, NAF tree2) {
    NarfSector f_start;
    NarfSector f_length;
    NarfSector t_start;
@@ -2164,7 +2163,6 @@ void defrag_free_tree(NAF free1, NAF tree2) {
    t_length = node->m_length;
 
    if (f_length >= t_length) {
-   printf("EASY\n");
       // easy case, non overlapping
       for (i = 0; i < t_length; i++) {
          narf_io_read(root.m_origin + t_start + i, buffer_lo);
@@ -2186,9 +2184,9 @@ void defrag_free_tree(NAF free1, NAF tree2) {
       narf_end();
    }
    else {
-   printf("HARD\n");
       // overwriting valid data is bad for power loss
       // so we ALLOCATE new data and move it there!
+      // hopefully this will let us move other stuff down.
       for (i = 0; i < t_length; i++) {
          narf_io_read(root.m_origin + t_start + i, buffer_lo);
          narf_io_write(root.m_origin + root.m_bottom + i, buffer_lo);
@@ -2212,23 +2210,14 @@ void defrag_free_tree(NAF free1, NAF tree2) {
 }
 
 ///////////////////////////////////////////////////////
-//! @see narf.h
-bool narf_defrag(void) {
+static void defrag_carve(void) {
    NAF tmp;
    NAF next;
-   NAF lowest;
    NarfSector start;
    NarfSector length;
    NarfSector new_start;
    NarfSector new_length;
 
-   if (!verify()) return false;
-
-   // to maintain power loss robustness, we need to be
-   // very careful.  in particular, we can't overwrite
-   // data.  so we need to do this in small steps.
-
-   // first, carve free space from over long files
    for (tmp = root.m_first; tmp != END; tmp = next) {
       read_buffer(tmp);
       next = node->m_next;
@@ -2236,7 +2225,6 @@ bool narf_defrag(void) {
       length = BYTES2SECTORS(node->m_bytes);
 
       if (node->m_length > length) {
-         printf("calve %d %d:%d\n", tmp, start, node->m_length);
          narf_begin();
 
          new_start = start + length;
@@ -2244,14 +2232,12 @@ bool narf_defrag(void) {
 
          node->m_length = length;
          write_buffer(tmp);
-         printf("now %d %d:%d\n", tmp, start, node->m_length);
 
          tmp = narf_new(0);
          read_buffer(tmp);
          node->m_start = new_start;
          node->m_length = new_length;
          write_buffer(tmp);
-         printf("and %d %d:%d\n", tmp, node->m_start, node->m_length);
 
          narf_chain(tmp);
 
@@ -2262,12 +2248,16 @@ bool narf_defrag(void) {
 #endif
       }
    }
+}
 
-   // second, squish down
+///////////////////////////////////////////////////////
+static void defrag_squish(void) {
+   NAF tmp;
+   NAF lowest;
+   NarfSector start;
+   NarfSector length;
+
    while (1) {
-
-narf_debug(END);
-
       // find lowest free node
       lowest = END;
       for (tmp = root.m_chain; tmp != END; tmp = node->m_next) {
@@ -2282,11 +2272,8 @@ narf_debug(END);
       }
 
       if (lowest == END) {
-         printf("lowest = END, break\n");
          break;
       }
-
-      printf("lowest = %08x %08x:%d\n", lowest, start, length);
 
       // find the node with successor data, which could be on
       // the chain OR in the tree
@@ -2294,7 +2281,6 @@ narf_debug(END);
       // check the chain first
       for (tmp = root.m_chain; tmp != END; tmp = node->m_next) {
          read_buffer(tmp);
-      printf("chain tmp = %08x %08x:%d\n", tmp, node->m_start, node->m_length);
          if (node->m_start == start + length) {
             // we found it, let's combine them.
             defrag_two_free(lowest, tmp);
@@ -2305,7 +2291,6 @@ narf_debug(END);
       // check the tree next
       for (tmp = root.m_first; tmp != END; tmp = node->m_next) {
          read_buffer(tmp);
-      printf("tree tmp = %08x %08x:%d\n", tmp, node->m_start, node->m_length);
          if (node->m_start == start + length) {
             // we found it, let's combine them.
             defrag_free_tree(lowest, tmp);
@@ -2326,9 +2311,126 @@ narf_debug(END);
 
       assert(0);
 
-      another:
+another:
    }
+}
 
+///////////////////////////////////////////////////////
+static bool defrag_ischained(NAF naf) {
+   NAF tmp;
+   for (tmp = root.m_chain; tmp != END; tmp = node->m_next) {
+      if (naf == tmp) {
+         return true;
+      }
+      read_buffer(tmp);
+   }
+   return false;
+}
+
+///////////////////////////////////////////////////////
+static void defrag_tidy(void) {
+   NAF tmp;
+   NAF parent, left, right;
+   NAF prev, next;
+
+   while (root.m_chain != END) {
+      if (defrag_ischained(root.m_top)) {
+         narf_begin();
+         defrag_unchain(root.m_top);
+         root.m_top += 2;
+         narf_end();
+      }
+      else {
+         tmp = root.m_chain;
+         read_buffer(tmp);
+         if (node->m_length == 0) {
+            narf_begin();
+
+            root.m_chain = node->m_next;
+
+            read_buffer(root.m_top);
+
+            prev = node->m_prev;
+            next = node->m_next;
+
+            parent = node->m_parent;
+            left = node->m_left;
+            right = node->m_right;
+
+            write_buffer(tmp);
+
+            if (prev != END) {
+               read_buffer(prev);
+               node->m_next = tmp;
+               write_buffer(prev);
+            }
+            else {
+               root.m_first = tmp;
+            }
+
+            if (next != END) {
+               read_buffer(next);
+               node->m_prev = tmp;
+               write_buffer(next);
+            }
+            else {
+               root.m_last = tmp;
+            }
+
+            if (left != END) {
+               read_buffer(left);
+               node->m_parent = tmp;
+               write_buffer(left);
+            }
+
+            if (right != END) {
+               read_buffer(right);
+               node->m_parent = tmp;
+               write_buffer(right);
+            }
+
+            if (parent != END) {
+               read_buffer(parent);
+               if (node->m_left == root.m_top) {
+                  node->m_left = tmp;
+               }
+               else if (node->m_right == root.m_top) {
+                  node->m_right = tmp;
+               }
+               else {
+                  assert(0);
+               }
+               write_buffer(parent);
+            }
+            else {
+               root.m_root = tmp;
+            }
+
+            root.m_top += 2;
+
+            narf_end();
+         }
+      }
+   }
+}
+
+///////////////////////////////////////////////////////
+//! @see narf.h
+bool narf_defrag(void) {
+   if (!verify()) return false;
+
+   // to maintain power loss robustness, we need to be
+   // very careful.  in particular, we can't overwrite
+   // data.  so we need to do this in small steps.
+
+   // first, carve free space from over long files
+   defrag_carve();
+
+   // second, squish down
+   defrag_squish();
+
+   // third, tidy up nodes.
+   defrag_tidy();
 
 #ifdef NARF_DEBUG_INTEGRITY
    verify_integrity();

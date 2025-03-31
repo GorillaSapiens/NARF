@@ -34,22 +34,29 @@ const char *strichr(const char *s, int c) {
 //! Used by outside
 void narf_io_configure(const char *file) {
    char *p;
+
    filename = file;
    if (*file == '=') {
-      total_bytes = atoi(file + 1);
-      if (strichr(file, 'k')) {
-         total_bytes *= 1024;
-      }
-      else if (strichr(file, 'm')) {
-         total_bytes *= 1024 * 1024;
-      }
-      else if (strichr(file, 'g')) {
-         total_bytes *= 1024 * 1024 * 0124;
-      }
       p = strchr(file, ',');
-      if (p != NULL) {
+      if (p) {
+         *p = 0;
          filename = p + 1;
       }
+
+      total_bytes = atoi(file + 1);
+      printf("total_bytes = %ld\n", total_bytes);
+
+      if (strichr(file, 'k')) {
+         total_bytes <<= 10;
+      }
+      else if (strichr(file, 'm')) {
+         total_bytes <<= 20;
+      }
+      else if (strichr(file, 'g')) {
+         total_bytes <<= 30;
+      }
+      printf("total_bytes = %ld\n", total_bytes);
+
    }
 }
 
@@ -73,6 +80,7 @@ bool narf_io_open(void) {
       // we use dd to create an empty file from /dev/zero
       sprintf(cmd, "dd if=/dev/zero of=%s bs=%ld count=1",
          filename, total_bytes);
+      printf("%s\n", cmd);
       if (system(cmd)) {
          if (errno) {
             fprintf(stderr, "system %s\n", cmd);

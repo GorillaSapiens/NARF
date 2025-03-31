@@ -287,7 +287,7 @@ void gremlins(int s, int n) {
                      sprintf(buf, "rebalance");
                      break;
                   case 1:
-                     //sprintf(buf, "defrag");
+                     sprintf(buf, "defrag");
                      break;
                   default:
                      sprintf(buf, "cat %s", rname(l));
@@ -302,7 +302,9 @@ void gremlins(int s, int n) {
       printf("\n");
       process_cmd(buf);
       printf("\nAFTER:\n");
+#ifdef NARF_DEBUG
       narf_debug(-1);
+#endif
       printf("\n");
    }
 
