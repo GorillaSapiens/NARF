@@ -107,12 +107,6 @@ void process_cmd(char *buffer) {
       printf("narf_mount(%d)=%s\n",
             part, tf[narf_mount(part)]);
    }
-   else if (!strncmp(buffer, "rebalance", 9)) {
-      bool result;
-
-      printf("narf_rebalance()=%s\n",
-            tf[result ASSIGN narf_rebalance()]);
-   }
 #ifdef NARF_DEBUG
    else if (!strncmp(buffer, "debug ", 6)) {
       narf_debug(atoi(buffer + 6));
@@ -263,7 +257,7 @@ void gremlins(int s, int n) {
    process_cmd("mount 1");
 
    for(m = 0; m < n; m++) {
-      switch(rand() % 5) { // TODO FIX make rebalance / defrag infrequent
+      switch(rand() % 5) {
          case 0:
             sprintf(buf, "alloc %s %d", rname(l), rand() % 65536);
             break;
@@ -281,12 +275,9 @@ void gremlins(int s, int n) {
             break;
          case 4:
             {
-               int z = rand() % 50;
+               int z = rand() % 100;
                switch(z) {
                   case 0:
-                     sprintf(buf, "rebalance");
-                     break;
-                  case 1:
                      sprintf(buf, "defrag");
                      break;
                   default:

@@ -238,7 +238,6 @@ NAF narf_dirnext(const char *dirname,
 //! @brief Allocate storage for key
 //! @see narf_realloc()
 //! @see narf_free()
-//! @see narf_rebalance()
 //!
 //! Create and allocate storage for a key.
 //!
@@ -257,7 +256,6 @@ NAF narf_alloc(const char *key,
 //! @brief Grow or shrink storage for key
 //! @see narf_alloc()
 //! @see narf_free()
-//! @see narf_rebalance()
 //!
 //! Grow or shrink the key's data allocation.
 //! Will NOT move the NAF.  If a NAF for the
@@ -279,7 +277,6 @@ NAF narf_realloc(const char *key,
 //! @brief Free storage for key
 //! @see narf_alloc()
 //! @see narf_realloc()
-//! @see narf_rebalance()
 //!
 //! Frees up (deletes) space allocated by narf_alloc(),
 //! including the key itself.
@@ -289,22 +286,6 @@ NAF narf_realloc(const char *key,
 //! @param key The key we're freeing
 //! @return true for success
 bool narf_free(const char *key);
-
-///////////////////////////////////////////////////////
-//! @brief Rebalance the entire tree
-//! @see narf_alloc()
-//! @see narf_free()
-//!
-//! Rebalances the NARF binary tree.  This is an
-//! expensive operation.
-//!
-//! Other NARF functions (narf_alloc(), narf_free())
-//! may call this for you under some circumstances.
-//!
-//! narf_rebalance() is power loss robust.
-//!
-//! @return true for success
-bool narf_rebalance(void);
 
 ///////////////////////////////////////////////////////
 //! @brief Defragment and compact the NARF
