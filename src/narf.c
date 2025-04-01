@@ -119,12 +119,15 @@ typedef struct PACKED {
    NarfSector   m_length;      // data length in sectors
    NarfByteSize m_bytes;       // data size in bytes
 
+   uint8_t m_height; // used by AVL logic
+
    uint8_t m_metadata[128]; // not used by NARF
 
    char         m_key     [ NARF_SECTOR_SIZE -
                             5 * sizeof(NAF) -
                             2 * sizeof(NarfSector) -
                             1 * sizeof(NarfByteSize) -
+                            1 -
                             128 -
                             3 * sizeof(uint32_t) ];
 
@@ -618,20 +621,26 @@ static bool verify(void) {
 //! @param indent The number of levels to indent
 //! @param pattern Bitfield indicating tree limbs to print
 static void narf_pt(NAF naf, int indent, uint32_t pattern) {
-   NAF l;
-   NAF r;
+   NAF left;
+   NAF right;
+   int height;
+   NAF start;
+   NarfSector length;
    int i;
-   char *p;
+   char *key;
    char *arm;
 
    if (!verify()) return;
 
    if (naf != END) {
       read_buffer(naf);
-      l = node->m_left;
-      r = node->m_right;
-      p = strdup(node->m_key);
-      narf_pt(l, indent + 1, pattern);
+      left = node->m_left;
+      right = node->m_right;
+      height = node->m_height;
+      start = node->m_start;
+      length = node->m_length;
+      key = strdup(node->m_key);
+      narf_pt(left, indent + 1, pattern);
    }
 
    for (i = 0; i < indent; i++) {
@@ -680,7 +689,8 @@ static void narf_pt(NAF naf, int indent, uint32_t pattern) {
       return;
    }
    else {
-      printf("%s %s [%d]", arm, p, naf);
+      printf("%s %s [%08x] (%08x:%d) ^%d",
+         arm, key, naf, start, length, height);
       if (naf == root.m_first) {
          printf(" (first)");
       }
@@ -695,10 +705,10 @@ static void narf_pt(NAF naf, int indent, uint32_t pattern) {
          printf(" (chain)");
       }
       printf("\n");
-      free(p);
+      free(key);
    }
 
-   narf_pt(r, indent + 1, (pattern ^ (3 << (indent))) & ~1);
+   narf_pt(right, indent + 1, (pattern ^ (3 << (indent))) & ~1);
 }
 
 ///////////////////////////////////////////////////////
@@ -1153,6 +1163,229 @@ static void narf_chain(NAF naf) {
 }
 
 ///////////////////////////////////////////////////////
+static void avl_adjust_heights(NAF naf) {
+   int lh, rh, nh;
+   NAF left, right;
+
+   while (naf != END) {
+      read_buffer(naf);
+      left = node->m_left;
+      right = node->m_right;
+
+      if (left != END) {
+         read_buffer(left);
+         lh = node->m_height + 1;
+      }
+      else {
+         lh = 0;
+      }
+
+      if (right != END) {
+         read_buffer(right);
+         rh = node->m_height + 1;
+      }
+      else {
+         rh = 0;
+      }
+
+      nh = ((lh > rh) ? lh : rh);
+
+      read_buffer(naf);
+      if (node->m_height != nh) {
+         node->m_height = nh;
+         write_buffer(naf);
+         naf = node->m_parent;
+      }
+      else {
+         naf = END;
+      }
+   }
+}
+
+///////////////////////////////////////////////////////
+static int avl_bf(NAF naf) {
+   NAF left, right;
+   int lh;
+   int rh;
+
+   read_buffer(naf);
+   left = node->m_left;
+   right = node->m_right;
+
+   if (left != END) {
+      read_buffer(left);
+      lh = node->m_height;
+   }
+   else {
+      lh = -1;
+   }
+
+   if (right != END) {
+      read_buffer(right);
+      rh = node->m_height;
+   }
+   else {
+      rh = -1;
+   }
+
+   return (lh - rh);
+}
+
+///////////////////////////////////////////////////////
+static void avl_ll(NAF naf) { // AKA right rotation
+   NAF left, parent, child;
+
+   read_buffer(naf);
+   left = node->m_left;
+   parent = node->m_parent;
+
+   read_buffer(left);
+   child = node->m_right;
+
+   read_buffer(naf);
+   node->m_left = child;
+   node->m_parent = left;
+   write_buffer(naf);
+
+   read_buffer(left);
+   node->m_right = naf;
+   node->m_parent = parent;
+   write_buffer(left);
+
+   if (child != END) {
+      read_buffer(child);
+      node->m_parent = naf;
+      write_buffer(child);
+   }
+
+   if (parent != END) {
+      read_buffer(parent);
+      if (node->m_left == naf) {
+         node->m_left = left;
+      }
+      else if (node->m_right == naf) {
+         node->m_right = left;
+      }
+      else {
+         assert(0);
+      }
+      write_buffer(parent);
+   }
+   else {
+      root.m_root = left;
+   }
+
+   avl_adjust_heights(naf);
+}
+
+///////////////////////////////////////////////////////
+static void avl_rr(NAF naf) { // AKA left rotation
+   NAF right, parent, child;
+
+   read_buffer(naf);
+   right = node->m_right;
+   parent = node->m_parent;
+
+   read_buffer(right);
+   child = node->m_left;
+
+   read_buffer(naf);
+   node->m_right = child;
+   node->m_parent = right;
+   write_buffer(naf);
+
+   read_buffer(right);
+   node->m_left = naf;
+   node->m_parent = parent;
+   write_buffer(right);
+
+   if (child != END) {
+      read_buffer(child);
+      node->m_parent = naf;
+      write_buffer(child);
+   }
+
+   if (parent != END) {
+      read_buffer(parent);
+      if (node->m_left == naf) {
+         node->m_left = right;
+      }
+      else if (node->m_right == naf) {
+         node->m_right = right;
+      }
+      else {
+         assert(0);
+      }
+      write_buffer(parent);
+   }
+   else {
+      root.m_root = right;
+   }
+
+   avl_adjust_heights(naf);
+}
+
+///////////////////////////////////////////////////////
+static void avl_lr(NAF naf) {
+   // left rotation on the left child
+   read_buffer(naf);
+   avl_rr(node->m_left);
+   // then a right rotation
+   avl_ll(naf);
+}
+
+///////////////////////////////////////////////////////
+static void avl_rl(NAF naf) {
+   // right rotation on the right child
+   read_buffer(naf);
+   avl_ll(node->m_right);
+   // then a left rotation
+   avl_rr(naf);
+}
+
+///////////////////////////////////////////////////////
+static void avl_rebalance(NAF naf) {
+   int bf, cf;
+   NAF left, right;
+
+   while (naf != END) {
+      read_buffer(naf);
+      left = node->m_left;
+      right = node->m_right;
+
+      bf = avl_bf(naf);
+
+      if (bf < -1) {
+         // right heavy
+         cf = avl_bf(right);
+         if (cf < 0) {
+            // RR rotation
+            avl_rr(naf);
+         }
+         else {
+            // RL rotation
+            avl_rl(naf);
+         }
+      }
+      else if (bf > 1) {
+         // left heavy
+         cf = avl_bf(left);
+         if (cf < 0) {
+            // LR rotiation
+            avl_lr(naf);
+         }
+         else {
+            // LL rotation
+            avl_ll(naf);
+         }
+      }
+
+      read_buffer(naf);
+      naf = node->m_parent;
+   }
+}
+
+///////////////////////////////////////////////////////
 //! @brief Insert NAF into the tree and list.
 //!
 //! @return true for success
@@ -1170,6 +1403,9 @@ static bool narf_insert(NAF naf, const char *key) {
       root.m_root = naf;
       root.m_first = naf;
       root.m_last = naf;
+      read_buffer(naf);
+      node->m_height = 0;
+      write_buffer(naf);
    }
    else {
       parent = root.m_root;
@@ -1189,6 +1425,7 @@ static bool narf_insert(NAF naf, const char *key) {
                write_buffer(parent);
 
                read_buffer(naf);
+               node->m_height = -1;
                node->m_parent = parent;
                node->m_prev = tmp;
                node->m_next = parent;
@@ -1202,6 +1439,8 @@ static bool narf_insert(NAF naf, const char *key) {
                else {
                   root.m_first = naf;
                }
+
+               avl_adjust_heights(naf);
 
                break;
             }
@@ -1219,6 +1458,7 @@ static bool narf_insert(NAF naf, const char *key) {
                write_buffer(parent);
 
                read_buffer(naf);
+               node->m_height = -1;
                node->m_parent = parent;
                node->m_next = tmp;
                node->m_prev = parent;
@@ -1233,6 +1473,8 @@ static bool narf_insert(NAF naf, const char *key) {
                   root.m_last = naf;
                }
 
+               avl_adjust_heights(naf);
+
                break;
             }
          }
@@ -1241,6 +1483,8 @@ static bool narf_insert(NAF naf, const char *key) {
             assert(0);
          }
       }
+
+      avl_rebalance(naf);
    }
    return true;
 }
@@ -1838,6 +2082,8 @@ bool narf_free(const char *key) {
       }
       write_buffer(parent);
 
+      avl_adjust_heights(parent);
+
       // use repl to replace us
 
       read_buffer(naf);
@@ -1879,6 +2125,8 @@ bool narf_free(const char *key) {
          node->m_parent = repl;
          write_buffer(right);
       }
+
+      avl_adjust_heights(repl);
    }
    else {
       // one or no children
@@ -1906,6 +2154,8 @@ bool narf_free(const char *key) {
             node->m_parent = parent;
             write_buffer(child);
          }
+
+         avl_adjust_heights(parent);
       }
    }
 
