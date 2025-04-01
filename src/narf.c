@@ -82,24 +82,29 @@ typedef struct PACKED {
    NAF m_first;              // sector of first node in key order
    NAF m_last;               // sector of last node in key order
    NAF m_chain;              // previously allocated but free now
-   NarfSector   m_count;         // count of total number of allocated NAF
-   NarfSector   m_bottom;        // relative number of first unallocated sector
-   NarfSector   m_top;           // relative number of last unallocated sector + 1
+   NarfSector   m_count;     // count of total number of allocated NAF
+   NarfSector   m_bottom;    // relative number of first unallocated sector
+   NarfSector   m_top;       // relative number of last unallocated sector + 1
 
-   NarfSector   m_origin;        // absolute number where the root sector lives
+   NarfSector   m_origin;    // absolute number where the root sector lives
 
+#if 0
    // TODO FIX this is wasted space, fix it.
    uint8_t      m_reserved[ NARF_SECTOR_SIZE -
                             1 * sizeof(NarfByteSize) -
                             5 * sizeof(NarfSector) -
                             4 * sizeof(NAF) -
                             5 * sizeof(uint32_t) ];
+#endif
 
    uint32_t     m_generation;  // the generation number
    uint32_t     m_random;      // lfsr sequence number
    uint32_t     m_checksum;    // crc32
 } Root;
-static_assert(sizeof(Root) == NARF_SECTOR_SIZE, "Root wrong size");
+static_assert(5 * sizeof(uint32_t) +
+              1 * sizeof(NarfByteSize) +
+              5 * sizeof(NarfSector) +
+              4 * sizeof(NAF) == sizeof(Root), "Root wrong size");
 
 ///////////////////////////////////////////////////////
 //! @brief A Node structure to hold NAF details
@@ -207,8 +212,8 @@ static bool read_buffer(NAF naf) {
          gen_lo = node_lo->m_generation;
          gen_hi = node_hi->m_generation;
 
-         if (gen_lo <= root.m_generation) {
-            if (gen_hi <= root.m_generation) {
+         if ((root.m_generation - gen_lo) >= 0) {
+            if ((root.m_generation - gen_hi) >= 0) {
                // both good
 
                tmp = gen_lo - gen_hi;
@@ -242,7 +247,7 @@ static bool read_buffer(NAF naf) {
             }
          }
          else {
-            if (gen_hi <= root.m_generation) {
+            if ((root.m_generation - gen_hi) >= 0) {
                // only hi good
                goto hi_is_good;
             }
@@ -1262,13 +1267,13 @@ bool narf_mkfs(NarfSector start, NarfSector size) {
 
    root.m_generation    = 0;
    root.m_random        = lrand48();
-   root.m_checksum      = crc32(&root, NARF_SECTOR_SIZE - sizeof(uint32_t));
+   root.m_checksum      = crc32(&root, sizeof(Root) - sizeof(uint32_t));
 
    memcpy(buffer_lo, &root, sizeof(root));
    narf_io_write(start, buffer_lo);
 
    root.m_random        = lrand48();
-   root.m_checksum      = crc32(&root, NARF_SECTOR_SIZE - sizeof(uint32_t));
+   root.m_checksum      = crc32(&root, sizeof(Root) - sizeof(uint32_t));
 
    memcpy(buffer_lo, &root, sizeof(root));
    narf_io_write(start + 1, buffer_lo);
@@ -1303,8 +1308,8 @@ bool narf_init(NarfSector start) {
    ret = narf_io_read(start + 1, buffer_hi);
    if (!ret) return false;
 
-   ck_lo = crc32(root_lo, NARF_SECTOR_SIZE - sizeof(uint32_t));
-   ck_hi = crc32(root_hi, NARF_SECTOR_SIZE - sizeof(uint32_t));
+   ck_lo = crc32(root_lo, sizeof(Root) - sizeof(uint32_t));
+   ck_hi = crc32(root_hi, sizeof(Root) - sizeof(uint32_t));
 
    if (ck_lo == root_lo->m_checksum) {
       if (ck_hi == root_hi->m_checksum) {
@@ -1393,9 +1398,11 @@ static void narf_end(void) {
    --semaphore;
    if (!semaphore) {
       root.m_random = lrand48();
-      root.m_checksum = crc32(&root, NARF_SECTOR_SIZE - sizeof(uint32_t));
+      root.m_checksum = crc32(&root, sizeof(Root) - sizeof(uint32_t));
       write_root_to_hi = !write_root_to_hi;
-      narf_io_write(root.m_origin + (write_root_to_hi ? 0 : 1), &root);
+
+      memcpy(root_lo, &root, sizeof(root));
+      narf_io_write(root.m_origin + (write_root_to_hi ? 0 : 1), root_lo);
 
 #ifdef NARF_DEBUG_INTEGRITY
    verify_integrity();
@@ -2384,6 +2391,20 @@ static void defrag_tidy(void) {
 }
 
 ///////////////////////////////////////////////////////
+static void defrag_regen(void) {
+   NAF i;
+
+   // update generation numbers for all nodes to be
+   // recent.
+   for (i = root.m_top; i < root.m_total_sectors; i += 2) {
+      narf_begin();
+      read_buffer(i);
+      write_buffer(i);
+      narf_end();
+   }
+}
+
+///////////////////////////////////////////////////////
 //! @see narf.h
 bool narf_defrag(void) {
    if (!verify()) return false;
@@ -2400,6 +2421,9 @@ bool narf_defrag(void) {
 
    // third, tidy up nodes.
    defrag_tidy();
+
+   // fourth, renew generations.
+   defrag_regen();
 
    return true;
 }
