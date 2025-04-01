@@ -1237,11 +1237,6 @@ static bool narf_insert(NAF naf, const char *key) {
          }
       }
    }
-
-#ifdef NARF_DEBUG_INTEGRITY
-   verify_integrity();
-#endif
-
    return true;
 }
 
@@ -1401,6 +1396,11 @@ static void narf_end(void) {
       root.m_checksum = crc32(&root, NARF_SECTOR_SIZE - sizeof(uint32_t));
       write_root_to_hi = !write_root_to_hi;
       narf_io_write(root.m_origin + (write_root_to_hi ? 0 : 1), &root);
+
+#ifdef NARF_DEBUG_INTEGRITY
+   verify_integrity();
+#endif
+
    }
 }
 
@@ -1540,13 +1540,6 @@ static NAF narf_unchain(NarfSector length) {
    while(next != END) {
       read_buffer(next);
       if (node->m_length >= length) {
-
-#ifdef NARF_DEBUG_INTEGRITY
-         printf("NEED %d FOUND %d %d:%d\n",
-               length, next, node->m_start, node->m_length);
-         print_node(next);
-#endif
-
          // this will do nicely
          naf = next;
          next = node->m_next;
@@ -1560,10 +1553,6 @@ static NAF narf_unchain(NarfSector length) {
             node->m_next = next;
             write_buffer(prev);
          }
-
-#ifdef NARF_DEBUG_INTEGRITY
-         verify_integrity();
-#endif
 
          return naf;
       }
@@ -1686,19 +1675,10 @@ NAF narf_alloc(const char *key, NarfByteSize bytes) {
    strncpy(node->m_key, key, KEYSIZE);
    write_buffer(naf);
 
-#ifdef NARF_DEBUG_INTEGRITY
-   printf("alloc naf= %08x start=%08x length=%d bytes=%d\n",
-         naf, node->m_start, node->m_length, node->m_bytes);
-#endif
-
    ++root.m_count;
    narf_insert(naf, key);
 
    narf_end();
-
-#ifdef NARF_DEBUG_INTEGRITY
-   verify_integrity();
-#endif
 
    return naf;
 }
@@ -1790,9 +1770,6 @@ NAF narf_realloc(const char *key, NarfByteSize bytes) {
       narf_chain(tmp);
       narf_end();
 
-#ifdef NARF_DEBUG_INTEGRITY
-      verify_integrity();
-#endif
       return naf;
    }
 
@@ -2082,10 +2059,6 @@ bool narf_rebalance(void) {
    free(key);
 #endif
 
-#ifdef NARF_DEBUG_INTEGRITY
-   verify_integrity();
-#endif
-
    return true;
 }
 
@@ -2242,10 +2215,6 @@ static void defrag_carve(void) {
          narf_chain(tmp);
 
          narf_end();
-
-#ifdef NARF_DEBUG_INTEGRITY
-         verify_integrity();
-#endif
       }
    }
 }
@@ -2432,9 +2401,6 @@ bool narf_defrag(void) {
    // third, tidy up nodes.
    defrag_tidy();
 
-#ifdef NARF_DEBUG_INTEGRITY
-   verify_integrity();
-#endif
    return true;
 }
 
