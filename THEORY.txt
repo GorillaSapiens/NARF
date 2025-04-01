@@ -24,11 +24,11 @@ see narf_io.h for details.
 
 on the media, we maintain a mapping from KEYS (expressed as C strings)
 to DATA SIZE and DATA LOCATION.  an entry in this mapping is called a NAF.
-a NAF is Not A File.  the size of the key is limited to about 480 bytes,
+a NAF is Not A File.  the size of the key is limited to about 340 bytes,
 which is longer than total path length limits on some real file systems.
 any character is allowed in a key, except '\0', for obvious reasons.
 
-the mapping is stored in both a bianry tree and doubly linked list.
+the mapping is stored in both a binary tree and doubly linked list.
 each NAF in the tree contains "left", "right", and "parent" pointers
 of a binary tree, as well as "previous" and "next" pointers of a doubly
 linked list.  this gives O(log₂N) searching and O(N) in-order traversal.
@@ -46,6 +46,13 @@ into unused storage.
 If you're concerned about wear leveling and bad block detection, modern
 micro SD cards have this built in to the silicon.  there's no need for
 NARF to worry about it on uSD.
+
+===
+
+If you're concerned about robustness to power loss, as of version 1,
+NARF keeps copies of "good / complete" and "in progress" changes via
+"generation" numbering.  if a change is interrupted midway, NARF falls
+back to the "good / complete" version of the data.
 
 ===
 
