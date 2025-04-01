@@ -2518,7 +2518,7 @@ bool narf_append(const char *key, const void *data, NarfByteSize size) {
          remain = size;
       }
       memcpy(buffer + begin, data, remain);
-      narf_io_write(root.m_origin + start + current, buffer_lo); // bypass integrity
+      narf_io_write(root.m_origin + start + current, buffer_lo);
 
       // advance all our pointers
       data = (uint8_t *) data + remain;
