@@ -7,6 +7,8 @@ yes, i really wrote it all in one night. i just needed something i could
 use in a small embedded system project i was working on, and FAT32 took
 up way more space than i was happy with.
 
+then i wrote it again.  3 times.
+
 we assume there's storage media, and it is organized in sectors of 512
 bytes that we can access with linear addressing.  you the developer need
 to supply the functions described in narf_io.h.  this is the hardware
@@ -34,8 +36,8 @@ of a binary tree, as well as "previous" and "next" pointers of a doubly
 linked list.  this gives O(log₂N) searching and O(N) in-order traversal.
 ordering is done by "strcmp" on keys.
 
-the first sector, sector 0, is reserved for holding pointers to the root
-of the tree, and the beginning and end of the linked list.
+the first two sectors, sector 0 and 1, are reserved for holding pointers
+to the root of the tree, and the beginning and end of the linked list.
 
 free'd sectors are placed in a chain in order of increasing size.
 new allocations are made from the chain if possible, or by expanding
