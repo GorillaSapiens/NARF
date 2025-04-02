@@ -103,7 +103,7 @@ typedef struct PACKED {
                             5 * sizeof(uint32_t) ];
 #endif
 
-   uint32_t     m_generation;  // the generation number
+   int32_t      m_generation;  // the generation number
    uint32_t     m_random;      // lfsr sequence number
    uint32_t     m_checksum;    // crc32
 } Root;
@@ -137,7 +137,7 @@ typedef struct PACKED {
                             128 -
                             3 * sizeof(uint32_t) ];
 
-   uint32_t     m_generation;  // the generation number
+   int32_t      m_generation;  // the generation number
    uint32_t     m_random;      // lfsr sequence number
    uint32_t     m_checksum;    // crc32
 } Node;
@@ -154,22 +154,13 @@ static_assert(sizeof(Node) == NARF_SECTOR_SIZE, "Node wrong size");
 //! @brief bytes in a key?
 #define KEYSIZE (sizeof(((Node *) 0)->m_key))
 
-static uint32_t entropy = 0xdeadbeef;
-
-static uint8_t buffer_lo[NARF_SECTOR_SIZE] = { 0 };
-static uint8_t buffer_hi[NARF_SECTOR_SIZE] = { 0 };
-static uint8_t *buffer = buffer_lo;
+static uint8_t buffer[NARF_SECTOR_SIZE] = { 0 };
 
 static bool write_to_hi = false;
 static bool write_root_to_hi;
 
 static Root root = { 0 };
-static Root * const root_hi = (Root *) buffer_hi;
-static Root * const root_lo = (Root *) buffer_lo;
-
-static Node * const node_hi = (Node *) buffer_hi;
-static Node * const node_lo = (Node *) buffer_lo;
-static Node *node = node_lo;
+static Node * const node = (Node *) buffer;
 
 ///////////////////////////////////////////////////////
 //! @brief crc32 checksum
@@ -195,31 +186,34 @@ uint32_t crc32(const void *data, int length) {
 //! @return true on success
 static bool read_buffer(NAF naf) {
    int32_t tmp;
-   uint32_t gen_lo;
-   uint32_t gen_hi;
+   int32_t gen_lo;
+   int32_t gen_hi;
    uint32_t ck_lo;
    uint32_t ck_hi;
+   bool lo_match;
+   bool hi_match;
 
    // we don't want to get confused by failed reads
    // and stale data.  we also want to increase entropy.
    // so we load the buffers with random data before
    // we do a read.  this will frustrate crc32 check
    // later.
-   node_lo->m_random = lrand48();
-   node_hi->m_random = lrand48();
+   node->m_random = lrand48();
+   if (!narf_io_read(root.m_origin + naf, buffer)) return false;
+   ck_lo = crc32(buffer, NARF_SECTOR_SIZE - sizeof(uint32_t));
+   lo_match = (ck_lo == node->m_checksum);
+   gen_lo = node->m_generation;
 
-   if (!narf_io_read(root.m_origin + naf, buffer_lo)) return false;
-   if (!narf_io_read(root.m_origin + naf + 1, buffer_hi)) return false;
+   node->m_random = lrand48();
+   if (!narf_io_read(root.m_origin + naf + 1, buffer)) return false;
+   ck_hi = crc32(buffer, NARF_SECTOR_SIZE - sizeof(uint32_t));
+   hi_match = (ck_hi == node->m_checksum);
+   gen_hi = node->m_generation;
 
-   ck_lo = crc32(buffer_lo, NARF_SECTOR_SIZE - sizeof(uint32_t));
-   ck_hi = crc32(buffer_hi, NARF_SECTOR_SIZE - sizeof(uint32_t));
-
-   if (ck_lo == node_lo->m_checksum) {
-      if (ck_hi == node_hi->m_checksum) {
+   if (lo_match) {
+      if (hi_match) {
 
          // both checksums good, we can trust the data
-         gen_lo = node_lo->m_generation;
-         gen_hi = node_hi->m_generation;
 
          if ((root.m_generation - gen_lo) >= 0) {
             if ((root.m_generation - gen_hi) >= 0) {
@@ -270,17 +264,16 @@ static bool read_buffer(NAF naf) {
       else {
          // only lo is good
 lo_is_good:
-         buffer = buffer_lo;
-         node = node_lo;
+         // hi is in the buffer, so we need to re-read lo
+         narf_io_read(root.m_origin + naf, buffer);
          write_to_hi = (node->m_generation != root.m_generation);
       }
    }
    else {
-      if (ck_hi == node_hi->m_checksum) {
+      if (hi_match) {
          // only hi is good
 hi_is_good:
-         buffer = buffer_hi;
-         node = node_hi;
+         // hi is already in the buffer
          write_to_hi = (node->m_generation == root.m_generation);
       }
       else {
@@ -290,7 +283,6 @@ hi_is_good:
       }
    }
 
-   // oi.  if we're here, both buffers are the same
    return true;
 }
 
@@ -347,7 +339,7 @@ static int32_t utf8_decode_safe(const char **s, const char *end) {
    }
 
    if (codepoint & 1) {
-      entropy ^= lrand48();
+      lrand48();
    }
 
    *s += num_bytes;
@@ -415,18 +407,18 @@ static const char boot_code_msg[] =
 //! @param message Custom boot_code message, or NULL for default
 //! @return true for success
 bool narf_mbr(const char *message) {
-   MBR *mbr = (MBR *) buffer_lo;
+   MBR *mbr = (MBR *) buffer;
 
    if (!narf_io_open()) return false;
 
-   memset(buffer_lo, 0, sizeof(buffer_lo));
-   memcpy(buffer_lo, boot_code_stub, sizeof(boot_code_stub));
+   memset(buffer, 0, sizeof(buffer));
+   memcpy(buffer, boot_code_stub, sizeof(boot_code_stub));
    if (message == NULL) {
       message = boot_code_msg;
    }
-   strcpy((char *)(buffer_lo + sizeof(boot_code_stub)), message);
+   strcpy((char *)(buffer + sizeof(boot_code_stub)), message);
    mbr->signature = MBR_SIGNATURE;
-   narf_io_write(0, buffer_lo);
+   narf_io_write(0, buffer);
 
    return true;
 }
@@ -455,8 +447,8 @@ bool narf_partition(int partition) {
 
    start = 1;
    end = narf_io_sectors();
-   mbr = (MBR *) buffer_lo;
-   narf_io_read(0, buffer_lo);
+   mbr = (MBR *) buffer;
+   narf_io_read(0, buffer);
 
    if (partition < 1 || partition > 4) {
       return false;
@@ -487,7 +479,7 @@ bool narf_partition(int partition) {
    mbr->partitions[partition].start_lba = start;
    mbr->partitions[partition].partition_size = end - start;
 
-   narf_io_write(0, buffer_lo);
+   narf_io_write(0, buffer);
 
    return true;
 }
@@ -499,8 +491,8 @@ bool narf_format(int partition) {
 
    if (!narf_io_open()) return false;
 
-   mbr = (MBR *) buffer_lo;
-   narf_io_read(0, buffer_lo);
+   mbr = (MBR *) buffer;
+   narf_io_read(0, buffer);
 
    if (partition < 1 || partition > 4) {
 #ifdef NARF_DEBUG
@@ -537,8 +529,8 @@ int narf_findpart(void) {
 
    if (!narf_io_open()) return -1;
 
-   mbr = (MBR *) buffer_lo;
-   narf_io_read(0, buffer_lo);
+   mbr = (MBR *) buffer;
+   narf_io_read(0, buffer);
 
    for (i = 0; i < 4; i++) {
       if (mbr->partitions[i].partition_type == NARF_PART_TYPE) {
@@ -568,8 +560,8 @@ bool narf_mount(int partition) {
 
    if (!narf_io_open()) return false;
 
-   mbr = (MBR *) buffer_lo;
-   narf_io_read(0, buffer_lo);
+   mbr = (MBR *) buffer;
+   narf_io_read(0, buffer);
 
    --partition;
 
@@ -1497,7 +1489,7 @@ static bool narf_insert(NAF naf, const char *key) {
 bool narf_mkfs(NarfSector start, NarfSector size) {
    if (!narf_io_open()) return false;
 
-   memset(buffer_lo, 0, NARF_SECTOR_SIZE);
+   memset(buffer, 0, NARF_SECTOR_SIZE);
 
    root.m_signature     = SIGNATURE;
    root.m_version       = VERSION;
@@ -1516,14 +1508,14 @@ bool narf_mkfs(NarfSector start, NarfSector size) {
    root.m_random        = lrand48();
    root.m_checksum      = crc32(&root, sizeof(Root) - sizeof(uint32_t));
 
-   memcpy(buffer_lo, &root, sizeof(root));
-   narf_io_write(start, buffer_lo);
+   memcpy(buffer, &root, sizeof(root));
+   narf_io_write(start, buffer);
 
    root.m_random        = lrand48();
    root.m_checksum      = crc32(&root, sizeof(Root) - sizeof(uint32_t));
 
-   memcpy(buffer_lo, &root, sizeof(root));
-   narf_io_write(start + 1, buffer_lo);
+   memcpy(buffer, &root, sizeof(root));
+   narf_io_write(start + 1, buffer);
 
 #ifdef NARF_DEBUG
    printf("keysize %ld\n", KEYSIZE);
@@ -1535,13 +1527,16 @@ bool narf_mkfs(NarfSector start, NarfSector size) {
 ///////////////////////////////////////////////////////
 //! @see narf.h
 bool narf_init(NarfSector start) {
-   NAF naf;
+   Root *asroot = (Root *) buffer;
+   NarfSector ns;
    bool ret;
    int32_t tmp;
-   uint32_t gen_lo;
-   uint32_t gen_hi;
+   int32_t gen_lo;
+   int32_t gen_hi;
    uint32_t ck_lo;
    uint32_t ck_hi;
+   bool lo_ok;
+   bool hi_ok;
 
 #ifdef NARF_DEBUG
    printf("keysize %ld\n", KEYSIZE);
@@ -1549,20 +1544,21 @@ bool narf_init(NarfSector start) {
 
    if (!narf_io_open()) return false;
 
-   ret = narf_io_read(start, buffer_lo);
+   ret = narf_io_read(start, buffer);
    if (!ret) return false;
+   ck_lo = crc32(asroot, sizeof(Root) - sizeof(uint32_t));
+   lo_ok = (ck_lo == asroot->m_checksum);
+   gen_lo = asroot->m_generation;
 
-   ret = narf_io_read(start + 1, buffer_hi);
+   ret = narf_io_read(start + 1, buffer);
    if (!ret) return false;
+   ck_hi = crc32(asroot, sizeof(Root) - sizeof(uint32_t));
+   hi_ok = (ck_hi == asroot->m_checksum);
+   gen_hi = asroot->m_generation;
 
-   ck_lo = crc32(root_lo, sizeof(Root) - sizeof(uint32_t));
-   ck_hi = crc32(root_hi, sizeof(Root) - sizeof(uint32_t));
-
-   if (ck_lo == root_lo->m_checksum) {
-      if (ck_hi == root_hi->m_checksum) {
+   if (lo_ok) {
+      if (hi_ok) {
          // both good, compare generations
-         gen_lo = root_lo->m_generation;
-         gen_hi = root_hi->m_generation;
 
          tmp = gen_lo - gen_hi;
          if (tmp > 0) {
@@ -1583,15 +1579,18 @@ bool narf_init(NarfSector start) {
       else {
          // lo good
 lo_is_good:
-         memcpy(&root, root_lo, sizeof(Root));
+         // hi is still in the buffer, we need to re-read lo
+         narf_io_read(start, buffer);
+         memcpy(&root, asroot, sizeof(Root));
          write_root_to_hi = true;
       }
    }
    else {
-      if (ck_hi == root_hi->m_checksum) {
+      if (ck_hi == asroot->m_checksum) {
          // hi good
 hi_is_good:
-         memcpy(&root, root_hi, sizeof(Root));
+         // hi is still in the buffer
+         memcpy(&root, asroot, sizeof(Root));
          write_root_to_hi = false;
       }
       else {
@@ -1604,17 +1603,23 @@ hi_is_good:
    }
 
    // kill anything from past failed power loss writes
-   for (naf = root.m_top; naf < root.m_total_sectors; naf += 2) {
-      read_buffer(naf);
-      if (node != node_hi && node_hi->m_generation > root.m_generation) {
-         memset(buffer_hi, 0, sizeof(buffer_hi));
-         narf_io_write(root.m_origin + naf + 1, buffer_hi);
-      }
-      else if (node != node_lo && node_lo->m_generation > root.m_generation) {
-         memset(buffer_lo, 0, sizeof(buffer_lo));
-         narf_io_write(root.m_origin + naf, buffer_lo);
+
+#if 1
+   // TODO FIX this is expensive, how can we optimize it?
+   for (ns = root.m_top; ns < root.m_total_sectors; ++ns) {
+      narf_io_read(root.m_origin + ns, buffer);
+      // no need to do checksum verification here
+      // because a node we want to keep will not have
+      // a higher generation number.
+      if ((node->m_generation - root.m_generation) > 0) {
+printf("age %08x %d %d %d\n", ns, node->m_generation, root.m_generation,
+   node->m_generation - root.m_generation
+);
+         memset(buffer, 0, sizeof(buffer));
+         narf_io_write(root.m_origin + ns, buffer);
       }
    }
+#endif
 
    return verify();
 }
@@ -1648,8 +1653,9 @@ static void narf_end(void) {
       root.m_checksum = crc32(&root, sizeof(Root) - sizeof(uint32_t));
       write_root_to_hi = !write_root_to_hi;
 
-      memcpy(root_lo, &root, sizeof(root));
-      narf_io_write(root.m_origin + (write_root_to_hi ? 0 : 1), root_lo);
+      memset(buffer, 0, sizeof(buffer));
+      memcpy(buffer, &root, sizeof(root));
+      narf_io_write(root.m_origin + (write_root_to_hi ? 0 : 1), buffer);
 
 #ifdef NARF_DEBUG_INTEGRITY
    verify_integrity();
@@ -1854,11 +1860,9 @@ static NAF narf_new(NarfSector length) {
    // initialize the storage to zero
    // and zero out our buffers
 
-   memset(buffer_lo, 0, NARF_SECTOR_SIZE);
-   narf_io_write(root.m_origin + naf, buffer_lo);
-
-   memset(buffer_hi, 0, NARF_SECTOR_SIZE);
-   narf_io_write(root.m_origin + naf + 1, buffer_hi);
+   memset(buffer, 0, NARF_SECTOR_SIZE);
+   narf_io_write(root.m_origin + naf, buffer);
+   narf_io_write(root.m_origin + naf + 1, buffer);
 
    // we don't know where node is pointing, but it doesn't matter
    // because everything is nulled out
@@ -1956,8 +1960,8 @@ void narf_copyswap(NAF alpha, NAF beta, NarfByteSize bytes) {
    beta_length = node->m_length;
 
    for (i = 0; i < alpha_length; ++i) {
-      narf_io_read(root.m_origin + alpha_start + i, buffer_lo);
-      narf_io_write(root.m_origin + beta_start + i, buffer_lo);
+      narf_io_read(root.m_origin + alpha_start + i, buffer);
+      narf_io_write(root.m_origin + beta_start + i, buffer);
    }
 
    read_buffer(alpha);
@@ -2130,6 +2134,7 @@ bool narf_free(const char *key) {
       }
 
       avl_adjust_heights(repl);
+      avl_rebalance(repl);
    }
    else {
       // one or no children
@@ -2159,6 +2164,7 @@ bool narf_free(const char *key) {
          }
 
          avl_adjust_heights(parent);
+         avl_rebalance(parent);
       }
    }
 
@@ -2272,8 +2278,8 @@ static void defrag_free_tree(NAF free1, NAF tree2) {
    if (f_length >= t_length) {
       // easy case, non overlapping
       for (i = 0; i < t_length; i++) {
-         narf_io_read(root.m_origin + t_start + i, buffer_lo);
-         narf_io_write(root.m_origin + f_start + i, buffer_lo);
+         narf_io_read(root.m_origin + t_start + i, buffer);
+         narf_io_write(root.m_origin + f_start + i, buffer);
       }
 
       narf_begin();
@@ -2295,8 +2301,8 @@ static void defrag_free_tree(NAF free1, NAF tree2) {
       // so we ALLOCATE new data and move it there!
       // hopefully this will let us move other stuff down.
       for (i = 0; i < t_length; i++) {
-         narf_io_read(root.m_origin + t_start + i, buffer_lo);
-         narf_io_write(root.m_origin + root.m_bottom + i, buffer_lo);
+         narf_io_read(root.m_origin + t_start + i, buffer);
+         narf_io_write(root.m_origin + root.m_bottom + i, buffer);
       }
 
       narf_begin();
@@ -2664,12 +2670,12 @@ bool narf_append(const char *key, const void *data, NarfByteSize size) {
    remain = NARF_SECTOR_SIZE - begin;
 
    while (size) {
-      narf_io_read(root.m_origin + start + current, buffer_lo);
+      narf_io_read(root.m_origin + start + current, buffer);
       if (remain > size) {
          remain = size;
       }
       memcpy(buffer + begin, data, remain);
-      narf_io_write(root.m_origin + start + current, buffer_lo);
+      narf_io_write(root.m_origin + start + current, buffer);
 
       // advance all our pointers
       data = (uint8_t *) data + remain;
