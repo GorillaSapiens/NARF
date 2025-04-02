@@ -41,6 +41,11 @@
 
 #define END INVALID_NAF // i hate typing
 
+#ifndef HAVE_LRAND48
+#define lrand48 rand
+#define srand48 srand
+#endif
+
 ///////////////////////////////////////////////////////
 //! @brief Classic MBR Partition Entry (16 bytes)
 typedef struct PACKED {

@@ -237,7 +237,7 @@ char *rname(int l) {
    static char buf[16];
    char *p;
    for (p = buf; p != buf + l; p++) {
-      *p = 0x61 + rand() % 26;
+      *p = 0x61 + lrand48() % 26;
    }
    *p = 0;
    return buf;
@@ -250,9 +250,9 @@ void gremlins(int s, int n) {
 
    printf("gremlins %d %d\n", s, n);
 
-   srand(s);
+   srand48(s);
 
-   l = rand() % 7 + 1; // length of keys
+   l = lrand48() % 7 + 1; // length of keys
 
    process_cmd("mbr");
    process_cmd("partition 1");
@@ -260,25 +260,25 @@ void gremlins(int s, int n) {
    process_cmd("mount 1");
 
    for(m = 0; m < n; m++) {
-      switch(rand() % 5) {
+      switch(lrand48() % 5) {
          case 0:
-            sprintf(buf, "alloc %s %d", rname(l), rand() % 65536);
+            sprintf(buf, "alloc %s %d", rname(l), (int)(lrand48() % 65536));
             break;
          case 1:
             sprintf(buf, "free %s", rname(l));
             break;
          case 2:
-            sprintf(buf, "realloc %s %d", rname(l), rand() % 65536);
+            sprintf(buf, "realloc %s %d", rname(l), (int)(lrand48() % 65536));
             break;
          case 3:
             {
                char *p = rname(l);
-               sprintf(buf, "tag %s md_%s_md_%04x", p, p, rand() % 65536);
+               sprintf(buf, "tag %s md_%s_md_%04x", p, p, (int)(lrand48() % 65536));
             }
             break;
          case 4:
             {
-               int z = rand() % 100;
+               int z = lrand48() % 100;
                switch(z) {
                   case 0:
                      sprintf(buf, "defrag");
