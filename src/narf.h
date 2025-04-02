@@ -104,7 +104,7 @@ bool narf_format(int partition);
 //! narf_findpart() is power loss robust because it does
 //! not write to the media.
 //!
-//! @return A number (1-4) of the partition containint NARF, or -1
+//! @return A number (1-4) of the partition containing NARF, or -1
 int narf_findpart(void);
 
 ///////////////////////////////////////////////////////
@@ -290,10 +290,14 @@ bool narf_free(const char *key);
 ///////////////////////////////////////////////////////
 //! @brief Defragment and compact the NARF
 //! @see narf_free()
+//! @see narf_realloc()
 //!
 //! This makes the NARF as small as possible by
 //! removing any gaps that may have been left by
-//! narf_free()
+//! narf_free() or narf_realloc()
+//!
+//! narf_defrag() will scramble NAFs; use narf_find()
+//! to get the new NAF for a key.
 //!
 //! narf_defrag() is power loss robust.
 //!
@@ -305,8 +309,8 @@ bool narf_defrag(void);
 //!
 //! Given a NAF, return the key for the NAF.
 //!
-//! This returns a pointer to a static buffer which
-//! may be overwritten by other NARF functions.
+//! Returns a pointer to memory which WILL be
+//! overwritten by any subsequent narf_*() call!
 //!
 //! This is the inverse function of narf_find().
 //!
@@ -411,11 +415,10 @@ NAF narf_previous(NAF naf);
 //! use to it you like.
 //!
 //! metadata is preserved when narf_realloc() is
-//! called with a new NONZERO size, even if new
+//! called with a new size, even if new
 //! storage is allocated.
 //!
-//! metadata is destroyed on narf_free() or if
-//! narf_realloc() is called with a zero size.
+//! metadata is destroyed on narf_free()
 //!
 //! narf_metadata() is power loss robust because it does
 //! not write to the media.
@@ -450,6 +453,7 @@ bool narf_set_metadata(NAF naf, void *data);
 //!
 //! narf_append() is NOT power loss robust
 //! because it is merely a convenience function.
+//! it is possible for data to get lost mid-write.
 //!
 //! @param key The key holding data to append to
 //! @param data Pointer to the data
