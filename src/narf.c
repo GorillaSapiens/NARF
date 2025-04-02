@@ -1602,9 +1602,10 @@ hi_is_good:
       }
    }
 
+   srand48(asroot->m_random);
+
    // kill anything from past failed power loss writes
 
-#if 1
    // TODO FIX this is expensive, how can we optimize it?
    for (ns = root.m_top; ns < root.m_total_sectors; ++ns) {
       narf_io_read(root.m_origin + ns, buffer);
@@ -1612,14 +1613,10 @@ hi_is_good:
       // because a node we want to keep will not have
       // a higher generation number.
       if ((node->m_generation - root.m_generation) > 0) {
-printf("age %08x %d %d %d\n", ns, node->m_generation, root.m_generation,
-   node->m_generation - root.m_generation
-);
          memset(buffer, 0, sizeof(buffer));
          narf_io_write(root.m_origin + ns, buffer);
       }
    }
-#endif
 
    return verify();
 }
