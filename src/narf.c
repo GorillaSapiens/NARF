@@ -3,6 +3,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define HAVE_ZLIB
+
+#ifdef HAVE_ZLIB
+#include <zlib.h>   // for crc32
+#endif
+
 #include "narf_conf.h"
 #include "narf.h"
 #include "narf_io.h"
@@ -167,10 +173,10 @@ static bool write_root_to_hi;
 static Root root = { 0 };
 static Node * const node = (Node *) buffer;
 
+#ifndef HAVE_ZLIB
 ///////////////////////////////////////////////////////
 //! @brief crc32 checksum
-uint32_t crc32(const void *data, int length) {
-   uint32_t crc = 0xFFFFFFFF; // Initial value
+uint32_t crc32(uint32_t crc, const void *data, int length) {
    int i, j;
    for (i = 0; i < length; i++) {
       crc ^= *((uint8_t *)data); // XOR with input byte
@@ -186,6 +192,7 @@ uint32_t crc32(const void *data, int length) {
    }
    return ~crc; // Final XOR
 }
+#endif
 
 ///////////////////////////////////////////////////////
 //! @brief Read a NAF into our buffer
@@ -208,13 +215,13 @@ static bool read_buffer(NAF naf) {
    // later.
    node->m_random = lrand48();
    if (!narf_io_read(root.m_origin + naf, buffer)) return false;
-   ck_lo = crc32(buffer, NARF_SECTOR_SIZE - sizeof(uint32_t));
+   ck_lo = crc32(0, buffer, NARF_SECTOR_SIZE - sizeof(uint32_t));
    lo_match = (ck_lo == node->m_checksum);
    gen_lo = node->m_generation;
 
    node->m_random = lrand48();
    if (!narf_io_read(root.m_origin + naf + 1, buffer)) return false;
-   ck_hi = crc32(buffer, NARF_SECTOR_SIZE - sizeof(uint32_t));
+   ck_hi = crc32(0, buffer, NARF_SECTOR_SIZE - sizeof(uint32_t));
    hi_match = (ck_hi == node->m_checksum);
    gen_hi = node->m_generation;
 
@@ -302,7 +309,7 @@ hi_is_good:
 static bool write_buffer(NAF naf) {
    node->m_generation = root.m_generation;
    node->m_random = lrand48();
-   node->m_checksum = crc32(node, NARF_SECTOR_SIZE - sizeof(uint32_t));
+   node->m_checksum = crc32(0, (void *) node, NARF_SECTOR_SIZE - sizeof(uint32_t));
 
    return narf_io_write(root.m_origin + naf + (write_to_hi ? 1 : 0), buffer);
 }
@@ -1514,13 +1521,13 @@ bool narf_mkfs(NarfSector start, NarfSector size) {
 
    root.m_generation    = 0;
    root.m_random        = lrand48();
-   root.m_checksum      = crc32(&root, sizeof(Root) - sizeof(uint32_t));
+   root.m_checksum      = crc32(0, (void *) &root, sizeof(Root) - sizeof(uint32_t));
 
    memcpy(buffer, &root, sizeof(root));
    narf_io_write(start, buffer);
 
    root.m_random        = lrand48();
-   root.m_checksum      = crc32(&root, sizeof(Root) - sizeof(uint32_t));
+   root.m_checksum      = crc32(0, (void *) &root, sizeof(Root) - sizeof(uint32_t));
 
    memcpy(buffer, &root, sizeof(root));
    narf_io_write(start + 1, buffer);
@@ -1554,13 +1561,13 @@ bool narf_init(NarfSector start) {
 
    ret = narf_io_read(start, buffer);
    if (!ret) return false;
-   ck_lo = crc32(asroot, sizeof(Root) - sizeof(uint32_t));
+   ck_lo = crc32(0, (void *) asroot, sizeof(Root) - sizeof(uint32_t));
    lo_ok = (ck_lo == asroot->m_checksum);
    gen_lo = asroot->m_generation;
 
    ret = narf_io_read(start + 1, buffer);
    if (!ret) return false;
-   ck_hi = crc32(asroot, sizeof(Root) - sizeof(uint32_t));
+   ck_hi = crc32(0, (void *) asroot, sizeof(Root) - sizeof(uint32_t));
    hi_ok = (ck_hi == asroot->m_checksum);
    gen_hi = asroot->m_generation;
 
@@ -1655,7 +1662,7 @@ static void narf_end(void) {
    --semaphore;
    if (!semaphore) {
       root.m_random = lrand48();
-      root.m_checksum = crc32(&root, sizeof(Root) - sizeof(uint32_t));
+      root.m_checksum = crc32(0, (void *) &root, sizeof(Root) - sizeof(uint32_t));
       write_root_to_hi = !write_root_to_hi;
 
       memset(buffer, 0, sizeof(buffer));

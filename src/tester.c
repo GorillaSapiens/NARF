@@ -24,6 +24,8 @@ void gremlins(int s, int n);
 void do_pack_dive(const char *realpath, const char *path, DIR *dir) {
    struct dirent *entry = readdir(dir);
 
+   printf("%s -> %s\n", realpath, path);
+
    while(entry) {
       if (entry->d_type == DT_DIR) {
          if (strcmp(entry->d_name, ".") && strcmp(entry->d_name, "..")) {
