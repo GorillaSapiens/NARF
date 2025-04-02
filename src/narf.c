@@ -165,18 +165,21 @@ static Node * const node = (Node *) buffer;
 ///////////////////////////////////////////////////////
 //! @brief crc32 checksum
 uint32_t crc32(const void *data, int length) {
-    uint32_t crc = 0xFFFFFFFF; // Initial value
-    int i;
-    for (i = 0; i < length; i++) {
-        crc ^= *((uint8_t *)data++); // XOR with input byte
-        for (int j = 0; j < 8; j++) { // Process 8 bits
-            if (crc & 1)
-                crc = (crc >> 1) ^ 0xEDB88320; // Polynomial for CRC-32
-            else
-                crc >>= 1;
-        }
-    }
-    return ~crc; // Final XOR
+   uint32_t crc = 0xFFFFFFFF; // Initial value
+   int i, j;
+   for (i = 0; i < length; i++) {
+      crc ^= *((uint8_t *)data); // XOR with input byte
+      data = ((uint8_t *) data) + 1;
+      for (j = 0; j < 8; j++) { // Process 8 bits
+         if (crc & 1) {
+            crc = (crc >> 1) ^ 0xEDB88320; // Polynomial for CRC-32
+         }
+         else {
+            crc >>= 1;
+         }
+      }
+   }
+   return ~crc; // Final XOR
 }
 
 ///////////////////////////////////////////////////////
@@ -311,7 +314,7 @@ static bool write_buffer(NAF naf) {
 //!
 static int32_t utf8_decode_safe(const char **s, const char *end) {
    const unsigned char *p = (const unsigned char *) *s;
-   int codepoint = 0;
+   uint32_t codepoint = 0;
    int num_bytes = 0;
 
    if (*s >= end || !**s) return -2;  // Stop at buffer end or null terminator
@@ -329,7 +332,7 @@ static int32_t utf8_decode_safe(const char **s, const char *end) {
          (p[2] & 0x3F);
       num_bytes = 3;
    } else if (p[0] >= 0xF0 && p[0] <= 0xF4 && *s + 3 < end) {  // 4-byte
-      codepoint = (p[0] & 0x07) << 18 |
+      codepoint = (uint32_t)(p[0] & 0x07) << 18 |
          (p[1] & 0x3F) << 12 |
          (p[2] & 0x3F) <<  6 |
          (p[3] & 0x3F);
@@ -2364,6 +2367,7 @@ static void defrag_squish(void) {
    NarfSector length;
 
    while (1) {
+      another:
       // find lowest free node
       lowest = END;
       for (tmp = root.m_chain; tmp != END; tmp = node->m_next) {
@@ -2416,8 +2420,6 @@ static void defrag_squish(void) {
       }
 
       assert(0);
-
-another:
    }
 }
 
