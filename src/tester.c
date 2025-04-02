@@ -12,6 +12,11 @@
 
 extern void narf_io_configure(const char *fname);
 
+__attribute__((weak)) 
+void narf_debug(NAF naf) {
+   printf("debug not supported\n");
+}
+
 const char *tf[] = { "false", "true" };
 
 void gremlins(int s, int n);
@@ -107,14 +112,12 @@ void process_cmd(char *buffer) {
       printf("narf_mount(%d)=%s\n",
             part, tf[narf_mount(part)]);
    }
-#ifdef NARF_DEBUG
    else if (!strncmp(buffer, "debug ", 6)) {
       narf_debug(atoi(buffer + 6));
    }
    else if (!strncmp(buffer, "debug", 5)) {
       narf_debug(-1);
    }
-#endif
    else if (!strncmp(buffer, "alloc ", 6)) {
       char key[256];
       int size;

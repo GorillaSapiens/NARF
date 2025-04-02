@@ -457,12 +457,6 @@ bool narf_set_metadata(NAF naf, void *data);
 //! @return true for success
 bool narf_append(const char *key, const void *data, NarfByteSize size);
 
-#ifdef NARF_DEBUG
-///////////////////////////////////////////////////////
-//! @brief Print some debug info
-void narf_debug(NAF naf);
-#endif
-
 #endif
 
 // vim:set ai softtabstop=3 shiftwidth=3 tabstop=3 expandtab: ff=unix

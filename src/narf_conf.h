@@ -20,22 +20,4 @@
 // Useful for real removable media
 #define NARF_MBR_UTILS
 
-// Uncomment this for debugging functions
-#define NARF_DEBUG
-
-// Uncomment this for debugging structure integrity
-//
-// Beware, this makes EVERYTHING very slow!
-//
-//#define NARF_DEBUG_INTEGRITY
-
-// Uncomment for unicode line drawing characters in debug functions
-#define USE_UTF8_LINE_DRAWING
-
-// Uncomment this for narf_rebalance() to use malloc memory
-// for temporary key storage.  Leave it commented to use
-// function static storage.  It is generally too large to
-// store on the stack on small systems.
-#define NARF_MALLOC
-
 #endif

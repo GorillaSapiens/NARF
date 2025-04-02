@@ -1,18 +1,24 @@
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "narf_conf.h"
 #include "narf.h"
 #include "narf_io.h"
 
-#ifdef NARF_MALLOC
-   #include <stdlib.h>
-#endif
+// Uncomment this for debugging functions
+#define NARF_DEBUG
+
+// Uncomment this for debugging structure integrity
+// Beware, this makes EVERYTHING very slow!
+//#define NARF_DEBUG_INTEGRITY
+
+// Uncomment for unicode line drawing characters in debug functions
+#define USE_UTF8_LINE_DRAWING
 
 #ifdef NARF_DEBUG
    #include <assert.h>
-   #include <stdlib.h>
    #include <stdio.h>
    #include <math.h>
 #else
@@ -1194,11 +1200,8 @@ static void avl_adjust_heights(NAF naf) {
       if (node->m_height != nh) {
          node->m_height = nh;
          write_buffer(naf);
-         naf = node->m_parent;
       }
-      else {
-         naf = END;
-      }
+      naf = node->m_parent;
    }
 }
 
