@@ -1633,41 +1633,46 @@ NAF narf_dirfirst(const char *dirname, const char *sep) {
    if (!verify()) return END;
    if (root.m_root == END) return END;
 
-   naf = root.m_root;
+   if (dirname && dirname[0]) {
+      naf = root.m_root;
 
-   while(1) {
-      read_buffer(naf);
-      cmp = strncmp(dirname, node->m_key, KEYSIZE);
-      if (cmp < 0) {
-         if (node->m_left != END) {
-            naf = node->m_left;
-         }
-         else {
-            // the current node comes AFTER us
-            if (node->m_prev != END) {
-               naf = node->m_prev;
+      while(1) {
+         read_buffer(naf);
+         cmp = strncmp(dirname, node->m_key, KEYSIZE);
+         if (cmp < 0) {
+            if (node->m_left != END) {
+               naf = node->m_left;
             }
             else {
-               naf = END;
+               // the current node comes AFTER us
+               if (node->m_prev != END) {
+                  naf = node->m_prev;
+               }
+               else {
+                  naf = END;
+               }
+               break;
             }
-            break;
          }
-      }
-      else if (cmp > 0) {
-         if (node->m_right != END) {
-            naf = node->m_right;
+         else if (cmp > 0) {
+            if (node->m_right != END) {
+               naf = node->m_right;
+            }
+            else {
+               // the current node comes BEFORE us
+               // awesome
+               break;
+            }
          }
          else {
-            // the current node comes BEFORE us
-            // awesome
-            break;
+            // BAZINGA !!!
+            // an exact match
+            return naf;
          }
       }
-      else {
-         // BAZINGA !!!
-         // an exact match
-         return naf;
-      }
+   }
+   else {
+      naf = END;
    }
 
 #ifdef NARF_DEBUG
