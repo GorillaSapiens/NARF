@@ -1464,7 +1464,6 @@ bool narf_mkfs(NarfSector start, NarfSector size) {
 //! @see narf.h
 bool narf_init(NarfSector start) {
    Root *asroot = (Root *) buffer;
-   NarfSector ns;
    bool ret;
    int32_t tmp;
    int32_t gen_lo;
@@ -1540,20 +1539,6 @@ hi_is_good:
 
    srand48(asroot->m_random);
 
-   // kill anything from past failed power loss writes
-
-   // TODO FIX this is expensive, how can we optimize it?
-   for (ns = root.m_top; ns < root.m_total_sectors; ++ns) {
-      narf_io_read(root.m_origin + ns, buffer);
-      // no need to do checksum verification here
-      // because a node we want to keep will not have
-      // a higher generation number.
-      if ((node->m_generation - root.m_generation) > 0) {
-         memset(buffer, 0, sizeof(buffer));
-         narf_io_write(root.m_origin + ns, buffer);
-      }
-   }
-
    return verify();
 }
 
@@ -1562,6 +1547,32 @@ static int semaphore = 0;
 ///////////////////////////////////////////////////////
 //! @brief begin a transaction
 static void narf_begin(void) {
+   static bool sanitized = false;
+   NarfSector ns;
+
+   if (!sanitized) {
+      // kill anything left over from past failed power loss writes
+
+      // we do this here to avoid the cost of doing it at mount time
+
+      // it only needs to be done once per power cycle
+
+      // TODO FIX this is expensive, how can we optimize it?
+
+      for (ns = root.m_top; ns < root.m_total_sectors; ++ns) {
+         narf_io_read(root.m_origin + ns, buffer);
+         // no need to do checksum verification here
+         // because a node we want to keep will not have
+         // a higher generation number.
+         if ((node->m_generation - root.m_generation) > 0) {
+            memset(buffer, 0, sizeof(buffer));
+            narf_io_write(root.m_origin + ns, buffer);
+         }
+      }
+
+      sanitized = true;
+   }
+
    if (!semaphore) {
       ++root.m_generation;
    }
