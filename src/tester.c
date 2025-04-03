@@ -174,12 +174,14 @@ void process_cmd(char *buffer) {
       char key[256];
       sscanf(buffer, "ls %s", key);
 
-      printf("\n");
+      printf("ls '%s' (%ld)\n", key, strlen(key));
+
       for (sector = narf_dirfirst(key, "/");
             sector != -1;
             sector = narf_dirnext(key, "/", sector)) {
-         printf("%d %s\n", sector, narf_key(sector));
+         printf("[%08x] %s\n", sector, narf_key(sector));
       }
+      printf("[%08x]\n", sector);
       printf("\n");
    }
    else if (!strncmp(buffer, "cat ", 4)) {

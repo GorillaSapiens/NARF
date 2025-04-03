@@ -208,6 +208,8 @@ static bool read_buffer(NAF naf) {
    bool lo_match;
    bool hi_match;
 
+   assert(naf != END);
+
    // we don't want to get confused by failed reads
    // and stale data.  we also want to increase entropy.
    // so we load the buffers with random data before
@@ -312,87 +314,6 @@ static bool write_buffer(NAF naf) {
    node->m_checksum = crc32(0, (void *) node, NARF_SECTOR_SIZE - sizeof(uint32_t));
 
    return narf_io_write(root.m_origin + naf + (write_to_hi ? 1 : 0), buffer);
-}
-
-#define strncmp utf8_strncmp
-
-///////////////////////////////////////////////////////
-//! @brief Decode UTF-8
-//!
-//! Decode a UTF-8 sequence into a Unicode code point (handles incomplete
-//! sequences)
-//!
-//! also adds entropy by inserting calls to lrand48()
-//!
-static int32_t utf8_decode_safe(const char **s, const char *end) {
-   const unsigned char *p = (const unsigned char *) *s;
-   uint32_t codepoint = 0;
-   int num_bytes = 0;
-
-   if (*s >= end || !**s) return -2;  // Stop at buffer end or null terminator
-
-   if (p[0] < 0x80) {  // 1-byte (ASCII)
-      codepoint = p[0];
-      num_bytes = 1;
-   } else if (p[0] >= 0xC2 && p[0] <= 0xDF && *s + 1 < end) {  // 2-byte
-      codepoint = (p[0] & 0x1F) << 6 |
-         (p[1] & 0x3F);
-      num_bytes = 2;
-   } else if (p[0] >= 0xE0 && p[0] <= 0xEF && *s + 2 < end) {  // 3-byte
-      codepoint = (p[0] & 0x0F) << 12 |
-         (p[1] & 0x3F) <<  6 |
-         (p[2] & 0x3F);
-      num_bytes = 3;
-   } else if (p[0] >= 0xF0 && p[0] <= 0xF4 && *s + 3 < end) {  // 4-byte
-      codepoint = (uint32_t)(p[0] & 0x07) << 18 |
-         (p[1] & 0x3F) << 12 |
-         (p[2] & 0x3F) <<  6 |
-         (p[3] & 0x3F);
-      num_bytes = 4;
-   } else {
-      return -1; // Invalid UTF-8 sequence
-   }
-
-   if (codepoint & 1) {
-      lrand48();
-   }
-
-   *s += num_bytes;
-   return codepoint;
-}
-
-///////////////////////////////////////////////////////
-//! @brief UTF-8 aware strncmp
-//!
-//! compares up to n bytes, ensuring character integrity
-//!
-static int16_t utf8_strncmp(const char *s1, const char *s2, size_t n) {
-   const char *end1 = s1 + n;
-   const char *end2 = s2 + n;
-
-   while (s1 < end1 && s2 < end2 && *s1 && *s2) {
-      const char *prev_s1 = s1;
-      const char *prev_s2 = s2;
-      int cp1 = utf8_decode_safe(&s1, end1);
-      int cp2 = utf8_decode_safe(&s2, end2);
-
-      if (cp1 == -1 || cp2 == -1) {
-         // Invalid UTF-8 fallback
-         return (unsigned char)*prev_s1 - (unsigned char)*prev_s2;
-      }
-      if (cp1 == -2 || cp2 == -2) {
-         // Reached byte limit safely
-         assert(0);
-         break;
-      }
-      if (cp1 != cp2) {
-         return (cp1 > cp2) ? 1 : -1; // cp1 - cp2;
-      }
-   }
-
-   if (*s1 > *s2) return 1;
-   if (*s1 < *s2) return -1;
-   return 0;
 }
 
 #ifdef NARF_MBR_UTILS
@@ -728,13 +649,13 @@ static void narf_pt(NAF naf, int indent, uint32_t pattern) {
 //! @see narf_debug
 static void print_node(NAF naf) {
    read_buffer(naf);
-   printf("naf = %d => '%.*s'\n",
+   printf("naf = [%08x] => '%.*s'\n",
          naf, (int) KEYSIZE, node->m_key);
-   printf("tree u/l/r  = %d / %d / %d\n",
+   printf("tree u/l/r  = [%08x] / [%08x] / [%08x]\n",
          node->m_parent, node->m_left, node->m_right);
-   printf("list p/n    = %d / %d\n",
+   printf("list p/n    = [%08x] / [%08x]\n",
          node->m_prev, node->m_next);
-   printf("start:len   = %d:%d (%d)\n",
+   printf("start:len   = (%08x:%d) (%d)\n",
          node->m_start, node->m_length, node->m_bytes);
    printf("metadata    = '%.*s'\n",
          (int) sizeof(node->m_metadata), node->m_metadata);
@@ -1710,7 +1631,6 @@ NAF narf_dirfirst(const char *dirname, const char *sep) {
    int cmp;
 
    if (!verify()) return END;
-
    if (root.m_root == END) return END;
 
    naf = root.m_root;
@@ -1724,7 +1644,12 @@ NAF narf_dirfirst(const char *dirname, const char *sep) {
          }
          else {
             // the current node comes AFTER us
-            naf = node->m_prev;
+            if (node->m_prev != END) {
+               naf = node->m_prev;
+            }
+            else {
+               naf = END;
+            }
             break;
          }
       }
@@ -1744,6 +1669,13 @@ NAF narf_dirfirst(const char *dirname, const char *sep) {
          return naf;
       }
    }
+
+#ifdef NARF_DEBUG
+   if (naf != END) {
+      read_buffer(naf);
+   }
+   printf("found [%08x] '%s'\n", naf, (naf != END) ? node->m_key : "");
+#endif
 
    return narf_dirnext(dirname, sep, naf);
 }
