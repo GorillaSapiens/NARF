@@ -20,4 +20,8 @@
 // Useful for real removable media
 #define NARF_MBR_UTILS
 
+// Uncomment this for narf_defrag().
+// Commenting it out will save code space.
+#define NARF_USE_DEFRAG
+
 #endif

@@ -287,6 +287,7 @@ NAF narf_realloc(const char *key,
 //! @return true for success
 bool narf_free(const char *key);
 
+#ifdef NARF_DEFRAG
 ///////////////////////////////////////////////////////
 //! @brief Defragment and compact the NARF
 //! @see narf_free()
@@ -302,6 +303,7 @@ bool narf_free(const char *key);
 //! narf_defrag() is power loss robust.
 //!
 bool narf_defrag(void);
+#endif
 
 ///////////////////////////////////////////////////////
 //! @brief Get the key corresponding to a NAF

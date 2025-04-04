@@ -17,6 +17,12 @@ void narf_debug(NAF naf) {
    printf("debug not supported\n");
 }
 
+__attribute__((weak)) 
+bool narf_defrag(void) {
+   printf("defrag not supported\n");
+   return false;
+}
+
 const char *tf[] = { "false", "true" };
 
 void gremlins(int s, int n);

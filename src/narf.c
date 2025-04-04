@@ -18,7 +18,7 @@
 
 // Uncomment this for debugging structure integrity
 // Beware, this makes EVERYTHING very slow!
-//#define NARF_DEBUG_INTEGRITY
+#define NARF_DEBUG_INTEGRITY
 
 // Uncomment for unicode line drawing characters in debug functions
 #define USE_UTF8_LINE_DRAWING
@@ -2192,6 +2192,7 @@ bool narf_free(const char *key) {
    return true;
 }
 
+#ifdef NARF_DEFRAG
 ///////////////////////////////////////////////////////
 static void defrag_unchain(NAF naf) {
    NAF prev = END;
@@ -2313,6 +2314,7 @@ static void defrag_free_tree(NAF free1, NAF tree2) {
 }
 
 ///////////////////////////////////////////////////////
+//! @brief Carve out unneeded room from data
 static void defrag_carve(void) {
    NAF tmp;
    NAF next;
@@ -2353,6 +2355,7 @@ static void defrag_carve(void) {
 }
 
 ///////////////////////////////////////////////////////
+//! @brief squish data down to lower root.m_bottom
 static void defrag_squish(void) {
    NAF tmp;
    NAF lowest;
@@ -2418,6 +2421,7 @@ static void defrag_squish(void) {
 }
 
 ///////////////////////////////////////////////////////
+//! @brief return true if a NAF is in the chain
 static bool defrag_ischained(NAF naf) {
    NAF tmp;
    for (tmp = root.m_chain; tmp != END; tmp = node->m_next) {
@@ -2430,6 +2434,7 @@ static bool defrag_ischained(NAF naf) {
 }
 
 ///////////////////////////////////////////////////////
+//! @brief shuffle NAFs up to increase root.m_top
 static void defrag_tidy(void) {
    NAF tmp;
    NAF parent, left, right;
@@ -2517,6 +2522,7 @@ static void defrag_tidy(void) {
 }
 
 ///////////////////////////////////////////////////////
+//! @brief update all generation numbers to be recent
 static void defrag_regen(void) {
    NAF i;
 
@@ -2553,6 +2559,7 @@ bool narf_defrag(void) {
 
    return true;
 }
+#endif
 
 ///////////////////////////////////////////////////////
 //! @see narf.h
