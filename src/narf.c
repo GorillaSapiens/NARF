@@ -230,6 +230,9 @@ static bool read_buffer(NAF naf) {
    if (lo_match) {
       if (hi_match) {
 
+         assert(gen_lo == 0 || root.m_generation - gen_lo >= 0);
+         assert(gen_hi == 0 || root.m_generation - gen_hi >= 0);
+
          // both checksums good, we can trust the data
 
          if ((root.m_generation - gen_lo) >= 0) {
@@ -890,16 +893,12 @@ static void reverse_loop(void) {
       a = node->m_prev;
 
       read_buffer(b);
-      b = node->m_next;
+      b = node->m_prev;
       if (b != END) {
          read_buffer(b);
-         b = node->m_next;
-      }
-
-      if (a != END) {
-         read_buffer(a);
          b = node->m_prev;
       }
+
       if (a != END && b != END) {
          assert (a != b);
       }
@@ -925,6 +924,7 @@ static void walk_order(void) {
    naf = root.m_first;
 
    while (naf != END) {
+      count++;
       read_buffer(naf);
       next = node->m_next;
 
@@ -939,6 +939,8 @@ static void walk_order(void) {
       prev = naf;
       naf = next;
    }
+
+   assert(count == root.m_count);
 
    // walk backward
    count = 0;
@@ -961,6 +963,8 @@ static void walk_order(void) {
       next = naf;
       naf = prev;
    }
+
+   assert(count == root.m_count);
 }
 
 ///////////////////////////////////////////////////////
@@ -1010,6 +1014,33 @@ void walk_space(void) {
 }
 
 ///////////////////////////////////////////////////////
+void walk_double_gen(void) {
+   NarfSector ns;
+   int32_t gen_lo;
+   uint32_t ck_lo;
+   Root *asroot = (Root *) buffer;
+
+   narf_io_read(root.m_origin + 0, buffer);
+   gen_lo = asroot->m_generation;
+   ck_lo = asroot->m_checksum;
+
+   narf_io_read(root.m_origin + 1, buffer);
+   if (ck_lo != 0 && asroot->m_checksum != 0);
+   assert(gen_lo != asroot->m_generation);
+
+   for (ns = root.m_top; ns < root.m_total_sectors; ns++) {
+      narf_io_read(ns, buffer);
+      gen_lo = asroot->m_generation;
+      ck_lo = asroot->m_checksum;
+      narf_io_read(ns + 1, buffer);
+      //printf("%d %d\n", gen_lo, asroot->m_generation);
+      assert(ck_lo == 0 ||
+             asroot->m_checksum == 0 ||
+             gen_lo != asroot->m_generation);
+   }
+}
+
+///////////////////////////////////////////////////////
 static void verify_integrity(void) {
    order_loop();
    reverse_loop();
@@ -1018,6 +1049,7 @@ static void verify_integrity(void) {
    walk_tree(END, root.m_root);
    walk_order();
    walk_space();
+   walk_double_gen();
    // TODO test tree <-> first/last cohesion
 }
 #endif
@@ -1447,6 +1479,7 @@ bool narf_mkfs(NarfSector start, NarfSector size) {
    memcpy(buffer, &root, sizeof(root));
    narf_io_write(start, buffer);
 
+   root.m_generation    = 1;
    root.m_random        = lrand48();
    root.m_checksum      = crc32(0, (void *) &root, sizeof(Root) - sizeof(uint32_t));
 
@@ -1538,6 +1571,10 @@ hi_is_good:
    }
 
    srand48(asroot->m_random);
+
+#ifdef NARF_DEBUG_INTEGRITY
+   verify_integrity();
+#endif
 
    return verify();
 }
@@ -1685,13 +1722,6 @@ NAF narf_dirfirst(const char *dirname, const char *sep) {
    else {
       naf = END;
    }
-
-#ifdef NARF_DEBUG
-   if (naf != END) {
-      read_buffer(naf);
-   }
-   printf("found [%08x] '%s'\n", naf, (naf != END) ? node->m_key : "");
-#endif
 
    return narf_dirnext(dirname, sep, naf);
 }
@@ -2300,6 +2330,8 @@ static void defrag_carve(void) {
       if (node->m_length > length) {
          narf_begin();
 
+         read_buffer(tmp);
+
          new_start = start + length;
          new_length = node->m_length - length;
 
@@ -2307,6 +2339,7 @@ static void defrag_carve(void) {
          write_buffer(tmp);
 
          tmp = narf_new(0);
+
          read_buffer(tmp);
          node->m_start = new_start;
          node->m_length = new_length;
@@ -2377,6 +2410,7 @@ static void defrag_squish(void) {
          write_buffer(lowest);
          root.m_bottom = start;
          narf_end();
+         goto another;
       }
 
       assert(0);
