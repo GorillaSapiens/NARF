@@ -287,7 +287,7 @@ NAF narf_realloc(const char *key,
 //! @return true for success
 bool narf_free(const char *key);
 
-#ifdef NARF_DEFRAG
+#ifdef NARF_USE_DEFRAG
 ///////////////////////////////////////////////////////
 //! @brief Defragment and compact the NARF
 //! @see narf_free()

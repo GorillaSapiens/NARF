@@ -2192,7 +2192,7 @@ bool narf_free(const char *key) {
    return true;
 }
 
-#ifdef NARF_DEFRAG
+#ifdef NARF_USE_DEFRAG
 ///////////////////////////////////////////////////////
 static void defrag_unchain(NAF naf) {
    NAF prev = END;
