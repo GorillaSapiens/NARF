@@ -724,6 +724,11 @@ void narf_debug(NAF naf) {
          root.m_generation, root.m_random, root.m_checksum);
    printf("\n");
 
+   if (naf < root.m_top) {
+      printf("bad NAF\n");
+      return;
+   }
+
    if (naf != END) {
       print_node(naf);
       printf("\n");
@@ -968,7 +973,7 @@ static void walk_order(void) {
 }
 
 ///////////////////////////////////////////////////////
-void walk_space(void) {
+static void walk_space(void) {
    NAF inner, outer;
    NarfSector i_s, i_l, o_s;
    bool based = false;
@@ -1014,7 +1019,7 @@ void walk_space(void) {
 }
 
 ///////////////////////////////////////////////////////
-void walk_double_gen(void) {
+static void walk_double_gen(void) {
    NarfSector ns;
    int32_t gen_lo;
    uint32_t ck_lo;
@@ -1735,6 +1740,10 @@ NAF narf_dirnext(const char *dirname, const char *sep, NAF naf) {
 
    if (!verify()) return END;
 
+   if (naf < root.m_top) {
+      return END;
+   }
+  
    if (naf != END) {
       read_buffer(naf);
       naf = node->m_next;
@@ -1933,7 +1942,7 @@ NAF narf_alloc(const char *key, NarfByteSize bytes) {
 
 ///////////////////////////////////////////////////////
 //! @brief copy data and swap data pointers
-void narf_copyswap(NAF alpha, NAF beta, NarfByteSize bytes) {
+static void narf_copyswap(NAF alpha, NAF beta, NarfByteSize bytes) {
    NarfSector alpha_start;
    NarfSector alpha_length;
    NarfSector beta_start;
@@ -1968,19 +1977,12 @@ void narf_copyswap(NAF alpha, NAF beta, NarfByteSize bytes) {
 
 ///////////////////////////////////////////////////////
 //! @see narf.h
-NAF narf_realloc(const char *key, NarfByteSize bytes) {
-   NAF naf;
+NAF narf_realloc(NAF naf, NarfByteSize bytes) {
    NAF tmp;
    NarfSector new_length;
    NarfSector naf_length;
 
-   if (!verify()) return END;
-
-   naf = narf_find(key);
-
-   if (naf == END) {
-      return narf_alloc(key, bytes);
-   }
+   if (!verify() || naf == END || naf < root.m_top) return END;
 
    narf_begin();
 
@@ -2027,15 +2029,22 @@ NAF narf_realloc(const char *key, NarfByteSize bytes) {
 
 ///////////////////////////////////////////////////////
 //! @see narf.h
-bool narf_free(const char *key) {
-   NAF naf;
+NAF narf_realloc_key(const char *key, NarfByteSize bytes) {
+   NAF naf = narf_find(key);
+   if (naf == END) {
+      return narf_alloc(key, bytes);
+   }
+   return narf_realloc(naf, bytes);
+}
+
+///////////////////////////////////////////////////////
+//! @see narf.h
+bool narf_free(NAF naf) {
    NAF parent, child, left, right;
    NAF prev, next;
    NAF repl;
 
    if (!verify()) return false;
-
-   naf = narf_find(key);
 
    if (naf == END) {
       return false;
@@ -2190,6 +2199,13 @@ bool narf_free(const char *key) {
    narf_end();
 
    return true;
+}
+
+///////////////////////////////////////////////////////
+//! @see narf.h
+bool narf_free_key(const char *key) {
+   NAF naf = narf_find(key);
+   return narf_free(naf);
 }
 
 #ifdef NARF_USE_DEFRAG
@@ -2641,22 +2657,21 @@ bool narf_set_metadata(NAF naf, void *data) {
 
 ///////////////////////////////////////////////////////
 //! @see narf.h
-bool narf_append(const char *key, const void *data, NarfByteSize size) {
+bool narf_append(NAF naf, const void *data, NarfByteSize size) {
    NarfByteSize og_bytes;
    NarfByteSize begin;
    NarfByteSize remain;
    NarfSector start;
    NarfSector current;
-   NAF naf = narf_find(key);
 
-   if (naf == END) {
+   if (naf == END || naf < root.m_top) {
       return false;
    }
 
    read_buffer(naf);
    og_bytes = node->m_bytes;
 
-   naf = narf_realloc(key, og_bytes + size);
+   naf = narf_realloc(naf, og_bytes + size);
 
    if (naf == END) {
       return false;

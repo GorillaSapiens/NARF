@@ -253,11 +253,13 @@ NAF narf_alloc(const char *key,
                NarfByteSize    bytes);
 
 ///////////////////////////////////////////////////////
-//! @brief Grow or shrink storage for key
+//! @brief Grow or shrink storage for a NAF
 //! @see narf_alloc()
+//! @see narf_realloc_key()
 //! @see narf_free()
+//! @see narf_free_key()
 //!
-//! Grow or shrink the key's data allocation.
+//! Grow or shrink the data allocation.
 //! Will NOT move the NAF.  If a NAF for the
 //! key does not exist, narf_alloc() is called
 //! to create one.
@@ -267,14 +269,29 @@ NAF narf_alloc(const char *key,
 //!
 //! narf_realloc() is power loss robust.
 //!
-//! @param key The key we're reallocating
+//! @param naf The NAF we're reallocating.  must be valid.
 //! @param bytes The new size in bytes to reserve for data
-//! @return The new NAF
-NAF narf_realloc(const char *key,
-                 NarfByteSize    bytes);
+//! @return The (possibly new) NAF
+NAF narf_realloc(NAF naf, NarfByteSize bytes);
 
 ///////////////////////////////////////////////////////
-//! @brief Free storage for key
+//! @brief Grow or shrink storage for key
+//! @see narf_realloc
+//! @see narf_alloc
+//!
+//! This is a convenience function that calls narf_find()
+//! and then narf_realloc().  if you already have the NAF,
+//! calling narf_realloc() directly is more efficient.
+//!
+//! if the key is not found, narf_alloc() is called instead.
+//!
+//! @param key The key to reallocate
+//! @param bytes The new size in bytes to reserve for data
+//! @return The (possibly new) NAF
+NAF narf_realloc_key(const char *key, NarfByteSize bytes);
+
+///////////////////////////////////////////////////////
+//! @brief Free storage for NAF
 //! @see narf_alloc()
 //! @see narf_realloc()
 //!
@@ -283,9 +300,23 @@ NAF narf_realloc(const char *key,
 //!
 //! narf_free() is power loss robust.
 //!
+//! @param naf The NAF we're freeing
+//! @return true for success
+bool narf_free(NAF naf);
+
+///////////////////////////////////////////////////////
+//! @brief Free storage for key
+//! @see narf_alloc()
+//! @see narf_realloc_key()
+//! @see narf_free()
+//!
+//! this is a convenience function that calls narf_find()
+//! and narf_free().  if you already have the NAF, calling
+//! narf_free() directly is more efficient.
+//!
 //! @param key The key we're freeing
 //! @return true for success
-bool narf_free(const char *key);
+bool narf_free_key(const char *key);
 
 #ifdef NARF_USE_DEFRAG
 ///////////////////////////////////////////////////////
@@ -461,7 +492,8 @@ bool narf_set_metadata(NAF naf, void *data);
 //! @param data Pointer to the data
 //! @param size The size of the data in bytes
 //! @return true for success
-bool narf_append(const char *key, const void *data, NarfByteSize size);
+bool narf_append(NAF naf, const void *data, NarfByteSize size);
+bool narf_append_key(const char *key, const void *data, NarfByteSize size);
 
 #endif
 

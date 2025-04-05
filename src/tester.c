@@ -141,8 +141,8 @@ void process_cmd(char *buffer) {
       NAF result;
 
       sscanf(buffer, "realloc %s %d", key, &size);
-      printf("narf_realloc(%s,%d)=%d\n",
-            key, size, result ASSIGN narf_realloc(key, size));
+      printf("narf_realloc_key(%s,%d)=%d\n",
+            key, size, result ASSIGN narf_realloc_key(key, size));
    }
    else if (!strncmp(buffer, "defrag", 6)) {
       bool result;
@@ -172,8 +172,8 @@ void process_cmd(char *buffer) {
       bool result;
 
       sscanf(buffer, "free %s", key);
-      printf("narf_free(%s)=%s\n",
-            key, tf[result ASSIGN narf_free(key)]);
+      printf("narf_free_key(%s)=%s\n",
+            key, tf[result ASSIGN narf_free_key(key)]);
    }
    else if (!strncmp(buffer, "ls ", 3)) {
       uint32_t sector;
