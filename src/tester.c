@@ -192,24 +192,38 @@ void process_cmd(char *buffer) {
    }
    else if (!strncmp(buffer, "cat ", 4)) {
       char key[512];
+      char line[17];
       NAF naf;
       int len;
       int start;
+      int addr = 0;
+      int tail;
       sscanf(buffer, "cat %s", key);
       printf("narf_find(%s)=%d\n", key, naf ASSIGN narf_find(key));
       start = narf_sector(naf);
       len = narf_size(naf);
+      tail = len % 16;
 
       while (len > 0) {
          narf_io_read(start, key);
          for (int i = 0; i < len && i < 512; i++) {
+            if ((i % 16) == 0) {
+               printf("%04x: ", addr);
+               addr += 16;
+            }
             printf("%02x ", (uint8_t) key[i]);
+            line[i % 16] = (key[i] >= ' ' && key[i] <= '~') ? key[i] : '.';
+            line[(i % 16) + 1] = 0;
             if ((i % 16) == 15) {
-               printf("\n");
+               printf(" %s\n", line);
+               line[0] = 0;
             }
          }
          start++;
          len -= 512;
+      }
+      if (tail) {
+         printf("%*s %s\n", 3 * (16 - tail), " ", line);
       }
       printf("\n");
    }

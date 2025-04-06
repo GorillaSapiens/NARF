@@ -1906,7 +1906,16 @@ NAF narf_alloc(const char *key, NarfByteSize bytes) {
       naf = narf_unchain(length);
    }
    else {
-      naf = END;
+      // special case for length 0
+      // only use 0 length from chain
+      naf = root.m_chain;
+      read_buffer(naf);
+      if (node->m_length == 0) {
+         root.m_chain = node->m_next;
+      }
+      else {
+         naf = END;
+      }
    }
 
    if (naf == END) {
@@ -2590,7 +2599,7 @@ const char *narf_key(NAF naf) {
 NarfSector narf_sector(NAF naf) {
    if (!verify() || naf == END) return END;
    read_buffer(naf);
-   return node->m_start;
+   return root.m_origin + node->m_start;
 }
 
 ///////////////////////////////////////////////////////
