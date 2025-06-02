@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define HAVE_ZLIB
+//#define HAVE_ZLIB
 
 #ifdef HAVE_ZLIB
 #include <zlib.h>   // for crc32
