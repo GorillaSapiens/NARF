@@ -318,21 +318,14 @@ static int my_fsyncdir(const char *path, int isdatasync, struct fuse_file_info *
 // --- File creation ---
 static int my_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
    // Create and open a file
-   fprintf(stderr, "\n\n%s:%d\n\n", __FILE__, __LINE__);
    if (narf_find(path+1) != INVALID_NAF) {
       // it already exists
-      fprintf(stderr, "\n\n%s:%d %s\n\n", __FILE__, __LINE__, path + 1);
       return 0;
    }
    else if (narf_alloc(path+1, 0) != INVALID_NAF) {
       // we had to create it
-      fprintf(stderr, "\n\n%s:%d\n\n", __FILE__, __LINE__);
       return 0;
    }
-   else {
-      fprintf(stderr, "\n\n%s:%d\n\n", __FILE__, __LINE__);
-   }
-   fprintf(stderr, "\n\n%s:%d\n\n", __FILE__, __LINE__);
    return -EROFS;
 }
 
