@@ -984,6 +984,10 @@ static void walk_space(void) {
       return;
    }
 
+   if (root.m_bottom == 2) {
+      based = true;
+   }
+
    for (inner = root.m_top; inner < root.m_total_sectors; inner += 2) {
       flag = false;
       read_buffer(inner);
@@ -1012,7 +1016,6 @@ static void walk_space(void) {
             }
          }
       }
-
       assert(flag);
    }
    assert(based);
@@ -1829,7 +1832,6 @@ static NAF narf_unchain(NarfSector length) {
 //! assumes narf_begin() has been called
 static NAF narf_new(NarfSector length) {
    NAF naf = END;
-
    if ((root.m_bottom + 2) > (root.m_top - length)) {
       // OUT OF SPACE COLLISSION!!!
 
@@ -1907,14 +1909,16 @@ NAF narf_alloc(const char *key, NarfByteSize bytes) {
    }
    else {
       // special case for length 0
-      // only use 0 length from chain
+      // check for 0 length from chain
       naf = root.m_chain;
-      read_buffer(naf);
-      if (node->m_length == 0) {
-         root.m_chain = node->m_next;
-      }
-      else {
-         naf = END;
+      if (naf != END) {
+         read_buffer(naf);
+         if (node->m_length == 0) {
+            root.m_chain = node->m_next;
+         }
+         else {
+            naf = END;
+         }
       }
    }
 
@@ -2164,13 +2168,15 @@ bool narf_free(NAF naf) {
             assert(0);
          }
          write_buffer(parent);
+      }
 
-         if (child != END) {
-            read_buffer(child);
-            node->m_parent = parent;
-            write_buffer(child);
-         }
+      if (child != END) {
+         read_buffer(child);
+         node->m_parent = parent;
+         write_buffer(child);
+      }
 
+      if (parent != END) {
          avl_adjust_heights(parent);
          avl_rebalance(parent);
       }

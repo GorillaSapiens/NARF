@@ -8,212 +8,424 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+#include "narf_conf.h"
+#include "narf_io.h"
+#include "narf.h"
+
+int fd;
+off_t size;
+
+// strips leading slash if present,
+// adds trailing slash if missing
+// must be free'd !!!
+char *xformpath(const char *path) {
+   if (path[0] == '/') {
+      path++;
+   }
+   int n = strlen(path);
+   char *p = malloc(n + 2);
+   strcpy(p, path);
+   if (p[strlen(p) - 1] != '/') {
+      strcat(p, "/");
+   }
+   return p;
+}
+
+//! @brief Initialize the narf_io layer
+//!
+//! Used
+//! This is typically implemented by you for yor
+//! hardware.
+//!
+//! @return true on success
+bool narf_io_open(void) {
+   return true;
+}
+
+//! @brief Deinitialize the narf_io layer
+//!
+//! This is typically implemented by you for yor
+//! hardware.
+//!
+//! @return true on success
+bool narf_io_close(void) {
+   return true;
+}
+
+//! @brief Get the size of the underlying hardware device in sectors
+//!
+//! This is typically implemented by you for yor
+//! hardware.
+//!
+//! @return the number of sectors supported by the device
+uint32_t narf_io_sectors(void) {
+   return size / NARF_SECTOR_SIZE;
+}
+
+//! @brief Write a sector to the disk
+//!
+//! This is typically implemented by you for your
+//! hardware.
+//!
+//! @param sector The address of the sector to access
+//! @param data Pointer to 512 bytes of data to write
+//! @return true on success
+bool narf_io_write(uint32_t sector, void *data) {
+   off_t off = lseek(fd, sector * NARF_SECTOR_SIZE, SEEK_SET);
+   if (off == -1) { return false; }
+   ssize_t size = write(fd, data, NARF_SECTOR_SIZE);
+   if (size != NARF_SECTOR_SIZE) { return false; }
+   fsync(fd);
+   return true;
+}
+
+//! @brief Read a sector from the disk
+//!
+//! This is typically implemented by you for your
+//! hardware.
+//!
+//! @param sector The address of the sector to access
+//! @param data Pointer to 512 bytes read buffer
+//! @return true on success
+bool narf_io_read(uint32_t sector, void *data) {
+   off_t off = lseek(fd, sector * NARF_SECTOR_SIZE, SEEK_SET);
+   if (off == -1) { return false; }
+   ssize_t size = read(fd, data, NARF_SECTOR_SIZE);
+   if (size != NARF_SECTOR_SIZE) { return false; }
+   fsync(fd);
+   return true;
+}
+
 // --- File & directory metadata ---
 static int my_getattr(const char *path, struct stat *st, struct fuse_file_info *fi) {
-    // Fill in stat structure for a file or directory
-    return -ENOENT;
+   // Fill in stat structure for a file or directory
+   memset(st, 0, sizeof(*st));
+
+   // root always exists
+   if (strcmp(path, "/") == 0) {
+      st->st_mode = S_IFDIR | 0755;
+      st->st_nlink = 2;
+      return 0;
+   }
+
+   // see if it exists
+   NAF naf = narf_find(path + 1);
+   if (naf != INVALID_NAF) {
+      if (path[strlen(path) - 1] == '/') {
+         st->st_mode = S_IFDIR | 0755;
+         st->st_nlink = 2;
+         st->st_size = 0;
+         return 0;
+      }
+      else {
+         st->st_mode = S_IFREG | 0444;
+         st->st_nlink = 1;
+         st->st_size = narf_size(naf);
+         return 0;
+      }
+   }
+   else {
+      // is it a phantom directory?
+      char *p = xformpath(path);
+      naf = narf_dirfirst(path, "/");
+      free(p);
+      if (naf != INVALID_NAF) {
+         st->st_mode = S_IFDIR | 0755;
+         st->st_nlink = 2;
+         st->st_size = 0;
+         return 0;
+      }
+   }
+
+   return -ENOENT;
 }
 
 static int my_access(const char *path, int mask) {
-    // Check file permissions
-    return -EACCES;
+   // Check file permissions
+   return 0; // everything allowed
+             // return -EACCES; // denied
 }
 
 static int my_readlink(const char *path, char *buf, size_t size) {
-    // Return symlink target
-    return -EINVAL;
+   // Return symlink target
+   return -EINVAL;
 }
 
 static int my_mknod(const char *path, mode_t mode, dev_t rdev) {
-    // Create special files (FIFO, char/block dev, etc.)
-    return -EPERM;
+   // Create special files (FIFO, char/block dev, etc.)
+   return -EPERM;
 }
 
 static int my_mkdir(const char *path, mode_t mode) {
-    // Create a directory
-    return -EROFS;
+   // Create a directory
+   return -EROFS;
 }
 
 static int my_unlink(const char *path) {
-    // Delete a file
-    return -EROFS;
+   // Delete a file
+   if (narf_free_key(path + 1)) {
+      return 0;
+   }
+   return -EROFS;
 }
 
 static int my_rmdir(const char *path) {
-    // Remove a directory
-    return -EROFS;
+   // Remove a directory
+   return -EROFS;
 }
 
 static int my_symlink(const char *target, const char *linkpath) {
-    // Create a symbolic link
-    return -EROFS;
+   // Create a symbolic link
+   return -EROFS;
 }
 
 static int my_rename(const char *oldpath, const char *newpath, unsigned int flags) {
-    // Rename or move file/directory
-    return -EROFS;
+   // Rename or move file/directory
+   return -EROFS;
 }
 
 static int my_link(const char *from, const char *to) {
-    // Create a hard link
-    return -EROFS;
+   // Create a hard link
+   return -EROFS;
 }
 
 static int my_chmod(const char *path, mode_t mode, struct fuse_file_info *fi) {
-    // Change permissions
-    return -EPERM;
+   // Change permissions
+   return -EPERM;
 }
 
 static int my_chown(const char *path, uid_t uid, gid_t gid, struct fuse_file_info *fi) {
-    // Change owner/group
-    return -EPERM;
+   // Change owner/group
+   return -EPERM;
 }
 
 static int my_truncate(const char *path, off_t size, struct fuse_file_info *fi) {
-    // Resize file
-    return -EROFS;
+   // Resize file
+   return -EROFS;
 }
 
 // --- File I/O ---
 static int my_open(const char *path, struct fuse_file_info *fi) {
-    // Open a file
-    return 0;
+   // Open a file
+   return 0;
 }
 
 static int my_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
-    // Read data from a file
-    return 0;
+   // Read data from a file
+   return 0;
 }
 
 static int my_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
-    // Write data to a file
-    return -EROFS;
+   // Write data to a file
+   return -EROFS;
 }
 
 static int my_statfs(const char *path, struct statvfs *st) {
-    // Report filesystem stats
-    memset(st, 0, sizeof(*st));
-    return 0;
+   // Report filesystem stats
+   memset(st, 0, sizeof(*st));
+   return 0;
 }
 
 static int my_flush(const char *path, struct fuse_file_info *fi) {
-    // Flush file contents (can often be a no-op)
-    return 0;
+   // Flush file contents (can often be a no-op)
+   return 0;
 }
 
 static int my_release(const char *path, struct fuse_file_info *fi) {
-    // Close file
-    return 0;
+   // Close file
+   return 0;
 }
 
 static int my_fsync(const char *path, int isdatasync, struct fuse_file_info *fi) {
-    // Flush file to storage
-    return 0;
+   // Flush file to storage
+   return 0;
 }
 
 // --- Directory handling ---
 static int my_opendir(const char *path, struct fuse_file_info *fi) {
-    // Open directory
-    return 0;
+   // Open directory
+   return 0;
 }
 
 static int my_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
-                      off_t offset, struct fuse_file_info *fi, enum fuse_readdir_flags flags) {
-    // List contents of directory
-    return 0;
+      off_t offset, struct fuse_file_info *fi, enum fuse_readdir_flags flags) {
+   filler(buf, ".", NULL, 0, 0);
+   filler(buf, "..", NULL, 0, 0);
+
+   if (!strcmp(path, "/")) {
+      NAF naf;
+      char *p = NULL, *q = NULL, *r = NULL;
+
+      for (naf = narf_first(); naf != INVALID_NAF; naf = narf_next(naf)) {
+         p = strdup(narf_key(naf));
+         r = strchr(p, '/');
+         if (r == NULL) {
+            // just add it
+            filler(buf, p, NULL, 0, 0);
+            if (q) {
+               free(q);
+               q = NULL;
+            }
+            free(p);
+         }
+         else {
+            *r = 0;
+            if (!q || strcmp(p, q)) {
+               // a new one!
+               if (q) {
+                  free(q);
+               }
+               q = p;
+               filler(buf, p, NULL, 0, 0);
+            }
+            else {
+               // seen it!
+               free(p);
+            }
+         }
+      }
+   }
+   else {
+      char *p = xformpath(path);
+
+      NAF naf = narf_dirfirst(p, "/");
+
+      if (naf != INVALID_NAF) {
+         while (naf != INVALID_NAF) {
+            const char *q = narf_key(naf) + strlen(p);
+            filler(buf, q, NULL, 0, 0);
+            naf = narf_dirnext(p, "/", naf);
+         }
+      }
+
+      free(p);
+   }
+
+   // List contents of directory
+   return 0;
 }
 
 static int my_releasedir(const char *path, struct fuse_file_info *fi) {
-    // Close directory
-    return 0;
+   // Close directory
+   return 0;
 }
 
 static int my_fsyncdir(const char *path, int isdatasync, struct fuse_file_info *fi) {
-    // Sync directory to disk
-    return 0;
+   // Sync directory to disk
+   return 0;
 }
 
 // --- File creation ---
 static int my_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
-    // Create and open a file
-    return -EROFS;
+   // Create and open a file
+   fprintf(stderr, "\n\n%s:%d\n\n", __FILE__, __LINE__);
+   if (narf_find(path+1) != INVALID_NAF) {
+      // it already exists
+      fprintf(stderr, "\n\n%s:%d %s\n\n", __FILE__, __LINE__, path + 1);
+      return 0;
+   }
+   else if (narf_alloc(path+1, 0) != INVALID_NAF) {
+      // we had to create it
+      fprintf(stderr, "\n\n%s:%d\n\n", __FILE__, __LINE__);
+      return 0;
+   }
+   else {
+      fprintf(stderr, "\n\n%s:%d\n\n", __FILE__, __LINE__);
+   }
+   fprintf(stderr, "\n\n%s:%d\n\n", __FILE__, __LINE__);
+   return -EROFS;
 }
 
 // --- Time update ---
 static int my_utimens(const char *path, const struct timespec tv[2], struct fuse_file_info *fi) {
-    // Update file access/modification times
-    return 0;
+   // Update file access/modification times
+   return 0;
 }
 
 // --- Block map (optional) ---
 static int my_bmap(const char *path, size_t blocksize, uint64_t *idx) {
-    // Map logical block to physical (rarely used)
-    return -ENOSYS;
+   // Map logical block to physical (rarely used)
+   return -ENOSYS;
 }
 
 // --- Extended attributes (optional) ---
 static int my_setxattr(const char *path, const char *name, const char *value, size_t size, int flags) {
-    return -ENOTSUP;
+   return -ENOTSUP;
 }
 
 static int my_getxattr(const char *path, const char *name, char *value, size_t size) {
-    return -ENOTSUP;
+   return -ENOTSUP;
 }
 
 static int my_listxattr(const char *path, char *list, size_t size) {
-    return -ENOTSUP;
+   return -ENOTSUP;
 }
 
 static int my_removexattr(const char *path, const char *name) {
-    return -ENOTSUP;
+   return -ENOTSUP;
 }
 
 // --- Filesystem lifecycle ---
 static void *my_init(struct fuse_conn_info *conn, struct fuse_config *cfg) {
-    // Called on mount
-    return NULL;
+   // Called on mount
+   narf_init(0);
+   return NULL;
 }
 
 static void my_destroy(void *private_data) {
-    // Called on unmount
+   // Called on unmount
 }
 
 static struct fuse_operations my_ops = {
-    .getattr     = my_getattr,
-    .readlink    = my_readlink,
-    .mknod       = my_mknod,
-    .mkdir       = my_mkdir,
-    .unlink      = my_unlink,
-    .rmdir       = my_rmdir,
-    .symlink     = my_symlink,
-    .rename      = my_rename,
-    .link        = my_link,
-    .chmod       = my_chmod,
-    .chown       = my_chown,
-    .truncate    = my_truncate,
-    .open        = my_open,
-    .read        = my_read,
-    .write       = my_write,
-    .statfs      = my_statfs,
-    .flush       = my_flush,
-    .release     = my_release,
-    .fsync       = my_fsync,
-    .opendir     = my_opendir,
-    .readdir     = my_readdir,
-    .releasedir  = my_releasedir,
-    .fsyncdir    = my_fsyncdir,
-    .create      = my_create,
-    .access      = my_access,
-    .utimens     = my_utimens,
-    .bmap        = my_bmap,
-    .setxattr    = my_setxattr,
-    .getxattr    = my_getxattr,
-    .listxattr   = my_listxattr,
-    .removexattr = my_removexattr,
-    .init        = my_init,
-    .destroy     = my_destroy,
+   .getattr     = my_getattr,
+   .readlink    = my_readlink,
+   .mknod       = my_mknod,
+   .mkdir       = my_mkdir,
+   .unlink      = my_unlink,
+   .rmdir       = my_rmdir,
+   .symlink     = my_symlink,
+   .rename      = my_rename,
+   .link        = my_link,
+   .chmod       = my_chmod,
+   .chown       = my_chown,
+   .truncate    = my_truncate,
+   .open        = my_open,
+   .read        = my_read,
+   .write       = my_write,
+   .statfs      = my_statfs,
+   .flush       = my_flush,
+   .release     = my_release,
+   .fsync       = my_fsync,
+   .opendir     = my_opendir,
+   .readdir     = my_readdir,
+   .releasedir  = my_releasedir,
+   .fsyncdir    = my_fsyncdir,
+   .create      = my_create,
+   .access      = my_access,
+   .utimens     = my_utimens,
+   .bmap        = my_bmap,
+   .setxattr    = my_setxattr,
+   .getxattr    = my_getxattr,
+   .listxattr   = my_listxattr,
+   .removexattr = my_removexattr,
+   .init        = my_init,
+   .destroy     = my_destroy,
 };
 
 int main(int argc, char *argv[]) {
-    return fuse_main(argc, argv, &my_ops, NULL);
+   char *filename = argv[1];
+
+   fd = open(filename, O_RDWR);
+   if (fd < 0) {
+      perror("open existing");
+      return 1;
+   }
+   size = lseek(fd, SEEK_END, 0);
+
+   argv[1] = argv[0];
+   argc--;
+   argv++;
+   return fuse_main(argc, argv, &my_ops, NULL);
 }
+
+// vim:set ai softtabstop=3 shiftwidth=3 tabstop=3 expandtab: ff=unix

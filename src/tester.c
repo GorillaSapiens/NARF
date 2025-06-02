@@ -333,7 +333,7 @@ void loop(void) {
    char buffer[1024];
 
    printf("#>");
-   while(gets(buffer)) {
+   while(fgets(buffer, sizeof(buffer), stdin)) {
       if (!strncmp(buffer, "exit", 4)) {
          break;
       }
