@@ -384,7 +384,7 @@ bool narf_partition(int partition) {
 
    if (!narf_io_open()) return false;
 
-   start = 2;
+   start = 2048;
    end = narf_io_sectors();
    mbr = (MBR *) buffer;
    narf_io_read(0, buffer);
