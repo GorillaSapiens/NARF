@@ -7,10 +7,15 @@
 #include <fcntl.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <pthread.h>
 
 #include "narf_conf.h"
 #include "narf_io.h"
 #include "narf.h"
+
+static pthread_mutex_t narf_mutex = PTHREAD_MUTEX_INITIALIZER;
+#define LOCK   pthread_mutex_lock(&narf_mutex)
+#define UNLOCK pthread_mutex_unlock(&narf_mutex)
 
 static int fd;
 static off_t size;
@@ -102,6 +107,8 @@ bool narf_io_read(uint32_t sector, void *data) {
 static int my_getattr(const char *path, struct stat *st, struct fuse_file_info *fi) {
    if (!mounted) return -ENODEV;
 
+   LOCK;
+
    // Fill in stat structure for a file or directory
    memset(st, 0, sizeof(*st));
 
@@ -110,6 +117,7 @@ static int my_getattr(const char *path, struct stat *st, struct fuse_file_info *
       st->st_mode = S_IFDIR | 0755;
       st->st_nlink = 2;
       st->st_size = 0;
+      UNLOCK;
       return 0;
    }
 
@@ -119,6 +127,7 @@ static int my_getattr(const char *path, struct stat *st, struct fuse_file_info *
       st->st_mode = S_IFREG | 0444;
       st->st_nlink = 1;
       st->st_size = narf_size(naf);
+      UNLOCK;
       return 0;
    }
 
@@ -130,6 +139,7 @@ static int my_getattr(const char *path, struct stat *st, struct fuse_file_info *
       st->st_mode = S_IFDIR | 0755;
       st->st_nlink = 2;
       st->st_size = narf_size(naf);
+      UNLOCK;
       return 0;
    }
 
@@ -140,9 +150,11 @@ static int my_getattr(const char *path, struct stat *st, struct fuse_file_info *
       st->st_mode = S_IFDIR | 0755;
       st->st_nlink = 2;
       st->st_size = 0;
+      UNLOCK;
       return 0;
    }
 
+   UNLOCK;
    return -ENOENT;
 }
 
@@ -171,9 +183,12 @@ static int my_mknod(const char *path, mode_t mode, dev_t rdev) {
 static int my_mkdir(const char *path, mode_t mode) {
    if (!mounted) return -ENODEV;
 
+   LOCK;
+
    // Create a directory
    if (narf_find(path + 1) != INVALID_NAF) {
       // it already exists as a file
+      UNLOCK;
       return -EEXIST;
    }
 
@@ -182,13 +197,16 @@ static int my_mkdir(const char *path, mode_t mode) {
    if (narf_find(p) != INVALID_NAF) {
       // it already exists as a directory
       free(p);
+      UNLOCK;
       return -EEXIST;
    }
    else if (narf_alloc(p, 0) != INVALID_NAF) {
       // we had to create it
       free(p);
+      UNLOCK;
       return 0;
    }
+      UNLOCK;
    return -EIO;
    // return -EROFS;
 }
@@ -196,19 +214,26 @@ static int my_mkdir(const char *path, mode_t mode) {
 static int my_unlink(const char *path) {
    if (!mounted) return -ENODEV;
 
+   LOCK;
+
    // Delete a file
    if (narf_free_key(path + 1)) {
+      UNLOCK;
       return 0;
    }
+   UNLOCK;
    return -EROFS;
 }
 
 static int my_rmdir(const char *path) {
    if (!mounted) return -ENODEV;
 
+   LOCK;
+
    // Remove a directory
 
    if (narf_find(path + 1) != INVALID_NAF) {
+      UNLOCK;
       return -ENOTDIR;
    }
 
@@ -217,11 +242,13 @@ static int my_rmdir(const char *path) {
 
    if (naf == INVALID_NAF) {
       free(p);
+      UNLOCK;
       return -ENOENT;
    }
 
    if (strcmp(p, narf_key(naf))) {
       free(p);
+      UNLOCK;
       return -ENOTEMPTY;
    }
 
@@ -229,16 +256,19 @@ static int my_rmdir(const char *path) {
 
    if (naf != INVALID_NAF) {
       free(p);
+      UNLOCK;
       return -ENOTEMPTY;
    }
    else {
       if (!narf_free_key(p)) {
          free(p);
+         UNLOCK;
          return -EIO;
       }
       free(p);
    }
 
+   UNLOCK;
    return 0;
 
    //return -EROFS;
@@ -298,10 +328,13 @@ static int my_open(const char *path, struct fuse_file_info *fi) {
 static int my_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
    if (!mounted) return -ENODEV;
 
+   LOCK;
+
    // Read data from a file
 
    NAF naf = narf_find(path + 1);
    if (naf == INVALID_NAF) {
+      UNLOCK;
       return -ENOENT;
    }
 
@@ -309,6 +342,7 @@ static int my_read(const char *path, char *buf, size_t size, off_t offset, struc
    naf = narf_sector(naf);
 
    if (naf == INVALID_NAF || offset >= len) {
+      UNLOCK;
       return 0;
    }
 
@@ -328,6 +362,7 @@ static int my_read(const char *path, char *buf, size_t size, off_t offset, struc
    while (remaining) {
       char data[NARF_SECTOR_SIZE];
       if (!narf_io_read(naf, data)) {
+         UNLOCK;
          return -EIO;
       }
       if (NARF_SECTOR_SIZE - offset >= remaining) {
@@ -344,17 +379,21 @@ static int my_read(const char *path, char *buf, size_t size, off_t offset, struc
       naf++;
    }
 
+   UNLOCK;
    return size;
 }
 
 static int my_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
    if (!mounted) return -ENODEV;
 
+   LOCK;
+
    // Write data to a file
 
    NAF naf = narf_find(path + 1);
 
    if (naf == INVALID_NAF) {
+      UNLOCK;
       return -ENOENT;
    }
 
@@ -363,6 +402,7 @@ static int my_write(const char *path, const char *buf, size_t size, off_t offset
    if (len < offset + size) {
       naf = narf_realloc(naf, offset + size);
       if (naf == INVALID_NAF) {
+         UNLOCK;
          return -EIO;
       }
       len = offset + size;
@@ -380,6 +420,7 @@ static int my_write(const char *path, const char *buf, size_t size, off_t offset
    while (remaining) {
       char data[NARF_SECTOR_SIZE];
       if (!narf_io_read(naf, data)) {
+         UNLOCK;
          return -EIO;
       }
       if (NARF_SECTOR_SIZE - offset >= remaining) {
@@ -394,11 +435,13 @@ static int my_write(const char *path, const char *buf, size_t size, off_t offset
          offset = 0;
       }
       if (!narf_io_write(naf, data)) {
+         UNLOCK;
          return -EIO;
       }
       naf++;
    }
 
+   UNLOCK;
    return size;
    //return -EROFS;
 }
@@ -444,6 +487,10 @@ static int my_opendir(const char *path, struct fuse_file_info *fi) {
 static int my_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
       off_t offset, struct fuse_file_info *fi, enum fuse_readdir_flags flags) {
    if (!mounted) return -ENODEV;
+
+   // List contents of directory
+
+   LOCK;
 
    filler(buf, ".", NULL, 0, 0);
    filler(buf, "..", NULL, 0, 0);
@@ -507,7 +554,7 @@ static int my_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
       free(p);
    }
 
-   // List contents of directory
+   UNLOCK;
    return 0;
 }
 
@@ -529,15 +576,20 @@ static int my_fsyncdir(const char *path, int isdatasync, struct fuse_file_info *
 static int my_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
    if (!mounted) return -ENODEV;
 
+   LOCK;
+
    // Create and open a file
    if (narf_find(path+1) != INVALID_NAF) {
       // it already exists
+      UNLOCK;
       return 0;
    }
    else if (narf_alloc(path+1, 0) != INVALID_NAF) {
       // we had to create it
+      UNLOCK;
       return 0;
    }
+   UNLOCK;
    return -EROFS;
 }
 
@@ -585,6 +637,7 @@ static int my_removexattr(const char *path, const char *name) {
 // --- Filesystem lifecycle ---
 static void *my_init(struct fuse_conn_info *conn, struct fuse_config *cfg) {
    // Called on mount
+   LOCK;
    if (partition == -1) {
       mounted = narf_init(0);
    }
@@ -594,6 +647,7 @@ static void *my_init(struct fuse_conn_info *conn, struct fuse_config *cfg) {
       }
       mounted = narf_mount(partition);
    }
+   UNLOCK;
    return NULL;
 }
 

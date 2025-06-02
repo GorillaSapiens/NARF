@@ -14,11 +14,11 @@
 #include "narf_io.h"
 
 // Uncomment this for debugging functions
-#define NARF_DEBUG
+//#define NARF_DEBUG
 
 // Uncomment this for debugging structure integrity
 // Beware, this makes EVERYTHING very slow!
-#define NARF_DEBUG_INTEGRITY
+//#define NARF_DEBUG_INTEGRITY
 
 // Uncomment for unicode line drawing characters in debug functions
 #define USE_UTF8_LINE_DRAWING
