@@ -639,7 +639,21 @@ static struct fuse_operations my_ops = {
    .destroy     = my_destroy,
 };
 
+void usage(const char *progname) {
+    fprintf(stderr,
+        "Usage: %s <backing_file[:N]> [FUSE options...]\n"
+        "  <backing_file> : raw device or image file\n"
+        "  [:N]           : optional partition number to mount\n"
+        "                  - if : is present but no number, will auto-detect 0x6E type\n",
+        progname);
+    exit(1);
+}
+
 int main(int argc, char *argv[]) {
+   if (argc < 3) {
+      usage(argv[0]);
+   }
+
    char *filename = argv[1];
    char *colon = strchr(filename, ':');
 
