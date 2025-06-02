@@ -105,36 +105,38 @@ static int my_getattr(const char *path, struct stat *st, struct fuse_file_info *
    if (strcmp(path, "/") == 0) {
       st->st_mode = S_IFDIR | 0755;
       st->st_nlink = 2;
+      st->st_size = 0;
       return 0;
    }
 
-   // see if it exists
+   // see if it exists as a file
    NAF naf = narf_find(path + 1);
    if (naf != INVALID_NAF) {
-      if (path[strlen(path) - 1] == '/') {
-         st->st_mode = S_IFDIR | 0755;
-         st->st_nlink = 2;
-         st->st_size = 0;
-         return 0;
-      }
-      else {
-         st->st_mode = S_IFREG | 0444;
-         st->st_nlink = 1;
-         st->st_size = narf_size(naf);
-         return 0;
-      }
+      st->st_mode = S_IFREG | 0444;
+      st->st_nlink = 1;
+      st->st_size = narf_size(naf);
+      return 0;
    }
-   else {
-      // is it a phantom directory?
-      char *p = xformpath(path);
-      naf = narf_dirfirst(path, "/");
+
+   // see if it exists as a directory
+   char *p = xformpath(path);
+   naf = narf_find(p);
+   if (naf != INVALID_NAF) {
       free(p);
-      if (naf != INVALID_NAF) {
-         st->st_mode = S_IFDIR | 0755;
-         st->st_nlink = 2;
-         st->st_size = 0;
-         return 0;
-      }
+      st->st_mode = S_IFDIR | 0755;
+      st->st_nlink = 2;
+      st->st_size = narf_size(naf);
+      return 0;
+   }
+
+   // see if it exists as a phantom directory
+   naf = narf_dirfirst(p, "/");
+   free(p);
+   if (naf != INVALID_NAF) {
+      st->st_mode = S_IFDIR | 0755;
+      st->st_nlink = 2;
+      st->st_size = 0;
+      return 0;
    }
 
    return -ENOENT;
@@ -158,7 +160,25 @@ static int my_mknod(const char *path, mode_t mode, dev_t rdev) {
 
 static int my_mkdir(const char *path, mode_t mode) {
    // Create a directory
-   return -EROFS;
+   if (narf_find(path + 1) != INVALID_NAF) {
+      // it already exists as a file
+      return -EEXIST;
+   }
+
+   char *p = xformpath(path);
+
+   if (narf_find(p) != INVALID_NAF) {
+      // it already exists as a directory
+      free(p);
+      return -EEXIST;
+   }
+   else if (narf_alloc(p, 0) != INVALID_NAF) {
+      // we had to create it
+      free(p);
+      return 0;
+   }
+   return -EIO;
+   // return -EROFS;
 }
 
 static int my_unlink(const char *path) {
@@ -293,7 +313,17 @@ static int my_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
       if (naf != INVALID_NAF) {
          while (naf != INVALID_NAF) {
             const char *q = narf_key(naf) + strlen(p);
-            filler(buf, q, NULL, 0, 0);
+            if (*q) {
+               if (q[strlen(q) - 1] == '/') {
+                  char *dirname = strdup(q);
+                  dirname[strlen(dirname) - 1] = 0;
+                  filler(buf, dirname, NULL, 0, 0);
+                  free(dirname);
+               }
+               else {
+                  filler(buf, q, NULL, 0, 0);
+               }
+            }
             naf = narf_dirnext(p, "/", naf);
          }
       }
