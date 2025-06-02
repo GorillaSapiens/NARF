@@ -191,7 +191,41 @@ static int my_unlink(const char *path) {
 
 static int my_rmdir(const char *path) {
    // Remove a directory
-   return -EROFS;
+
+   if (narf_find(path + 1) != INVALID_NAF) {
+      return -ENOTDIR;
+   }
+
+   char *p = xformpath(path);
+   NAF naf = narf_dirfirst(p, "/");
+
+   if (naf == INVALID_NAF) {
+      free(p);
+      return -ENOENT;
+   }
+
+   if (strcmp(p, narf_key(naf))) {
+      free(p);
+      return -ENOTEMPTY;
+   }
+
+   naf = narf_dirnext(p, "/", naf);
+
+   if (naf != INVALID_NAF) {
+      free(p);
+      return -ENOTEMPTY;
+   }
+   else {
+      if (!narf_free_key(p)) {
+         free(p);
+         return -EIO;
+      }
+      free(p);
+   }
+
+   return 0;
+
+   //return -EROFS;
 }
 
 static int my_symlink(const char *target, const char *linkpath) {
@@ -227,17 +261,112 @@ static int my_truncate(const char *path, off_t size, struct fuse_file_info *fi) 
 // --- File I/O ---
 static int my_open(const char *path, struct fuse_file_info *fi) {
    // Open a file
+   // optional, fuse should only call if it exists.
    return 0;
 }
 
 static int my_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
    // Read data from a file
-   return 0;
+
+   NAF naf = narf_find(path + 1);
+   if (naf == INVALID_NAF) {
+      return -ENOENT;
+   }
+
+   size_t len = narf_size(naf);
+   naf = narf_sector(naf);
+
+   if (naf == INVALID_NAF || offset >= len) {
+      return 0;
+   }
+
+   if (offset + size > len) {
+      size = len - offset;
+   }
+
+   // this would be so much easier if i cheated...
+
+   while (offset >= NARF_SECTOR_SIZE) {
+      offset -= NARF_SECTOR_SIZE;
+      naf++;
+   }
+
+   size_t remaining = size;
+
+   while (remaining) {
+      char data[NARF_SECTOR_SIZE];
+      if (!narf_io_read(naf, data)) {
+         return -EIO;
+      }
+      if (NARF_SECTOR_SIZE - offset >= remaining) {
+         memcpy(buf, data + offset, remaining);
+         buf += remaining;
+         remaining = 0;
+      }
+      else {
+         memcpy(buf, data + offset, NARF_SECTOR_SIZE - offset);
+         buf += (NARF_SECTOR_SIZE - offset);
+         remaining -= (NARF_SECTOR_SIZE - offset);
+         offset = 0;
+      }
+      naf++;
+   }
+
+   return size;
 }
 
 static int my_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
    // Write data to a file
-   return -EROFS;
+
+   NAF naf = narf_find(path + 1);
+
+   if (naf == INVALID_NAF) {
+      return -ENOENT;
+   }
+
+   size_t len = narf_size(naf);
+
+   if (len < offset + size) {
+      naf = narf_realloc(naf, offset + size);
+      if (naf == INVALID_NAF) {
+         return -EIO;
+      }
+      len = offset + size;
+   }
+
+   naf = narf_sector(naf);
+
+   while (offset >= NARF_SECTOR_SIZE) {
+      offset -= NARF_SECTOR_SIZE;
+      naf++;
+   }
+
+   size_t remaining = size;
+
+   while (remaining) {
+      char data[NARF_SECTOR_SIZE];
+      if (!narf_io_read(naf, data)) {
+         return -EIO;
+      }
+      if (NARF_SECTOR_SIZE - offset >= remaining) {
+         memcpy(data + offset, buf, remaining);
+         buf += remaining;
+         remaining = 0;
+      }
+      else {
+         memcpy(data + offset, buf, NARF_SECTOR_SIZE - offset);
+         buf += (NARF_SECTOR_SIZE - offset);
+         remaining -= (NARF_SECTOR_SIZE - offset);
+         offset = 0;
+      }
+      if (!narf_io_write(naf, data)) {
+         return -EIO;
+      }
+      naf++;
+   }
+
+   return size;
+   //return -EROFS;
 }
 
 static int my_statfs(const char *path, struct statvfs *st) {
@@ -253,6 +382,7 @@ static int my_flush(const char *path, struct fuse_file_info *fi) {
 
 static int my_release(const char *path, struct fuse_file_info *fi) {
    // Close file
+   // optional in our case
    return 0;
 }
 
