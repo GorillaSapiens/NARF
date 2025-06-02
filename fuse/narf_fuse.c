@@ -12,8 +12,10 @@
 #include "narf_io.h"
 #include "narf.h"
 
-int fd;
-off_t size;
+static int fd;
+static off_t size;
+static int partition = -1;
+static bool mounted = false;
 
 // strips leading slash if present,
 // adds trailing slash if missing
@@ -98,6 +100,8 @@ bool narf_io_read(uint32_t sector, void *data) {
 
 // --- File & directory metadata ---
 static int my_getattr(const char *path, struct stat *st, struct fuse_file_info *fi) {
+   if (!mounted) return -ENODEV;
+
    // Fill in stat structure for a file or directory
    memset(st, 0, sizeof(*st));
 
@@ -143,22 +147,30 @@ static int my_getattr(const char *path, struct stat *st, struct fuse_file_info *
 }
 
 static int my_access(const char *path, int mask) {
+   if (!mounted) return -ENODEV;
+
    // Check file permissions
    return 0; // everything allowed
              // return -EACCES; // denied
 }
 
 static int my_readlink(const char *path, char *buf, size_t size) {
+   if (!mounted) return -ENODEV;
+
    // Return symlink target
    return -EINVAL;
 }
 
 static int my_mknod(const char *path, mode_t mode, dev_t rdev) {
+   if (!mounted) return -ENODEV;
+
    // Create special files (FIFO, char/block dev, etc.)
    return -EPERM;
 }
 
 static int my_mkdir(const char *path, mode_t mode) {
+   if (!mounted) return -ENODEV;
+
    // Create a directory
    if (narf_find(path + 1) != INVALID_NAF) {
       // it already exists as a file
@@ -182,6 +194,8 @@ static int my_mkdir(const char *path, mode_t mode) {
 }
 
 static int my_unlink(const char *path) {
+   if (!mounted) return -ENODEV;
+
    // Delete a file
    if (narf_free_key(path + 1)) {
       return 0;
@@ -190,6 +204,8 @@ static int my_unlink(const char *path) {
 }
 
 static int my_rmdir(const char *path) {
+   if (!mounted) return -ENODEV;
+
    // Remove a directory
 
    if (narf_find(path + 1) != INVALID_NAF) {
@@ -229,43 +245,59 @@ static int my_rmdir(const char *path) {
 }
 
 static int my_symlink(const char *target, const char *linkpath) {
+   if (!mounted) return -ENODEV;
+
    // Create a symbolic link
    return -EROFS;
 }
 
 static int my_rename(const char *oldpath, const char *newpath, unsigned int flags) {
+   if (!mounted) return -ENODEV;
+
    // Rename or move file/directory
    return -EROFS;
 }
 
 static int my_link(const char *from, const char *to) {
+   if (!mounted) return -ENODEV;
+
    // Create a hard link
    return -EROFS;
 }
 
 static int my_chmod(const char *path, mode_t mode, struct fuse_file_info *fi) {
+   if (!mounted) return -ENODEV;
+
    // Change permissions
    return -EPERM;
 }
 
 static int my_chown(const char *path, uid_t uid, gid_t gid, struct fuse_file_info *fi) {
+   if (!mounted) return -ENODEV;
+
    // Change owner/group
    return -EPERM;
 }
 
 static int my_truncate(const char *path, off_t size, struct fuse_file_info *fi) {
+   if (!mounted) return -ENODEV;
+
    // Resize file
    return -EROFS;
 }
 
 // --- File I/O ---
 static int my_open(const char *path, struct fuse_file_info *fi) {
+   if (!mounted) return -ENODEV;
+
    // Open a file
    // optional, fuse should only call if it exists.
    return 0;
 }
 
 static int my_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
+   if (!mounted) return -ENODEV;
+
    // Read data from a file
 
    NAF naf = narf_find(path + 1);
@@ -316,6 +348,8 @@ static int my_read(const char *path, char *buf, size_t size, off_t offset, struc
 }
 
 static int my_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
+   if (!mounted) return -ENODEV;
+
    // Write data to a file
 
    NAF naf = narf_find(path + 1);
@@ -370,35 +404,47 @@ static int my_write(const char *path, const char *buf, size_t size, off_t offset
 }
 
 static int my_statfs(const char *path, struct statvfs *st) {
+   if (!mounted) return -ENODEV;
+
    // Report filesystem stats
    memset(st, 0, sizeof(*st));
    return 0;
 }
 
 static int my_flush(const char *path, struct fuse_file_info *fi) {
+   if (!mounted) return -ENODEV;
+
    // Flush file contents (can often be a no-op)
    return 0;
 }
 
 static int my_release(const char *path, struct fuse_file_info *fi) {
+   if (!mounted) return -ENODEV;
+
    // Close file
    // optional in our case
    return 0;
 }
 
 static int my_fsync(const char *path, int isdatasync, struct fuse_file_info *fi) {
+   if (!mounted) return -ENODEV;
+
    // Flush file to storage
    return 0;
 }
 
 // --- Directory handling ---
 static int my_opendir(const char *path, struct fuse_file_info *fi) {
+   if (!mounted) return -ENODEV;
+
    // Open directory
    return 0;
 }
 
 static int my_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
       off_t offset, struct fuse_file_info *fi, enum fuse_readdir_flags flags) {
+   if (!mounted) return -ENODEV;
+
    filler(buf, ".", NULL, 0, 0);
    filler(buf, "..", NULL, 0, 0);
 
@@ -466,17 +512,23 @@ static int my_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 }
 
 static int my_releasedir(const char *path, struct fuse_file_info *fi) {
+   if (!mounted) return -ENODEV;
+
    // Close directory
    return 0;
 }
 
 static int my_fsyncdir(const char *path, int isdatasync, struct fuse_file_info *fi) {
+   if (!mounted) return -ENODEV;
+
    // Sync directory to disk
    return 0;
 }
 
 // --- File creation ---
 static int my_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
+   if (!mounted) return -ENODEV;
+
    // Create and open a file
    if (narf_find(path+1) != INVALID_NAF) {
       // it already exists
@@ -491,41 +543,63 @@ static int my_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
 
 // --- Time update ---
 static int my_utimens(const char *path, const struct timespec tv[2], struct fuse_file_info *fi) {
+   if (!mounted) return -ENODEV;
+
    // Update file access/modification times
    return 0;
 }
 
 // --- Block map (optional) ---
 static int my_bmap(const char *path, size_t blocksize, uint64_t *idx) {
+   if (!mounted) return -ENODEV;
+
    // Map logical block to physical (rarely used)
    return -ENOSYS;
 }
 
 // --- Extended attributes (optional) ---
 static int my_setxattr(const char *path, const char *name, const char *value, size_t size, int flags) {
+   if (!mounted) return -ENODEV;
+
    return -ENOTSUP;
 }
 
 static int my_getxattr(const char *path, const char *name, char *value, size_t size) {
+   if (!mounted) return -ENODEV;
+
    return -ENOTSUP;
 }
 
 static int my_listxattr(const char *path, char *list, size_t size) {
+   if (!mounted) return -ENODEV;
+
    return -ENOTSUP;
 }
 
 static int my_removexattr(const char *path, const char *name) {
+   if (!mounted) return -ENODEV;
+
    return -ENOTSUP;
 }
 
 // --- Filesystem lifecycle ---
 static void *my_init(struct fuse_conn_info *conn, struct fuse_config *cfg) {
    // Called on mount
-   narf_init(0);
+   if (partition == -1) {
+      mounted = narf_init(0);
+   }
+   else {
+      if (partition == 0) {
+         partition = narf_findpart();
+      }
+      mounted = narf_mount(partition);
+   }
    return NULL;
 }
 
 static void my_destroy(void *private_data) {
+   //if (!mounted) return -ENODEV;
+
    // Called on unmount
 }
 
@@ -567,6 +641,18 @@ static struct fuse_operations my_ops = {
 
 int main(int argc, char *argv[]) {
    char *filename = argv[1];
+   char *colon = strchr(filename, ':');
+
+   if (colon) {
+      *colon = 0;
+      colon++;
+      if (*colon) {
+         partition = *colon - '0';
+      }
+      else {
+         partition = 0;
+      }
+   }
 
    fd = open(filename, O_RDWR);
    if (fd < 0) {
