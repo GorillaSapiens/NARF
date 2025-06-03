@@ -285,7 +285,70 @@ static int my_rename(const char *oldpath, const char *newpath, unsigned int flag
    if (!mounted) return -ENODEV;
 
    // Rename or move file/directory
-   return -EROFS;
+
+   LOCK;
+
+   int ret = -EROFS;
+
+   char *olddir = xformpath(oldpath);
+   char *newdir = xformpath(newpath);
+
+   NAF oldfile = narf_find(oldpath + 1);
+   NAF newfile = narf_find(newpath + 1);
+   NAF olddirnaf = narf_find(olddir);
+   NAF newdirnaf = narf_find(newdir);
+
+   if (oldfile == INVALID_NAF && olddirnaf == INVALID_NAF) {
+      ret = -ENOENT;
+      goto fini;
+   }
+
+   if (newfile != INVALID_NAF || newdirnaf != INVALID_NAF) {
+      ret = -EEXIST;
+      goto fini;
+   }
+
+   if (oldfile != INVALID_NAF) {
+      ret = 0;
+      if (!narf_rename_key(oldpath + 1, newpath + 1)) {
+         ret = -EIO;
+      }
+      goto fini;
+   }
+
+   // olddir is a directory.  this will be tricky.
+   // this is only safe because i know what i'm doing...
+   int olen = strlen(olddir);
+   int nlen = strlen(newdir);
+   NAF naf, nextnaf;
+   for (naf = narf_find(olddir);
+         naf != INVALID_NAF;
+         naf = nextnaf) {
+      nextnaf = narf_next(naf);
+      char buf[512];
+      char *x = strdup(narf_key(naf));
+      if (!strncmp(olddir, x, olen)) {
+         strcpy(buf + sizeof(buf) - 1 - strlen(x), x);
+         memcpy(buf + sizeof(buf) - 1 - strlen(x) + olen - nlen, newdir, nlen);
+         if (!narf_rename_key(x, buf + sizeof(buf) - 1 - strlen(x) + olen - nlen)) {
+            free(x);
+            ret = -EIO;
+            goto fini;
+         }
+         free(x);
+      }
+      else {
+         break;
+      }
+   }
+   ret = 0;
+
+fini:
+   free(olddir);
+   free(newdir);
+   UNLOCK;
+   return ret;
+   // return -EROFS;
 }
 
 static int my_link(const char *from, const char *to) {
