@@ -3,6 +3,13 @@
 
 // Tunable parameters go in this file
 
+// Uncomment this for debugging functions
+#define NARF_DEBUG
+
+// Uncomment this for debugging structure integrity
+// Beware, this makes EVERYTHING very slow!
+//#define NARF_DEBUG_INTEGRITY
+
 // Size of a sector in bytes
 // beware of large values, NARF keeps a sector sized
 // buffer in memory.
