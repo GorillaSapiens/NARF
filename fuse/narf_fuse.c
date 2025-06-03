@@ -13,6 +13,8 @@
 #include "narf_io.h"
 #include "narf.h"
 
+// NARF is not thread safe.  so here we have a mutex, used
+// by all FUSE functions, to guarantee single threaded access.
 static pthread_mutex_t narf_mutex = PTHREAD_MUTEX_INITIALIZER;
 #define LOCK   pthread_mutex_lock(&narf_mutex)
 #define UNLOCK pthread_mutex_unlock(&narf_mutex)

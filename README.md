@@ -25,3 +25,5 @@ we don't need them
 because
 
 NARF is Not A Real Filesystem.
+
+(but there's a FUSE driver, so you can mount it in Linux...)
