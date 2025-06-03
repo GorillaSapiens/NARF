@@ -291,6 +291,16 @@ NAF narf_realloc(NAF naf, NarfByteSize bytes);
 NAF narf_realloc_key(const char *key, NarfByteSize bytes);
 
 ///////////////////////////////////////////////////////
+//! @brief Rename key used for storage
+//!
+//! narf_rename_key() is power loss robust.
+//!
+//! @param key The key to rename
+//! @param newkey The new key name
+//! @return true on success
+bool narf_rename_key(const char *key, const char *newkey);
+
+///////////////////////////////////////////////////////
 //! @brief Free storage for NAF
 //! @see narf_alloc()
 //! @see narf_realloc()

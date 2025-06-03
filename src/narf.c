@@ -14,11 +14,11 @@
 #include "narf_io.h"
 
 // Uncomment this for debugging functions
-//#define NARF_DEBUG
+#define NARF_DEBUG
 
 // Uncomment this for debugging structure integrity
 // Beware, this makes EVERYTHING very slow!
-//#define NARF_DEBUG_INTEGRITY
+#define NARF_DEBUG_INTEGRITY
 
 // Uncomment for unicode line drawing characters in debug functions
 #define USE_UTF8_LINE_DRAWING
@@ -1587,6 +1587,7 @@ hi_is_good:
    return verify();
 }
 
+// NB: we're single threaded / non reentrant !
 static int semaphore = 0;
 
 ///////////////////////////////////////////////////////
@@ -2048,6 +2049,51 @@ NAF narf_realloc_key(const char *key, NarfByteSize bytes) {
       return narf_alloc(key, bytes);
    }
    return narf_realloc(naf, bytes);
+}
+
+///////////////////////////////////////////////////////
+//! @see narf.h
+bool narf_rename_key(const char *key, const char *newkey) {
+   NAF newnaf = END, oldnaf = narf_find(key);
+   NarfSector   start;       // data start sector
+   NarfSector   length;      // data length in sectors
+   NarfByteSize bytes;       // data size in bytes
+   uint8_t meta[sizeof(node->m_metadata)];
+
+   if (oldnaf == END || narf_find(newkey) != END) {
+      return false;
+   }
+
+   narf_begin();
+
+   // allocate a new one with zero
+   newnaf = narf_alloc(newkey, 0);
+
+   read_buffer(oldnaf);
+   start = node->m_start;
+   length = node->m_length;
+   bytes = node->m_bytes;
+   memcpy(meta, node->m_metadata, sizeof(node->m_metadata));
+   write_buffer(oldnaf);
+
+   read_buffer(newnaf);
+   node->m_start = start;
+   node->m_length = length;
+   node->m_bytes = bytes;
+   memcpy(node->m_metadata, meta, sizeof(node->m_metadata));
+   write_buffer(newnaf);
+
+   read_buffer(oldnaf);
+   node->m_start = END;
+   node->m_length = 0;
+   node->m_bytes = 0;
+   write_buffer(oldnaf);
+
+   narf_free(oldnaf);
+
+   narf_end();
+
+   return true;
 }
 
 ///////////////////////////////////////////////////////

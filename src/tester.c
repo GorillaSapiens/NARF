@@ -144,6 +144,15 @@ void process_cmd(char *buffer) {
       printf("narf_realloc_key(%s,%d)=%d\n",
             key, size, result ASSIGN narf_realloc_key(key, size));
    }
+   else if (!strncmp(buffer, "rename ", 7)) {
+      char n1[32];
+      char n2[32];
+      bool result;
+
+      sscanf(buffer, "rename %s %s", n1, n2);
+      printf("narf_rename(%s,%s)=%d\n",
+            n1, n2, result ASSIGN narf_rename_key(n1, n2));
+   }
    else if (!strncmp(buffer, "defrag", 6)) {
       bool result;
 
@@ -284,7 +293,7 @@ void gremlins(int s, int n) {
    process_cmd("mount 1");
 
    for(m = 0; m < n; m++) {
-      switch(lrand48() % 5) {
+      switch(lrand48() % 6) {
          case 0:
             sprintf(buf, "alloc %s %d", rname(l), (int)(lrand48() % 65536));
             break;
@@ -310,6 +319,13 @@ void gremlins(int s, int n) {
                   default:
                      sprintf(buf, "cat %s", rname(l));
                }
+            }
+            break;
+         case 5:
+            {
+               char *n1 = strdup(rname(l));
+               char *n2 = strdup(rname(l));
+               sprintf(buf, "rename %s %s", n1, n2);
             }
             break;
       }
