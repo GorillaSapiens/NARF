@@ -5,7 +5,7 @@ bootloader.bin: bootloader.asm
 	nasm -f bin bootloader.asm -o bootloader.bin
 
 clean:
-	rm -rf tester.exe
+	rm -rf tester
 
 
 # vim:set ai softtabstop=3 shiftwidth=3 tabstop=3 expandtab: ff=unix
