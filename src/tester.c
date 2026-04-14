@@ -69,8 +69,13 @@ void do_pack_dive(const char *realpath, const char *path, DIR *dir) {
 
 void do_pack(const char *dirname) {
    DIR *dir = opendir(dirname);
-   do_pack_dive(dirname, "", dir);
-   closedir(dir);
+   if (dir) {
+      do_pack_dive(dirname, "", dir);
+      closedir(dir);
+   }
+   else {
+      fprintf(stderr, "could not open '%s'\n", dirname);
+   }
 }
 
 void process_cmd(char *buffer) {
@@ -357,6 +362,9 @@ void loop(void) {
          break;
       }
       else {
+         while(buffer[strlen(buffer) - 1] < ' ') {
+            buffer[strlen(buffer) - 1] = 0;
+         }
          process_cmd(buffer);
       }
       printf("#>");
