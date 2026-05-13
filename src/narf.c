@@ -2423,9 +2423,10 @@ static void defrag_free_tree(NAF free1, NAF tree2) {
 
 ///////////////////////////////////////////////////////
 //! @brief Carve out unneeded room from data
-static void defrag_carve(void) {
+static bool defrag_carve(void) {
    NAF tmp;
    NAF next;
+   NAF free_naf;
    NarfSector start;
    NarfSector length;
    NarfSector new_start;
@@ -2433,33 +2434,40 @@ static void defrag_carve(void) {
 
    for (tmp = root.m_first; tmp != END; tmp = next) {
       read_buffer(tmp);
+
       next = node->m_next;
       start = node->m_start;
       length = BYTES2SECTORS(node->m_bytes);
 
       if (node->m_length > length) {
-         narf_begin();
-
-         read_buffer(tmp);
-
          new_start = start + length;
          new_length = node->m_length - length;
 
+         narf_begin();
+
+         free_naf = narf_new(0);
+
+         if (free_naf == END) {
+            narf_rollback();
+            return false;
+         }
+
+         read_buffer(tmp);
          node->m_length = length;
          write_buffer(tmp);
 
-         tmp = narf_new(0);
-
-         read_buffer(tmp);
+         read_buffer(free_naf);
          node->m_start = new_start;
          node->m_length = new_length;
-         write_buffer(tmp);
+         write_buffer(free_naf);
 
-         narf_chain(tmp);
+         narf_chain(free_naf);
 
          narf_end();
       }
    }
+
+   return true;
 }
 
 ///////////////////////////////////////////////////////
@@ -2654,7 +2662,9 @@ bool narf_defrag(void) {
    // data.  so we need to do this in small steps.
 
    // first, carve free space from over long files
-   defrag_carve();
+   if (!defrag_carve()) {
+      return false;
+   }
 
    // second, squish down
    defrag_squish();
