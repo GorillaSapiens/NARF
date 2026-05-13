@@ -2422,7 +2422,7 @@ static void defrag_two_free(NAF free1, NAF free2) {
 //! @brief handle adjacent free and tree nodes
 //!
 //! this is power loss robust
-static void defrag_free_tree(NAF free1, NAF tree2) {
+static bool defrag_free_tree(NAF free1, NAF tree2) {
    NarfSector f_start;
    NarfSector f_length;
    NarfSector t_start;
@@ -2438,10 +2438,9 @@ static void defrag_free_tree(NAF free1, NAF tree2) {
    t_length = node->m_length;
 
    if (f_length >= t_length) {
-      // easy case, non overlapping
       for (i = 0; i < t_length; i++) {
-         narf_io_read(root.m_origin + t_start + i, buffer);
-         narf_io_write(root.m_origin + f_start + i, buffer);
+         if (!narf_io_read(root.m_origin + t_start + i, buffer)) return false;
+         if (!narf_io_write(root.m_origin + f_start + i, buffer)) return false;
       }
 
       narf_begin();
@@ -2457,31 +2456,39 @@ static void defrag_free_tree(NAF free1, NAF tree2) {
 
       narf_chain(free1);
       narf_end();
+
+      return true;
    }
-   else {
-      // overwriting valid data is bad for power loss
-      // so we ALLOCATE new data and move it there!
-      // hopefully this will let us move other stuff down.
-      for (i = 0; i < t_length; i++) {
-         narf_io_read(root.m_origin + t_start + i, buffer);
-         narf_io_write(root.m_origin + root.m_bottom + i, buffer);
-      }
 
-      narf_begin();
-      defrag_unchain(free1);
-
-      read_buffer(tree2);
-      node->m_start = root.m_bottom;
-      root.m_bottom += t_length;
-      write_buffer(tree2);
-
-      read_buffer(free1);
-      node->m_length += t_length;
-      write_buffer(free1);
-
-      narf_chain(free1);
-      narf_end();
+   if (root.m_bottom > root.m_top) {
+      return false;
    }
+
+   if (t_length > root.m_top - root.m_bottom) {
+      return false;
+   }
+
+   for (i = 0; i < t_length; i++) {
+      if (!narf_io_read(root.m_origin + t_start + i, buffer)) return false;
+      if (!narf_io_write(root.m_origin + root.m_bottom + i, buffer)) return false;
+   }
+
+   narf_begin();
+   defrag_unchain(free1);
+
+   read_buffer(tree2);
+   node->m_start = root.m_bottom;
+   root.m_bottom += t_length;
+   write_buffer(tree2);
+
+   read_buffer(free1);
+   node->m_length += t_length;
+   write_buffer(free1);
+
+   narf_chain(free1);
+   narf_end();
+
+   return true;
 }
 
 ///////////////////////////////////////////////////////
@@ -2535,7 +2542,7 @@ static bool defrag_carve(void) {
 
 ///////////////////////////////////////////////////////
 //! @brief squish data down to lower root.m_bottom
-static void defrag_squish(void) {
+static bool defrag_squish(void) {
    NAF tmp;
    NAF lowest;
    NarfSector start;
@@ -2578,7 +2585,9 @@ static void defrag_squish(void) {
          read_buffer(tmp);
          if (node->m_start == start + length) {
             // we found it, let's combine them.
-            defrag_free_tree(lowest, tmp);
+            if (!defrag_free_tree(lowest, tmp)) {
+               return false;
+            }
             goto another;
          }
       }
@@ -2597,6 +2606,7 @@ static void defrag_squish(void) {
 
       assert(0);
    }
+   return true;
 }
 
 ///////////////////////////////////////////////////////
@@ -2730,7 +2740,9 @@ bool narf_defrag(void) {
    }
 
    // second, squish down
-   defrag_squish();
+   if (!defrag_squish()) {
+      return false;
+   }
 
    // third, tidy up nodes.
    defrag_tidy();
