@@ -21,7 +21,7 @@
 #endif
 
 #define SIGNATURE 0x4652414E
-#define VERSION 0x00000004
+#define VERSION 0x00000003
 #define END INVALID_NAF
 #define NARF_MIN_FS_SECTORS 4
 

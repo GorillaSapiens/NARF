@@ -55,7 +55,7 @@ partition start sector.
 The first two sectors at the origin contain two copies of the root block.  A
 root block contains:
 
-* filesystem signature and format version
+* filesystem signature and current development format version (3)
 * sector size and total sector count
 * root references for the data tree, free tree, and index tree
 * allocation frontier values
