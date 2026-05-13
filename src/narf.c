@@ -21,7 +21,7 @@
 #endif
 
 #define SIGNATURE 0x4652414E
-#define VERSION 0x00000003
+#define VERSION 0x00000004
 #define END INVALID_NAF
 #define NARF_MIN_FS_SECTORS 4
 
@@ -65,11 +65,17 @@ typedef struct PACKED {
    uint32_t   m_version;
 } NarfRef;
 
+typedef struct PACKED {
+   NarfRef m_parent;
+   NarfRef m_previous;
+   NarfRef m_next;
+} IndexRefs;
+
 #define NULL_REF ((NarfRef){ END, 0 })
 
 #define REF_BYTES (sizeof(NarfRef))
 #define ROOT_USED (4 + 4 + sizeof(NarfByteSize) + sizeof(NarfSector) + \
-                   5 * sizeof(NarfRef) + 4 * sizeof(NarfSector) + \
+                   3 * sizeof(NarfRef) + 4 * sizeof(NarfSector) + \
                    4 + 4 + 4)
 
 typedef struct PACKED {
@@ -82,9 +88,7 @@ typedef struct PACKED {
    NarfSector   m_total_sectors;
    NarfRef      m_data_root;
    NarfRef      m_free_root;
-   NarfRef      m_parent_root;
-   NarfRef      m_prev_root;
-   NarfRef      m_next_root;
+   NarfRef      m_index_root;
    NarfSector   m_count;
    NarfSector   m_bottom;
    NarfSector   m_top;
@@ -108,7 +112,7 @@ typedef struct PACKED {
    uint8_t      m_height;
    union {
       uint8_t   m_metadata[128];
-      NarfRef   m_index_ref;
+      IndexRefs m_index;
    };
    char         m_key[NARF_SECTOR_SIZE - NODE_USED];
    uint32_t     m_node_version;
@@ -309,9 +313,7 @@ static bool init_root(NarfSector origin, NarfSector size) {
    root.m_total_sectors = size;
    root.m_data_root = NULL_REF;
    root.m_free_root = NULL_REF;
-   root.m_parent_root = NULL_REF;
-   root.m_prev_root = NULL_REF;
-   root.m_next_root = NULL_REF;
+   root.m_index_root = NULL_REF;
    root.m_count = 0;
    root.m_bottom = 2;
    root.m_top = size;
@@ -851,20 +853,19 @@ static bool insert_free_extent_with_ref(NarfRef ref, NarfSector start, NarfSecto
 }
 
 
-//! @brief Set or replace a key-to-reference entry in an index tree.
-static bool index_set(NarfRef *rootref, const char *key, NarfRef value) {
+//! @brief Set or replace one key-to-index entry in the traversal index tree.
+static bool index_set(const char *key, IndexRefs value) {
    Node n;
    NarfRef ref;
    NarfRef written;
    NarfRef newroot;
 
-   if (rootref == NULL) return false;
    if (!valid_key(key)) return false;
 
-   if (data_find_ref_rec(*rootref, key, &ref, &n)) {
-      n.m_index_ref = value;
-      if (!data_update_rec(*rootref, key, &n, &newroot)) return false;
-      *rootref = newroot;
+   if (data_find_ref_rec(root.m_index_root, key, &ref, &n)) {
+      n.m_index = value;
+      if (!data_update_rec(root.m_index_root, key, &n, &newroot)) return false;
+      root.m_index_root = newroot;
       return true;
    }
 
@@ -877,58 +878,65 @@ static bool index_set(NarfRef *rootref, const char *key, NarfRef value) {
    n.m_length = 0;
    n.m_bytes = 0;
    n.m_height = 1;
-   n.m_index_ref = value;
+   n.m_index = value;
    strcpy(n.m_key, key);
 
    if (!write_node(ref, &n, &written)) return false;
-   if (!data_insert_rec(*rootref, written, key, &newroot)) return false;
-   *rootref = newroot;
+   if (!data_insert_rec(root.m_index_root, written, key, &newroot)) return false;
+   root.m_index_root = newroot;
    return true;
 }
 
 //! @brief Delete an index-tree entry when it exists.
-static bool index_delete_if_exists(NarfRef *rootref, const char *key) {
+static bool index_delete_if_exists(const char *key) {
    NarfRef newroot;
    NarfRef removed_ref;
    Node removed;
 
-   if (rootref == NULL) return false;
    if (!valid_key(key)) return false;
-   if (ref_is_null(*rootref)) return true;
-   if (!data_find_ref_rec(*rootref, key, NULL, NULL)) return true;
+   if (ref_is_null(root.m_index_root)) return true;
+   if (!data_find_ref_rec(root.m_index_root, key, NULL, NULL)) return true;
 
-   if (!data_delete_rec(*rootref, key, &newroot, &removed_ref, &removed)) return false;
-   *rootref = newroot;
+   if (!data_delete_rec(root.m_index_root, key, &newroot, &removed_ref, &removed)) return false;
+   root.m_index_root = newroot;
 
    return insert_free_extent_with_ref(removed_ref, END, 0);
 }
 
-//! @brief Look up a key in an index tree.
-static bool index_get(NarfRef rootref, const char *key, NarfRef *value) {
+//! @brief Look up a key in the traversal index tree.
+static bool index_get(const char *key, IndexRefs *value) {
    Node n;
 
    if (value == NULL) return false;
    if (!valid_key(key)) return false;
-   if (!data_find_ref_rec(rootref, key, NULL, &n)) return false;
+   if (!data_find_ref_rec(root.m_index_root, key, NULL, &n)) return false;
 
-   *value = n.m_index_ref;
+   *value = n.m_index;
    return true;
 }
 
-//! @brief Rebuild parent/previous/next indexes from the data tree.
+//! @brief Rebuild the committed traversal index tree from the data tree.
 static bool rebuild_indexes_rec(NarfRef ref, NarfRef parent, NarfRef *previous, char *previous_key) {
    Node n;
+   IndexRefs index;
+   IndexRefs prev_index;
 
    if (ref_is_null(ref)) return true;
    if (!read_node(ref, &n, NULL)) return false;
 
    if (!rebuild_indexes_rec(n.m_left, ref, previous, previous_key)) return false;
 
-   if (!index_set(&root.m_parent_root, n.m_key, parent)) return false;
-   if (!index_set(&root.m_prev_root, n.m_key, *previous)) return false;
+   memset(&index, 0, sizeof(index));
+   index.m_parent = parent;
+   index.m_previous = *previous;
+   index.m_next = NULL_REF;
+
+   if (!index_set(n.m_key, index)) return false;
 
    if (!ref_is_null(*previous)) {
-      if (!index_set(&root.m_next_root, previous_key, ref)) return false;
+      if (!index_get(previous_key, &prev_index)) return false;
+      prev_index.m_next = ref;
+      if (!index_set(previous_key, prev_index)) return false;
    }
 
    *previous = ref;
@@ -939,7 +947,7 @@ static bool rebuild_indexes_rec(NarfRef ref, NarfRef parent, NarfRef *previous, 
    return true;
 }
 
-//! @brief Rebuild all committed traversal index trees.
+//! @brief Rebuild the committed traversal index tree.
 static bool rebuild_indexes(void) {
    NarfRef previous = NULL_REF;
    char previous_key[KEYSIZE];
@@ -948,10 +956,6 @@ static bool rebuild_indexes(void) {
 
    if (!rebuild_indexes_rec(root.m_data_root, NULL_REF, &previous, previous_key)) {
       return false;
-   }
-
-   if (!ref_is_null(previous)) {
-      if (!index_set(&root.m_next_root, previous_key, NULL_REF)) return false;
    }
 
    return true;
@@ -1255,6 +1259,7 @@ const char *narf_dirfirst(const char *dirname, const char *sep) {
 
 const char *narf_dirnext(const char *dirname, const char *sep, const char *previous_key) {
    const char *best = NULL;
+   IndexRefs index;
    NarfRef next;
    Node n;
 
@@ -1262,7 +1267,8 @@ const char *narf_dirnext(const char *dirname, const char *sep, const char *previ
    if (!valid_dir_args(dirname, sep)) return NULL;
    if (!valid_key(previous_key)) return NULL;
 
-   if (index_get(root.m_next_root, previous_key, &next)) {
+   if (index_get(previous_key, &index)) {
+      next = index.m_next;
       while (!ref_is_null(next)) {
          if (!read_node(next, &n, NULL)) break;
          if (dir_match(n.m_key, dirname, sep)) {
@@ -1270,7 +1276,8 @@ const char *narf_dirnext(const char *dirname, const char *sep, const char *previ
             dir_key[sizeof(dir_key) - 1] = 0;
             return dir_key;
          }
-         if (!index_get(root.m_next_root, n.m_key, &next)) break;
+         if (!index_get(n.m_key, &index)) break;
+         next = index.m_next;
       }
    }
 
@@ -1452,9 +1459,7 @@ bool narf_free(const char *key) {
    dirty_clear();
    if (!data_delete_rec(root.m_data_root, key, &newroot, &removed_ref, &removed)) return false;
    root.m_data_root = newroot;
-   if (!index_delete_if_exists(&root.m_parent_root, key) ||
-       !index_delete_if_exists(&root.m_prev_root, key) ||
-       !index_delete_if_exists(&root.m_next_root, key)) {
+   if (!index_delete_if_exists(key)) {
       root = saved;
       dirty_clear();
       return false;
@@ -1496,9 +1501,7 @@ bool narf_rename_key(const char *key, const char *newkey) {
    dirty_clear();
    if (!data_delete_rec(root.m_data_root, key, &newroot, &removed_ref, &removed)) return false;
    root.m_data_root = newroot;
-   if (!index_delete_if_exists(&root.m_parent_root, key) ||
-       !index_delete_if_exists(&root.m_prev_root, key) ||
-       !index_delete_if_exists(&root.m_next_root, key)) {
+   if (!index_delete_if_exists(key)) {
       root = saved;
       dirty_clear();
       return false;
@@ -2192,10 +2195,13 @@ static uint64_t tree_right_pattern(uint64_t pattern, int indent) {
 
 //! @brief Print one formatted debug-tree node.
 static void print_tree_node(NarfRef ref, const Node *n, const char *label) {
-   if (label[0] == 'P' || label[0] == 'V' || label[0] == 'N') {
-      printf("'%s' [%08x:%08x] %s-> [%08x:%08x] h=%u",
-             n->m_key, ref.m_sector, ref.m_version, label,
-             n->m_index_ref.m_sector, n->m_index_ref.m_version, n->m_height);
+   if (label[0] == 'I') {
+      printf("'%s' [%08x:%08x] I-> P[%08x:%08x] V[%08x:%08x] N[%08x:%08x] h=%u",
+             n->m_key, ref.m_sector, ref.m_version,
+             n->m_index.m_parent.m_sector, n->m_index.m_parent.m_version,
+             n->m_index.m_previous.m_sector, n->m_index.m_previous.m_version,
+             n->m_index.m_next.m_sector, n->m_index.m_next.m_version,
+             n->m_height);
    }
    else {
       printf("'%s' [%08x:%08x] %s-> start:len=(%08x:%u) bytes=%u h=%u",
@@ -2263,9 +2269,7 @@ void narf_debug(void) {
    printf("root.m_total_sectors = %08x\n", root.m_total_sectors);
    printf("root.m_data_root     = [%08x:%08x]\n", root.m_data_root.m_sector, root.m_data_root.m_version);
    printf("root.m_free_root     = [%08x:%08x]\n", root.m_free_root.m_sector, root.m_free_root.m_version);
-   printf("root.m_parent_root   = [%08x:%08x]\n", root.m_parent_root.m_sector, root.m_parent_root.m_version);
-   printf("root.m_prev_root     = [%08x:%08x]\n", root.m_prev_root.m_sector, root.m_prev_root.m_version);
-   printf("root.m_next_root     = [%08x:%08x]\n", root.m_next_root.m_sector, root.m_next_root.m_version);
+   printf("root.m_index_root    = [%08x:%08x]\n", root.m_index_root.m_sector, root.m_index_root.m_version);
    printf("root.m_lfsr_seed     = %08x\n", root.m_lfsr_seed);
    printf("root.m_count         = %08x\n", root.m_count);
    printf("root.m_bottom        = %08x\n", root.m_bottom);
@@ -2274,12 +2278,8 @@ void narf_debug(void) {
    print_tree(root.m_data_root, 0, 0, "D");
    printf("free tree:\n");
    print_tree(root.m_free_root, 0, 0, "F");
-   printf("parent index:\n");
-   print_tree(root.m_parent_root, 0, 0, "P");
-   printf("previous index:\n");
-   print_tree(root.m_prev_root, 0, 0, "V");
-   printf("next index:\n");
-   print_tree(root.m_next_root, 0, 0, "N");
+   printf("index tree:\n");
+   print_tree(root.m_index_root, 0, 0, "I");
 }
 #endif
 

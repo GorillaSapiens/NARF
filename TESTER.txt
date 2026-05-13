@@ -194,7 +194,7 @@ nodes from the top of the metadata area.
 
 ### `debug`
 
-Print internal root/tree/index/free information.  This requires `NARF_DEBUG` to
+Print internal root/data-tree/free-tree/index-tree information.  This requires `NARF_DEBUG` to
 be enabled in the build.
 
 ### `gremlins <seed> <count>`

@@ -57,8 +57,7 @@ root block contains:
 
 * filesystem signature and format version
 * sector size and total sector count
-* root references for the data tree and free tree
-* root references for three index trees
+* root references for the data tree, free tree, and index tree
 * allocation frontier values
 * a persisted LFSR seed for node-version generation
 * a 32-bit root commit version
@@ -103,7 +102,7 @@ mistaken for the exact node version referenced by committed metadata.
 Trees
 -----
 
-Current NARF metadata is stored in five AVL trees:
+Current NARF metadata is stored in three AVL trees:
 
 1. **Data tree**
 
@@ -113,24 +112,16 @@ Current NARF metadata is stored in five AVL trees:
 2. **Free tree**
 
    Keyed by `(length, start, node-sector)`.  This tracks free extents by size,
-   with deterministic tie breakers for equal-sized extents.
+   with deterministic tie breakers for equal-sized extents.  Zero-length free
+   nodes represent reusable metadata-node slots rather than payload storage.
 
-3. **Parent index tree**
+3. **Index tree**
 
-   Keyed by file key.  Each index node stores a `NarfRef` for that key's parent
-   in the data tree.
+   Keyed by file key.  Each index node stores three `NarfRef` values for that
+   key: parent, previous in-order entry, and next in-order entry.
 
-4. **Previous index tree**
-
-   Keyed by file key.  Each index node stores the previous in-order data-tree
-   entry.
-
-5. **Next index tree**
-
-   Keyed by file key.  Each index node stores the next in-order data-tree entry.
-
-The data tree and free tree are authoritative.  The index trees are committed
-secondary indexes used to make traversal and debugging easier without putting
+The data tree and free tree are authoritative.  The index tree is a committed
+secondary index used to make traversal and debugging easier without putting
 parent/previous/next links back into data nodes.  Keeping those links out of the
 data tree matters because versioned references and copy-on-write work cleanly
 when updates do not require every inbound pointer in the graph to be rewritten.
