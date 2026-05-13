@@ -24,7 +24,7 @@
 #endif
 
 #define SIGNATURE 0x4652414E
-#define VERSION 0x00000002
+#define VERSION 0x00000003
 #define END INVALID_NAF
 #define NARF_MIN_FS_SECTORS 4
 
@@ -62,14 +62,14 @@ static_assert(sizeof(MBR) == 512, "MBR wrong size");
 
 typedef struct PACKED {
    NarfSector m_sector;
-   uint8_t    m_version;
+   uint32_t   m_version;
 } NarfRef;
 
 #define NULL_REF ((NarfRef){ END, 0 })
 
 #define REF_BYTES (sizeof(NarfRef))
 #define ROOT_USED (4 + 4 + sizeof(NarfByteSize) + sizeof(NarfSector) + \
-                   2 * sizeof(NarfRef) + 4 * sizeof(NarfSector) + \
+                   5 * sizeof(NarfRef) + 4 * sizeof(NarfSector) + \
                    1 + 4 + 4)
 
 typedef struct PACKED {
@@ -82,6 +82,9 @@ typedef struct PACKED {
    NarfSector   m_total_sectors;
    NarfRef      m_data_root;
    NarfRef      m_free_root;
+   NarfRef      m_parent_root;
+   NarfRef      m_prev_root;
+   NarfRef      m_next_root;
    NarfSector   m_count;
    NarfSector   m_bottom;
    NarfSector   m_top;
@@ -94,7 +97,7 @@ typedef struct PACKED {
 static_assert(sizeof(Root) == NARF_SECTOR_SIZE, "Root wrong size");
 
 #define NODE_USED (2 * sizeof(NarfRef) + 2 * sizeof(NarfSector) + \
-                   sizeof(NarfByteSize) + 1 + 128 + 1 + 4 + 4)
+                   sizeof(NarfByteSize) + 1 + 128 + 4 + 4)
 
 typedef struct PACKED {
    NarfRef      m_left;
@@ -103,10 +106,12 @@ typedef struct PACKED {
    NarfSector   m_length;
    NarfByteSize m_bytes;
    uint8_t      m_height;
-   uint8_t      m_metadata[128];
+   union {
+      uint8_t   m_metadata[128];
+      NarfRef   m_index_ref;
+   };
    char         m_key[NARF_SECTOR_SIZE - NODE_USED];
-   uint8_t      m_node_version;
-   uint32_t     m_random;
+   uint32_t     m_node_version;
    uint32_t     m_checksum;
 } Node;
 static_assert(sizeof(Node) == NARF_SECTOR_SIZE, "Node wrong size");
@@ -124,7 +129,7 @@ static char dir_key[KEYSIZE];
 typedef struct {
    bool used;
    NarfSector sector;
-   uint8_t version;
+   uint32_t version;
    int copy;
 } DirtyNode;
 
@@ -161,11 +166,23 @@ static bool version_after(uint8_t a, uint8_t b) {
    return diff != 0 && diff < 128;
 }
 
-static uint8_t new_node_version(uint8_t old) {
-   uint8_t v;
+static uint32_t random_uint32(void) {
+   uint32_t hi;
+   uint32_t lo;
+
+   hi = (uint32_t)(lrand48() & 0xffff);
+   lo = (uint32_t)(lrand48() & 0xffff);
+
+   return (hi << 16) | lo;
+}
+
+static uint32_t new_node_version(uint32_t old) {
+   uint32_t v;
+
    do {
-      v = (uint8_t)(lrand48() & 0xff);
+      v = random_uint32();
    } while (v == 0 || v == old);
+
    return v;
 }
 
@@ -239,6 +256,9 @@ static bool init_root(NarfSector origin, NarfSector size) {
    root.m_total_sectors = size;
    root.m_data_root = NULL_REF;
    root.m_free_root = NULL_REF;
+   root.m_parent_root = NULL_REF;
+   root.m_prev_root = NULL_REF;
+   root.m_next_root = NULL_REF;
    root.m_count = 0;
    root.m_bottom = 2;
    root.m_top = size;
@@ -289,7 +309,7 @@ static int dirty_find(NarfSector sector) {
    return -1;
 }
 
-static bool dirty_remember(NarfSector sector, uint8_t version, int copy) {
+static bool dirty_remember(NarfSector sector, uint32_t version, int copy) {
    int i = dirty_find(sector);
    if (i >= 0) {
       dirty_nodes[i].version = version;
@@ -312,7 +332,7 @@ static void dirty_clear(void) {
 static bool write_node(NarfRef oldref, Node *n, NarfRef *newref) {
    int oldcopy = 1;
    int dest;
-   uint8_t oldver = oldref.m_version;
+   uint32_t oldver = oldref.m_version;
    NarfSector sector = oldref.m_sector;
    Node tmp;
    int dirty;
@@ -335,7 +355,6 @@ static bool write_node(NarfRef oldref, Node *n, NarfRef *newref) {
       if (!dirty_remember(sector, n->m_node_version, dest)) return false;
    }
 
-   n->m_random = (uint32_t) lrand48();
    n->m_checksum = 0;
    n->m_checksum = crc32(0, n, NARF_SECTOR_SIZE - sizeof(uint32_t));
 
@@ -696,6 +715,26 @@ static bool free_best_rec(NarfRef ref, NarfSector need, NarfRef *bestref, Node *
 }
 
 static bool alloc_node_sector(NarfRef *ref) {
+   NarfRef freeref;
+   NarfRef newroot;
+   NarfRef removed_ref;
+   Node free_node;
+   Node removed;
+
+   if (ref == NULL) return false;
+
+   if (free_best_rec(root.m_free_root, 0, &freeref, &free_node) &&
+       free_node.m_length == 0) {
+      if (!free_delete_rec(root.m_free_root, free_node.m_length,
+                           free_node.m_start, freeref.m_sector,
+                           &newroot, &removed_ref, &removed)) {
+         return false;
+      }
+      root.m_free_root = newroot;
+      *ref = removed_ref;
+      return true;
+   }
+
    if (root.m_top < root.m_bottom + 2) return false;
    root.m_top -= 2;
    ref->m_sector = root.m_top;
@@ -719,6 +758,108 @@ static bool insert_free_extent_with_ref(NarfRef ref, NarfSector start, NarfSecto
    if (!write_node(ref, &n, &written)) return false;
    if (!free_insert_rec(root.m_free_root, written, length, start, &newroot)) return false;
    root.m_free_root = newroot;
+   return true;
+}
+
+
+static bool index_set(NarfRef *rootref, const char *key, NarfRef value) {
+   Node n;
+   NarfRef ref;
+   NarfRef written;
+   NarfRef newroot;
+
+   if (rootref == NULL) return false;
+   if (!valid_key(key)) return false;
+
+   if (data_find_ref_rec(*rootref, key, &ref, &n)) {
+      n.m_index_ref = value;
+      if (!data_update_rec(*rootref, key, &n, &newroot)) return false;
+      *rootref = newroot;
+      return true;
+   }
+
+   if (!alloc_node_sector(&ref)) return false;
+
+   memset(&n, 0, sizeof(n));
+   n.m_left = NULL_REF;
+   n.m_right = NULL_REF;
+   n.m_start = END;
+   n.m_length = 0;
+   n.m_bytes = 0;
+   n.m_height = 1;
+   n.m_index_ref = value;
+   strcpy(n.m_key, key);
+
+   if (!write_node(ref, &n, &written)) return false;
+   if (!data_insert_rec(*rootref, written, key, &newroot)) return false;
+   *rootref = newroot;
+   return true;
+}
+
+static bool index_delete_if_exists(NarfRef *rootref, const char *key) {
+   NarfRef newroot;
+   NarfRef removed_ref;
+   Node removed;
+
+   if (rootref == NULL) return false;
+   if (!valid_key(key)) return false;
+   if (ref_is_null(*rootref)) return true;
+   if (!data_find_ref_rec(*rootref, key, NULL, NULL)) return true;
+
+   if (!data_delete_rec(*rootref, key, &newroot, &removed_ref, &removed)) return false;
+   *rootref = newroot;
+
+   return insert_free_extent_with_ref(removed_ref, END, 0);
+}
+
+static bool index_get(NarfRef rootref, const char *key, NarfRef *value) {
+   Node n;
+
+   if (value == NULL) return false;
+   if (!valid_key(key)) return false;
+   if (!data_find_ref_rec(rootref, key, NULL, &n)) return false;
+
+   *value = n.m_index_ref;
+   return true;
+}
+
+static bool rebuild_indexes_rec(NarfRef ref, NarfRef parent, NarfRef *previous, char *previous_key) {
+   Node n;
+
+   if (ref_is_null(ref)) return true;
+   if (!read_node(ref, &n, NULL)) return false;
+
+   if (!rebuild_indexes_rec(n.m_left, ref, previous, previous_key)) return false;
+
+   if (!index_set(&root.m_parent_root, n.m_key, parent)) return false;
+   if (!index_set(&root.m_prev_root, n.m_key, *previous)) return false;
+
+   if (!ref_is_null(*previous)) {
+      if (!index_set(&root.m_next_root, previous_key, ref)) return false;
+   }
+
+   *previous = ref;
+   strcpy(previous_key, n.m_key);
+
+   if (!rebuild_indexes_rec(n.m_right, ref, previous, previous_key)) return false;
+
+   return true;
+}
+
+static bool rebuild_indexes(void) {
+   NarfRef previous = NULL_REF;
+   char previous_key[KEYSIZE];
+
+   previous_key[0] = 0;
+
+   if (!rebuild_indexes_rec(root.m_data_root, NULL_REF, &previous, previous_key)) {
+      return false;
+   }
+
+   if (!ref_is_null(previous)) {
+      if (!index_set(&root.m_next_root, previous_key, NULL_REF)) return false;
+   }
+
    return true;
 }
 
@@ -940,9 +1081,25 @@ const char *narf_dirfirst(const char *dirname, const char *sep) {
 
 const char *narf_dirnext(const char *dirname, const char *sep, const char *previous_key) {
    const char *best = NULL;
+   NarfRef next;
+   Node n;
+
    if (!verify()) return NULL;
    if (!valid_dir_args(dirname, sep)) return NULL;
    if (!valid_key(previous_key)) return NULL;
+
+   if (index_get(root.m_next_root, previous_key, &next)) {
+      while (!ref_is_null(next)) {
+         if (!read_node(next, &n, NULL)) break;
+         if (dir_match(n.m_key, dirname, sep)) {
+            strncpy(dir_key, n.m_key, sizeof(dir_key));
+            dir_key[sizeof(dir_key) - 1] = 0;
+            return dir_key;
+         }
+         if (!index_get(root.m_next_root, n.m_key, &next)) break;
+      }
+   }
+
    if (!dir_scan_rec(root.m_data_root, dirname, sep, previous_key, &best)) return NULL;
    return best;
 }
@@ -986,6 +1143,11 @@ bool narf_alloc(const char *key, NarfByteSize bytes) {
 
    root.m_data_root = newroot;
    root.m_count++;
+   if (!rebuild_indexes()) {
+      root = saved;
+      dirty_clear();
+      return false;
+   }
    if (!commit_root()) {
       root = saved;
       dirty_clear();
@@ -1020,6 +1182,11 @@ bool narf_realloc(const char *key, NarfByteSize bytes) {
          return false;
       }
       root.m_data_root = newroot;
+      if (!rebuild_indexes()) {
+         root = saved;
+         dirty_clear();
+         return false;
+      }
       if (!commit_root()) {
          root = saved;
          return false;
@@ -1059,6 +1226,11 @@ bool narf_realloc(const char *key, NarfByteSize bytes) {
       return false;
    }
    root.m_data_root = newroot;
+   if (!rebuild_indexes()) {
+      root = saved;
+      dirty_clear();
+      return false;
+   }
    if (!commit_root()) {
       root = saved;
       dirty_clear();
@@ -1082,12 +1254,24 @@ bool narf_free(const char *key) {
    dirty_clear();
    if (!data_delete_rec(root.m_data_root, key, &newroot, &removed_ref, &removed)) return false;
    root.m_data_root = newroot;
+   if (!index_delete_if_exists(&root.m_parent_root, key) ||
+       !index_delete_if_exists(&root.m_prev_root, key) ||
+       !index_delete_if_exists(&root.m_next_root, key)) {
+      root = saved;
+      dirty_clear();
+      return false;
+   }
    if (!insert_free_extent_with_ref(removed_ref, removed.m_start, removed.m_length)) {
       root = saved;
       dirty_clear();
       return false;
    }
    if (root.m_count) root.m_count--;
+   if (!rebuild_indexes()) {
+      root = saved;
+      dirty_clear();
+      return false;
+   }
    if (!commit_root()) {
       root = saved;
       dirty_clear();
@@ -1113,6 +1297,13 @@ bool narf_rename_key(const char *key, const char *newkey) {
    dirty_clear();
    if (!data_delete_rec(root.m_data_root, key, &newroot, &removed_ref, &removed)) return false;
    root.m_data_root = newroot;
+   if (!index_delete_if_exists(&root.m_parent_root, key) ||
+       !index_delete_if_exists(&root.m_prev_root, key) ||
+       !index_delete_if_exists(&root.m_next_root, key)) {
+      root = saved;
+      dirty_clear();
+      return false;
+   }
    strncpy(removed.m_key, newkey, sizeof(removed.m_key));
    removed.m_key[sizeof(removed.m_key) - 1] = 0;
    removed.m_left = NULL_REF;
@@ -1125,6 +1316,11 @@ bool narf_rename_key(const char *key, const char *newkey) {
       return false;
    }
    root.m_data_root = newroot;
+   if (!rebuild_indexes()) {
+      root = saved;
+      dirty_clear();
+      return false;
+   }
    if (!commit_root()) {
       root = saved;
       dirty_clear();
@@ -1179,6 +1375,11 @@ bool narf_set_metadata(const char *key, void *data) {
       return false;
    }
    root.m_data_root = newroot;
+   if (!rebuild_indexes()) {
+      root = saved;
+      dirty_clear();
+      return false;
+   }
    if (!commit_root()) {
       root = saved;
       dirty_clear();
@@ -1239,9 +1440,16 @@ static void print_tree(NarfRef ref, int indent, const char *label) {
    if (!read_node(ref, &n, NULL)) return;
    print_tree(n.m_left, indent + 1, label);
    for (i = 0; i < indent; i++) printf("   ");
-   printf("%s [%08x:%02x] '%s' start:len=(%08x:%u) bytes=%u h=%u\n",
-          label, ref.m_sector, ref.m_version, n.m_key,
-          n.m_start, (unsigned)n.m_length, (unsigned)n.m_bytes, n.m_height);
+   if (label[0] == 'P' || label[0] == 'V' || label[0] == 'N') {
+      printf("%s [%08x:%08x] '%s' -> [%08x:%08x] h=%u\n",
+             label, ref.m_sector, ref.m_version, n.m_key,
+             n.m_index_ref.m_sector, n.m_index_ref.m_version, n.m_height);
+   }
+   else {
+      printf("%s [%08x:%08x] '%s' start:len=(%08x:%u) bytes=%u h=%u\n",
+             label, ref.m_sector, ref.m_version, n.m_key,
+             n.m_start, (unsigned)n.m_length, (unsigned)n.m_bytes, n.m_height);
+   }
    print_tree(n.m_right, indent + 1, label);
 }
 
@@ -1250,8 +1458,11 @@ void narf_debug(void) {
    printf("root.m_version       = %08x\n", root.m_version);
    printf("root.m_root_version  = %u copy=%d\n", root.m_root_version, root_copy);
    printf("root.m_total_sectors = %08x\n", root.m_total_sectors);
-   printf("root.m_data_root     = [%08x:%02x]\n", root.m_data_root.m_sector, root.m_data_root.m_version);
-   printf("root.m_free_root     = [%08x:%02x]\n", root.m_free_root.m_sector, root.m_free_root.m_version);
+   printf("root.m_data_root     = [%08x:%08x]\n", root.m_data_root.m_sector, root.m_data_root.m_version);
+   printf("root.m_free_root     = [%08x:%08x]\n", root.m_free_root.m_sector, root.m_free_root.m_version);
+   printf("root.m_parent_root   = [%08x:%08x]\n", root.m_parent_root.m_sector, root.m_parent_root.m_version);
+   printf("root.m_prev_root     = [%08x:%08x]\n", root.m_prev_root.m_sector, root.m_prev_root.m_version);
+   printf("root.m_next_root     = [%08x:%08x]\n", root.m_next_root.m_sector, root.m_next_root.m_version);
    printf("root.m_count         = %08x\n", root.m_count);
    printf("root.m_bottom        = %08x\n", root.m_bottom);
    printf("root.m_top           = %08x\n", root.m_top);
@@ -1259,6 +1470,12 @@ void narf_debug(void) {
    print_tree(root.m_data_root, 0, "D");
    printf("free tree:\n");
    print_tree(root.m_free_root, 0, "F");
+   printf("parent index:\n");
+   print_tree(root.m_parent_root, 0, "P");
+   printf("previous index:\n");
+   print_tree(root.m_prev_root, 0, "V");
+   printf("next index:\n");
+   print_tree(root.m_next_root, 0, "N");
 }
 #endif
 
