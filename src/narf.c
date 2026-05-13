@@ -21,7 +21,7 @@
 #endif
 
 #define SIGNATURE 0x4652414E
-#define VERSION 0x00000003
+#define VERSION 0x00000004
 #define END INVALID_NAF
 #define NARF_MIN_FS_SECTORS 4
 
@@ -100,19 +100,28 @@ typedef struct PACKED {
 } Root;
 static_assert(sizeof(Root) == NARF_SECTOR_SIZE, "Root wrong size");
 
-#define NODE_USED (2 * sizeof(NarfRef) + 2 * sizeof(NarfSector) + \
-                   sizeof(NarfByteSize) + 1 + 128 + 4 + 4)
+typedef struct PACKED {
+   NarfSector   m_start;
+   NarfSector   m_length;
+   NarfByteSize m_bytes;
+   uint8_t      m_metadata[128];
+} DataPayload;
+
+typedef struct PACKED {
+   NarfSector m_start;
+   NarfSector m_length;
+} FreePayload;
+
+#define NODE_USED (2 * sizeof(NarfRef) + 1 + sizeof(DataPayload) + 4 + 4)
 
 typedef struct PACKED {
    NarfRef      m_left;
    NarfRef      m_right;
-   NarfSector   m_start;
-   NarfSector   m_length;
-   NarfByteSize m_bytes;
    uint8_t      m_height;
    union {
-      uint8_t   m_metadata[128];
-      IndexRefs m_index;
+      DataPayload m_data;
+      FreePayload m_free;
+      IndexRefs   m_index;
    };
    char         m_key[NARF_SECTOR_SIZE - NODE_USED];
    uint32_t     m_node_version;
@@ -260,7 +269,7 @@ static bool valid_dir_args(const char *dirname, const char *sep) {
    return true;
 }
 
-//! @brief Validate a two-sector metadata node slot.
+//! @brief Validate a two-sector record node slot.
 static bool valid_sector_pair(NarfSector sector) {
    if (!verify()) return false;
    if (sector == END) return false;
@@ -327,7 +336,7 @@ static bool init_root(NarfSector origin, NarfSector size) {
    return narf_io_write(origin, &root);
 }
 
-//! @brief Compute the checksum for a metadata node.
+//! @brief Compute the checksum for a record node.
 static uint32_t node_checksum(Node *n) {
    uint32_t old = n->m_checksum;
    uint32_t ck;
@@ -547,10 +556,10 @@ static bool rebalance(NarfRef ref, NarfRef *out) {
 
 //! @brief Compare a free-tree search key with a free-tree node.
 static int free_cmp_values(NarfSector length, NarfSector start, NarfSector sector, const Node *n, NarfSector nsector) {
-   if (length < n->m_length) return -1;
-   if (length > n->m_length) return 1;
-   if (start < n->m_start) return -1;
-   if (start > n->m_start) return 1;
+   if (length < n->m_free.m_length) return -1;
+   if (length > n->m_free.m_length) return 1;
+   if (start < n->m_free.m_start) return -1;
+   if (start > n->m_free.m_start) return 1;
    if (sector < nsector) return -1;
    if (sector > nsector) return 1;
    return 0;
@@ -665,7 +674,7 @@ static bool data_delete_rec(NarfRef rootref, const char *key, NarfRef *out, Narf
    return rebalance(rootref, out);
 }
 
-//! @brief Replace the payload metadata for an existing data-tree key.
+//! @brief Replace the data payload for an existing data-tree key.
 static bool data_update_rec(NarfRef rootref, const char *key, const Node *newnode, NarfRef *out) {
    Node n;
    NarfRef child;
@@ -767,7 +776,7 @@ static bool free_delete_rec(NarfRef rootref, NarfSector length, NarfSector start
          return true;
       }
       if (!free_min(n.m_right, &succref, &succ)) return false;
-      if (!free_delete_rec(n.m_right, succ.m_length, succ.m_start, succref.m_sector, &child, removed_ref, removed_node)) return false;
+      if (!free_delete_rec(n.m_right, succ.m_free.m_length, succ.m_free.m_start, succref.m_sector, &child, removed_ref, removed_node)) return false;
       *removed_ref = rootref;
       *removed_node = n;
       succ.m_left = n.m_left;
@@ -789,7 +798,7 @@ static bool free_best_rec(NarfRef ref, NarfSector need, NarfRef *bestref, Node *
 
    while (!ref_is_null(ref)) {
       if (!read_node(ref, &n, NULL)) return false;
-      if (n.m_length >= need) {
+      if (n.m_free.m_length >= need) {
          *bestref = ref;
          *bestnode = n;
          found = true;
@@ -803,7 +812,7 @@ static bool free_best_rec(NarfRef ref, NarfSector need, NarfRef *bestref, Node *
    return found;
 }
 
-//! @brief Allocate a two-sector metadata node slot.
+//! @brief Allocate a two-sector record node slot.
 static bool alloc_node_sector(NarfRef *ref) {
    NarfRef freeref;
    NarfRef newroot;
@@ -814,9 +823,9 @@ static bool alloc_node_sector(NarfRef *ref) {
    if (ref == NULL) return false;
 
    if (free_best_rec(root.m_free_root, 0, &freeref, &free_node) &&
-       free_node.m_length == 0) {
-      if (!free_delete_rec(root.m_free_root, free_node.m_length,
-                           free_node.m_start, freeref.m_sector,
+       free_node.m_free.m_length == 0) {
+      if (!free_delete_rec(root.m_free_root, free_node.m_free.m_length,
+                           free_node.m_free.m_start, freeref.m_sector,
                            &newroot, &removed_ref, &removed)) {
          return false;
       }
@@ -840,9 +849,8 @@ static bool insert_free_extent_with_ref(NarfRef ref, NarfSector start, NarfSecto
    memset(&n, 0, sizeof(n));
    n.m_left = NULL_REF;
    n.m_right = NULL_REF;
-   n.m_start = start;
-   n.m_length = length;
-   n.m_bytes = 0;
+   n.m_free.m_start = start;
+   n.m_free.m_length = length;
    n.m_height = 1;
    n.m_key[0] = 0;
 
@@ -874,9 +882,6 @@ static bool index_set(const char *key, IndexRefs value) {
    memset(&n, 0, sizeof(n));
    n.m_left = NULL_REF;
    n.m_right = NULL_REF;
-   n.m_start = END;
-   n.m_length = 0;
-   n.m_bytes = 0;
    n.m_height = 1;
    n.m_index = value;
    strcpy(n.m_key, key);
@@ -1003,19 +1008,19 @@ static bool allocate_data_extent(NarfSector length, NarfSector *start) {
    }
 
    if (free_best_rec(root.m_free_root, length, &freeref, &free_node)) {
-      if (!free_delete_rec(root.m_free_root, free_node.m_length,
-                           free_node.m_start, freeref.m_sector,
+      if (!free_delete_rec(root.m_free_root, free_node.m_free.m_length,
+                           free_node.m_free.m_start, freeref.m_sector,
                            &newroot, &removed_ref, &removed)) {
          return false;
       }
 
       root.m_free_root = newroot;
-      *start = removed.m_start;
+      *start = removed.m_free.m_start;
 
-      if (removed.m_length > length) {
+      if (removed.m_free.m_length > length) {
          return insert_free_extent_with_ref(removed_ref,
-                                            removed.m_start + length,
-                                            removed.m_length - length);
+                                            removed.m_free.m_start + length,
+                                            removed.m_free.m_length - length);
       }
 
       return insert_free_extent_with_ref(removed_ref, END, 0);
@@ -1029,20 +1034,20 @@ static bool allocate_data_extent(NarfSector length, NarfSector *start) {
    return true;
 }
 
-//! @brief Allocate metadata and optional payload storage for a new entry.
+//! @brief Allocate a record node and optional payload storage for a new entry.
 static bool allocate_storage(NarfSector length, NarfRef *metaref, NarfSector *start) {
    NarfRef freeref, newroot;
    Node free_node, removed;
    NarfRef removed_ref;
 
    if (length > 0 && free_best_rec(root.m_free_root, length, &freeref, &free_node)) {
-      if (!free_delete_rec(root.m_free_root, free_node.m_length, free_node.m_start, freeref.m_sector,
+      if (!free_delete_rec(root.m_free_root, free_node.m_free.m_length, free_node.m_free.m_start, freeref.m_sector,
                            &newroot, &removed_ref, &removed)) return false;
       root.m_free_root = newroot;
       *metaref = removed_ref;
-      *start = removed.m_start;
-      if (removed.m_length > length) {
-         if (!insert_free_extent(removed.m_start + length, removed.m_length - length)) return false;
+      *start = removed.m_free.m_start;
+      if (removed.m_free.m_length > length) {
+         if (!insert_free_extent(removed.m_free.m_start + length, removed.m_free.m_length - length)) return false;
       }
       return true;
    }
@@ -1316,9 +1321,9 @@ bool narf_alloc(const char *key, NarfByteSize bytes) {
    memset(&n, 0, sizeof(n));
    n.m_left = NULL_REF;
    n.m_right = NULL_REF;
-   n.m_start = length ? start : END;
-   n.m_length = length;
-   n.m_bytes = bytes;
+   n.m_data.m_start = length ? start : END;
+   n.m_data.m_length = length;
+   n.m_data.m_bytes = bytes;
    n.m_height = 1;
    strcpy(n.m_key, key);
 
@@ -1362,12 +1367,12 @@ bool narf_realloc(const char *key, NarfByteSize bytes) {
       return narf_alloc(key, bytes);
    }
 
-   if (bytes > n.m_bytes) {
-      return narf_write(key, NULL, bytes - n.m_bytes, n.m_bytes);
+   if (bytes > n.m_data.m_bytes) {
+      return narf_write(key, NULL, bytes - n.m_data.m_bytes, n.m_data.m_bytes);
    }
 
-   old_start = n.m_start;
-   old_length = n.m_length;
+   old_start = n.m_data.m_start;
+   old_length = n.m_data.m_length;
    new_length = BYTES2SECTORS(bytes);
 
    dirty_clear();
@@ -1387,9 +1392,9 @@ bool narf_realloc(const char *key, NarfByteSize bytes) {
          }
       }
 
-      n.m_start = END;
-      n.m_length = 0;
-      n.m_bytes = 0;
+      n.m_data.m_start = END;
+      n.m_data.m_length = 0;
+      n.m_data.m_bytes = 0;
    }
    else if (new_length < old_length) {
       if (old_start == END) {
@@ -1413,11 +1418,11 @@ bool narf_realloc(const char *key, NarfByteSize bytes) {
          return false;
       }
 
-      n.m_length = new_length;
-      n.m_bytes = bytes;
+      n.m_data.m_length = new_length;
+      n.m_data.m_bytes = bytes;
    }
    else {
-      n.m_bytes = bytes;
+      n.m_data.m_bytes = bytes;
    }
 
    if (!data_update_rec(root.m_data_root, key, &n, &newroot)) {
@@ -1464,7 +1469,7 @@ bool narf_free(const char *key) {
       dirty_clear();
       return false;
    }
-   if (!insert_free_extent_with_ref(removed_ref, removed.m_start, removed.m_length)) {
+   if (!insert_free_extent_with_ref(removed_ref, removed.m_data.m_start, removed.m_data.m_length)) {
       root = saved;
       dirty_clear();
       return false;
@@ -1537,10 +1542,10 @@ NarfSector narf_sector(const char *key) {
    if (!verify()) return END;
    if (!valid_key(key)) return END;
    if (!data_find_ref_rec(root.m_data_root, key, NULL, &n)) return END;
-   if (n.m_start == END || n.m_length == 0) return END;
-   if (n.m_start >= root.m_total_sectors) return END;
-   if (n.m_length > root.m_total_sectors - n.m_start) return END;
-   return root.m_origin + n.m_start;
+   if (n.m_data.m_start == END || n.m_data.m_length == 0) return END;
+   if (n.m_data.m_start >= root.m_total_sectors) return END;
+   if (n.m_data.m_length > root.m_total_sectors - n.m_data.m_start) return END;
+   return root.m_origin + n.m_data.m_start;
 }
 
 //! @brief Return the byte size of a key payload.
@@ -1549,7 +1554,7 @@ NarfByteSize narf_size(const char *key) {
    if (!verify()) return 0;
    if (!valid_key(key)) return 0;
    if (!data_find_ref_rec(root.m_data_root, key, NULL, &n)) return 0;
-   return n.m_bytes;
+   return n.m_data.m_bytes;
 }
 
 void *narf_metadata(const char *key) {
@@ -1558,7 +1563,7 @@ void *narf_metadata(const char *key) {
    if (!verify()) return NULL;
    if (!valid_key(key)) return NULL;
    if (!data_find_ref_rec(root.m_data_root, key, NULL, &n)) return NULL;
-   memcpy(metadata, n.m_metadata, sizeof(metadata));
+   memcpy(metadata, n.m_data.m_metadata, sizeof(metadata));
    return metadata;
 }
 
@@ -1573,7 +1578,7 @@ bool narf_set_metadata(const char *key, void *data) {
    if (data == NULL) return false;
    if (!data_find_ref_rec(root.m_data_root, key, NULL, &n)) return false;
    dirty_clear();
-   memcpy(n.m_metadata, data, sizeof(n.m_metadata));
+   memcpy(n.m_data.m_metadata, data, sizeof(n.m_data.m_metadata));
    if (!data_update_rec(root.m_data_root, key, &n, &newroot)) {
       root = saved;
       dirty_clear();
@@ -1613,10 +1618,10 @@ bool narf_write(const char *key, const void *data, NarfByteSize size, NarfByteSi
    if (!data_find_ref_rec(root.m_data_root, key, NULL, &n)) return false;
 
    write_end = offset + size;
-   new_bytes = n.m_bytes;
+   new_bytes = n.m_data.m_bytes;
    if (write_end > new_bytes) new_bytes = write_end;
 
-   if (size == 0 && new_bytes == n.m_bytes) {
+   if (size == 0 && new_bytes == n.m_data.m_bytes) {
       return true;
    }
 
@@ -1635,14 +1640,14 @@ bool narf_write(const char *key, const void *data, NarfByteSize size, NarfByteSi
 
       memset(temp, 0, sizeof(temp));
 
-      if (base < n.m_bytes && n.m_start != END && i < n.m_length) {
+      if (base < n.m_data.m_bytes && n.m_data.m_start != END && i < n.m_data.m_length) {
          NarfByteSize old_n = NARF_SECTOR_SIZE;
 
-         if (sector_end > n.m_bytes) {
-            old_n = n.m_bytes - base;
+         if (sector_end > n.m_data.m_bytes) {
+            old_n = n.m_data.m_bytes - base;
          }
 
-         if (!narf_io_read(root.m_origin + n.m_start + i, oldbuf)) {
+         if (!narf_io_read(root.m_origin + n.m_data.m_start + i, oldbuf)) {
             root = saved;
             dirty_clear();
             return false;
@@ -1672,17 +1677,17 @@ bool narf_write(const char *key, const void *data, NarfByteSize size, NarfByteSi
       }
    }
 
-   if (n.m_length > 0) {
-      if (!insert_free_extent(n.m_start, n.m_length)) {
+   if (n.m_data.m_length > 0) {
+      if (!insert_free_extent(n.m_data.m_start, n.m_data.m_length)) {
          root = saved;
          dirty_clear();
          return false;
       }
    }
 
-   n.m_start = new_length ? new_start : END;
-   n.m_length = new_length;
-   n.m_bytes = new_bytes;
+   n.m_data.m_start = new_length ? new_start : END;
+   n.m_data.m_length = new_length;
+   n.m_data.m_bytes = new_bytes;
 
    if (!data_update_rec(root.m_data_root, key, &n, &newroot)) {
       root = saved;
@@ -1745,8 +1750,8 @@ static bool defrag_lowest_free_rec(NarfRef ref, NarfRef *bestref, Node *bestnode
       found = true;
    }
 
-   if (n.m_start != END && n.m_length != 0) {
-      if (!found || n.m_start < bestnode->m_start) {
+   if (n.m_free.m_start != END && n.m_free.m_length != 0) {
+      if (!found || n.m_free.m_start < bestnode->m_free.m_start) {
          *bestref = ref;
          *bestnode = n;
          found = true;
@@ -1767,7 +1772,7 @@ static bool defrag_find_free_start_rec(NarfRef ref, NarfSector start, NarfRef *f
    if (ref_is_null(ref)) return false;
    if (!read_node(ref, &n, NULL)) return false;
 
-   if (n.m_start == start && n.m_length != 0) {
+   if (n.m_free.m_start == start && n.m_free.m_length != 0) {
       if (found) *found = ref;
       if (outnode) *outnode = n;
       return true;
@@ -1784,7 +1789,7 @@ static bool defrag_find_data_start_rec(NarfRef ref, NarfSector start, NarfRef *f
    if (ref_is_null(ref)) return false;
    if (!read_node(ref, &n, NULL)) return false;
 
-   if (n.m_start == start && n.m_length != 0) {
+   if (n.m_data.m_start == start && n.m_data.m_length != 0) {
       if (found) *found = ref;
       if (outnode) *outnode = n;
       return true;
@@ -1818,7 +1823,7 @@ static bool defrag_update_data_start(const char *key, NarfSector start) {
    Node n;
 
    if (!data_find_ref_rec(root.m_data_root, key, NULL, &n)) return false;
-   n.m_start = start;
+   n.m_data.m_start = start;
 
    if (!data_update_rec(root.m_data_root, key, &n, &newroot)) return false;
    root.m_data_root = newroot;
@@ -1841,21 +1846,21 @@ static bool defrag_carve_rec(NarfRef ref, bool *changed) {
    if (!defrag_carve_rec(n.m_left, changed)) return false;
    if (*changed) return true;
 
-   needed = BYTES2SECTORS(n.m_bytes);
-   if (needed < n.m_length) {
+   needed = BYTES2SECTORS(n.m_data.m_bytes);
+   if (needed < n.m_data.m_length) {
       saved = root;
       dirty_clear();
 
       if (needed == 0) {
-         free_start = n.m_start;
-         free_length = n.m_length;
-         n.m_start = END;
-         n.m_length = 0;
+         free_start = n.m_data.m_start;
+         free_length = n.m_data.m_length;
+         n.m_data.m_start = END;
+         n.m_data.m_length = 0;
       }
       else {
-         free_start = n.m_start + needed;
-         free_length = n.m_length - needed;
-         n.m_length = needed;
+         free_start = n.m_data.m_start + needed;
+         free_length = n.m_data.m_length - needed;
+         n.m_data.m_length = needed;
       }
 
       if (free_length != 0 && !insert_free_extent(free_start, free_length)) {
@@ -1906,14 +1911,14 @@ static bool defrag_merge_free(NarfRef leftref, const Node *left, NarfRef rightre
    NarfSector new_length;
 
    if (left == NULL || right == NULL) return false;
-   if (left->m_start == END || right->m_start == END) return false;
-   if (left->m_start + left->m_length != right->m_start) return false;
-   if (right->m_length > ((NarfSector) -1) - left->m_length) return false;
+   if (left->m_free.m_start == END || right->m_free.m_start == END) return false;
+   if (left->m_free.m_start + left->m_free.m_length != right->m_free.m_start) return false;
+   if (right->m_free.m_length > ((NarfSector) -1) - left->m_free.m_length) return false;
 
    dirty_clear();
-   new_length = left->m_length + right->m_length;
+   new_length = left->m_free.m_length + right->m_free.m_length;
 
-   if (!free_delete_rec(root.m_free_root, left->m_length, left->m_start,
+   if (!free_delete_rec(root.m_free_root, left->m_free.m_length, left->m_free.m_start,
                         leftref.m_sector, &newroot, &removed_ref, &removed)) {
       root = saved;
       dirty_clear();
@@ -1921,7 +1926,7 @@ static bool defrag_merge_free(NarfRef leftref, const Node *left, NarfRef rightre
    }
    root.m_free_root = newroot;
 
-   if (!free_delete_rec(root.m_free_root, right->m_length, right->m_start,
+   if (!free_delete_rec(root.m_free_root, right->m_free.m_length, right->m_free.m_start,
                         rightref.m_sector, &newroot, &rightref, &removed)) {
       root = saved;
       dirty_clear();
@@ -1929,7 +1934,7 @@ static bool defrag_merge_free(NarfRef leftref, const Node *left, NarfRef rightre
    }
    root.m_free_root = newroot;
 
-   if (!insert_free_extent_with_ref(removed_ref, left->m_start, new_length)) {
+   if (!insert_free_extent_with_ref(removed_ref, left->m_free.m_start, new_length)) {
       root = saved;
       dirty_clear();
       return false;
@@ -1965,24 +1970,24 @@ static bool defrag_move_data_after_free(NarfRef freeref, const Node *free_node, 
    (void) dataref;
 
    if (free_node == NULL || data_node == NULL) return false;
-   if (free_node->m_start == END || data_node->m_start == END) return false;
-   if (free_node->m_start + free_node->m_length != data_node->m_start) return false;
+   if (free_node->m_free.m_start == END || data_node->m_data.m_start == END) return false;
+   if (free_node->m_free.m_start + free_node->m_free.m_length != data_node->m_data.m_start) return false;
 
-   old_start = data_node->m_start;
-   old_length = data_node->m_length;
+   old_start = data_node->m_data.m_start;
+   old_length = data_node->m_data.m_length;
 
-   if (free_node->m_length >= old_length) {
-      new_start = free_node->m_start;
-      new_free_start = free_node->m_start + old_length;
-      new_free_length = free_node->m_length;
+   if (free_node->m_free.m_length >= old_length) {
+      new_start = free_node->m_free.m_start;
+      new_free_start = free_node->m_free.m_start + old_length;
+      new_free_length = free_node->m_free.m_length;
    }
    else {
       if (root.m_bottom > root.m_top) return false;
       if (old_length > root.m_top - root.m_bottom) return false;
       new_start = root.m_bottom;
-      new_free_start = free_node->m_start;
-      new_free_length = free_node->m_length + old_length;
-      if (new_free_length < free_node->m_length) return false;
+      new_free_start = free_node->m_free.m_start;
+      new_free_length = free_node->m_free.m_length + old_length;
+      if (new_free_length < free_node->m_free.m_length) return false;
    }
 
    if (!defrag_copy_extent(old_start, new_start, old_length)) {
@@ -1992,7 +1997,7 @@ static bool defrag_move_data_after_free(NarfRef freeref, const Node *free_node, 
    saved = root;
    dirty_clear();
 
-   if (!free_delete_rec(root.m_free_root, free_node->m_length, free_node->m_start,
+   if (!free_delete_rec(root.m_free_root, free_node->m_free.m_length, free_node->m_free.m_start,
                         freeref.m_sector, &newroot, &removed_ref, &removed)) {
       root = saved;
       dirty_clear();
@@ -2000,7 +2005,7 @@ static bool defrag_move_data_after_free(NarfRef freeref, const Node *free_node, 
    }
    root.m_free_root = newroot;
 
-   if (free_node->m_length < old_length) {
+   if (free_node->m_free.m_length < old_length) {
       root.m_bottom += old_length;
    }
 
@@ -2039,12 +2044,12 @@ static bool defrag_lower_bottom(NarfRef freeref, const Node *free_node) {
    Node removed;
 
    if (free_node == NULL) return false;
-   if (free_node->m_start == END) return false;
-   if (free_node->m_start + free_node->m_length != root.m_bottom) return false;
+   if (free_node->m_free.m_start == END) return false;
+   if (free_node->m_free.m_start + free_node->m_free.m_length != root.m_bottom) return false;
 
    dirty_clear();
 
-   if (!free_delete_rec(root.m_free_root, free_node->m_length, free_node->m_start,
+   if (!free_delete_rec(root.m_free_root, free_node->m_free.m_length, free_node->m_free.m_start,
                         freeref.m_sector, &newroot, &removed_ref, &removed)) {
       root = saved;
       dirty_clear();
@@ -2052,7 +2057,7 @@ static bool defrag_lower_bottom(NarfRef freeref, const Node *free_node) {
    }
 
    root.m_free_root = newroot;
-   root.m_bottom = free_node->m_start;
+   root.m_bottom = free_node->m_free.m_start;
 
    if (!insert_free_extent_with_ref(removed_ref, END, 0)) {
       root = saved;
@@ -2084,7 +2089,7 @@ static bool defrag_squish_once(bool *changed) {
       return true;
    }
 
-   successor = free_node.m_start + free_node.m_length;
+   successor = free_node.m_free.m_start + free_node.m_free.m_length;
 
    if (defrag_find_free_start_rec(root.m_free_root, successor, &adjref, &adj)) {
       if (!defrag_merge_free(freeref, &free_node, adjref, &adj)) return false;
@@ -2107,7 +2112,7 @@ static bool defrag_squish_once(bool *changed) {
    return false;
 }
 
-//! @brief Reclaim one zero-length metadata node from the top of the metadata area.
+//! @brief Reclaim one zero-length record node from the top of the record area.
 static bool defrag_tidy_once(bool *changed) {
    Root saved = root;
    NarfRef newroot;
@@ -2203,10 +2208,15 @@ static void print_tree_node(NarfRef ref, const Node *n, const char *label) {
              n->m_index.m_next.m_sector, n->m_index.m_next.m_version,
              n->m_height);
    }
+   else if (label[0] == 'F') {
+      printf("'%s' [%08x:%08x] F-> start:len=(%08x:%u) h=%u",
+             n->m_key, ref.m_sector, ref.m_version,
+             n->m_free.m_start, (unsigned)n->m_free.m_length, n->m_height);
+   }
    else {
       printf("'%s' [%08x:%08x] %s-> start:len=(%08x:%u) bytes=%u h=%u",
              n->m_key, ref.m_sector, ref.m_version, label,
-             n->m_start, (unsigned)n->m_length, (unsigned)n->m_bytes, n->m_height);
+             n->m_data.m_start, (unsigned)n->m_data.m_length, (unsigned)n->m_data.m_bytes, n->m_height);
    }
 }
 

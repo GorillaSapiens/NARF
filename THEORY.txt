@@ -5,7 +5,7 @@ Not A Real Filesystem
 
 NARF is a small key/value storage layer for sector-addressed media.  It is
 meant for embedded projects where FAT-style directory machinery is more than
-you want, but where you still want named blobs, simple metadata, and reasonably
+you want, but where you still want named blobs, simple per-file attributes, and reasonably
 robust updates.
 
 NARF assumes the underlying device is made of 512-byte sectors with linear
@@ -81,14 +81,16 @@ references:
 
 The sector identifies the two-sector node slot.  The node version identifies
 which valid copy is expected.  Each node slot has two physical sectors, allowing
-copy-on-write replacement of individual metadata nodes.
+copy-on-write replacement of individual record nodes.
 
 Each node contains:
 
 * left and right child references
-* data start sector, data length in sectors, and byte size
 * AVL height
-* either user metadata or an index-tree reference
+* one tree-specific payload union:
+  * data nodes store payload start sector, payload length, byte size, and `m_metadata`
+  * free nodes store free-extent start sector and length
+  * index nodes store parent/previous/next traversal references
 * key string
 * random-looking 32-bit node version
 * checksum
@@ -97,23 +99,23 @@ Node versions come from a 32-bit LFSR.  The current LFSR state is stored in the
 root when a transaction commits, so remounting continues from the committed
 state.  When a node copy is written, NARF rejects version 0 and rejects versions
 already visible in that node slot.  That prevents abandoned copies from being
-mistaken for the exact node version referenced by committed metadata.
+mistaken for the exact node version referenced by committed catalog state.
 
 Trees
 -----
 
-Current NARF metadata is stored in three AVL trees:
+Current NARF catalog state is stored in three AVL trees:
 
 1. **Data tree**
 
    Keyed by file key.  This is the authoritative tree for files/blobs.  Data
-   nodes hold the file extent, byte size, and user metadata.
+   nodes hold the file extent, byte size, and `m_metadata`.
 
 2. **Free tree**
 
    Keyed by `(length, start, node-sector)`.  This tracks free extents by size,
    with deterministic tie breakers for equal-sized extents.  Zero-length free
-   nodes represent reusable metadata-node slots rather than payload storage.
+   nodes represent reusable record-node slots rather than payload storage.
 
 3. **Index tree**
 
@@ -129,7 +131,7 @@ when updates do not require every inbound pointer in the graph to be rewritten.
 Transactions and power loss
 ---------------------------
 
-NARF uses copy-on-write metadata.  A metadata update writes new node copies
+NARF uses copy-on-write catalog records.  A catalog update writes new node copies
 first and writes the new root last.  If power is lost before the root write, the
 previous root still points to the old exact node versions.  The abandoned node
 copies are just unreachable junk.  If power is lost after the root write, the
@@ -140,9 +142,9 @@ transaction-local dirty tracking.  It does not need to erase abandoned node
 copies; committed roots decide what is reachable.
 
 Payload data writes follow the same commit rule: new payload sectors are written
-before metadata is committed.  Overwrites and appends allocate/write a fresh
-extent, copy any unchanged old data, write the new bytes, then commit metadata
-that points at the new extent.  This keeps committed metadata from pointing at
+before catalog state is committed.  Overwrites and appends allocate/write a fresh
+extent, copy any unchanged old data, write the new bytes, then commit catalog state
+that points at the new extent.  This keeps committed catalog state from pointing at
 unwritten file data.
 
 Allocation
@@ -150,9 +152,9 @@ Allocation
 
 Data allocation first tries to satisfy the request from the free tree.  If no
 suitable free extent exists, NARF allocates from the open space between the low
-data frontier and the high metadata frontier.
+data frontier and the high record frontier.
 
-Metadata nodes are allocated from the high end of the filesystem in two-sector
+Record nodes are allocated from the high end of the filesystem in two-sector
 pairs.  File payload data grows upward from the low end.  The root tracks the
 current bottom/top frontier values.
 
@@ -163,14 +165,14 @@ Defragmentation
 power-loss-safe steps rather than doing one giant in-place rewrite.  A step may
 merge adjacent free payload extents, move a file payload into a lower free hole,
 or temporarily move a payload to the current data frontier when the lower hole
-is too small.  Each step writes payload data before committing metadata.  The
+is too small.  Each step writes payload data before committing catalog state.  The
 old committed root therefore remains usable if power is lost before the step's
 new root is written.
 
 When a free payload extent reaches the current data frontier, defrag lowers
 `root.m_bottom`, turning that space back into the implicit free area between
-payload data and metadata.  Defrag also reclaims zero-length metadata-free nodes
-that sit at `root.m_top`, raising the metadata frontier when possible.
+payload data and record storage.  Defrag also reclaims zero-length record-free nodes
+that sit at `root.m_top`, raising the record frontier when possible.
 
 Directory-style traversal
 -------------------------
