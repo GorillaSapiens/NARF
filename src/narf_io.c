@@ -95,7 +95,7 @@ bool narf_io_open(void) {
    errno = 0;
    struct stat st;
    if (stat(filename, &st) == 0) {
-      if (total_bytes && total_bytes != st.st_size) {
+      if (total_bytes && (total_bytes != (size_t) st.st_size)) {
          fprintf(stderr, "'%s' exists but is wrong size %ld vs %ld\n",
             filename, total_bytes, st.st_size);
          return false;
@@ -120,7 +120,7 @@ bool narf_io_open(void) {
 
    errno = 0;
    image = mmap(NULL, total_bytes, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-   if (image == NULL) {
+   if (image == MAP_FAILED) {
       perror("mmap");
       return false;
    }

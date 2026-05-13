@@ -1,5 +1,7 @@
+ERR=-Wall -Wextra -Wpedantic -Werror
+
 tester.exe: tester.c narf_io.c narf.c
-	gcc -Wall -g tester.c narf_io.c narf.c -lz -o tester
+	gcc $(ERR) -g tester.c narf_io.c narf.c -lz -o tester
 
 bootloader.bin: bootloader.asm
 	nasm -f bin bootloader.asm -o bootloader.bin

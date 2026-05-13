@@ -107,6 +107,8 @@ bool narf_io_read(uint32_t sector, void *data) {
 
 // --- File & directory metadata ---
 static int my_getattr(const char *path, struct stat *st, struct fuse_file_info *fi) {
+   (void) fi;
+
    if (!mounted) return -ENODEV;
 
    LOCK;
@@ -161,6 +163,9 @@ static int my_getattr(const char *path, struct stat *st, struct fuse_file_info *
 }
 
 static int my_access(const char *path, int mask) {
+   (void) path;
+   (void) mask;
+
    if (!mounted) return -ENODEV;
 
    // Check file permissions
@@ -169,6 +174,10 @@ static int my_access(const char *path, int mask) {
 }
 
 static int my_readlink(const char *path, char *buf, size_t size) {
+   (void) path;
+   (void) buf;
+   (void) size;
+
    if (!mounted) return -ENODEV;
 
    // Return symlink target
@@ -176,6 +185,10 @@ static int my_readlink(const char *path, char *buf, size_t size) {
 }
 
 static int my_mknod(const char *path, mode_t mode, dev_t rdev) {
+   (void) path;
+   (void) mode;
+   (void) rdev;
+
    if (!mounted) return -ENODEV;
 
    // Create special files (FIFO, char/block dev, etc.)
@@ -183,6 +196,8 @@ static int my_mknod(const char *path, mode_t mode, dev_t rdev) {
 }
 
 static int my_mkdir(const char *path, mode_t mode) {
+   (void) mode;
+
    if (!mounted) return -ENODEV;
 
    LOCK;
@@ -277,6 +292,9 @@ static int my_rmdir(const char *path) {
 }
 
 static int my_symlink(const char *target, const char *linkpath) {
+   (void) target;
+   (void) linkpath;
+
    if (!mounted) return -ENODEV;
 
    // Create a symbolic link
@@ -284,6 +302,8 @@ static int my_symlink(const char *target, const char *linkpath) {
 }
 
 static int my_rename(const char *oldpath, const char *newpath, unsigned int flags) {
+   (void) flags;
+
    if (!mounted) return -ENODEV;
 
    // Rename or move file/directory
@@ -354,6 +374,9 @@ fini:
 }
 
 static int my_link(const char *from, const char *to) {
+   (void) from;
+   (void) to;
+
    if (!mounted) return -ENODEV;
 
    // Create a hard link
@@ -361,6 +384,10 @@ static int my_link(const char *from, const char *to) {
 }
 
 static int my_chmod(const char *path, mode_t mode, struct fuse_file_info *fi) {
+   (void) path;
+   (void) mode;
+   (void) fi;
+
    if (!mounted) return -ENODEV;
 
    // Change permissions
@@ -368,6 +395,11 @@ static int my_chmod(const char *path, mode_t mode, struct fuse_file_info *fi) {
 }
 
 static int my_chown(const char *path, uid_t uid, gid_t gid, struct fuse_file_info *fi) {
+   (void) path;
+   (void) uid;
+   (void) gid;
+   (void) fi;
+
    if (!mounted) return -ENODEV;
 
    // Change owner/group
@@ -375,6 +407,10 @@ static int my_chown(const char *path, uid_t uid, gid_t gid, struct fuse_file_inf
 }
 
 static int my_truncate(const char *path, off_t size, struct fuse_file_info *fi) {
+   (void) path;
+   (void) size;
+   (void) fi;
+
    if (!mounted) return -ENODEV;
 
    // Resize file
@@ -383,6 +419,9 @@ static int my_truncate(const char *path, off_t size, struct fuse_file_info *fi) 
 
 // --- File I/O ---
 static int my_open(const char *path, struct fuse_file_info *fi) {
+   (void) path;
+   (void) fi;
+
    if (!mounted) return -ENODEV;
 
    // Open a file
@@ -391,6 +430,8 @@ static int my_open(const char *path, struct fuse_file_info *fi) {
 }
 
 static int my_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
+   (void) fi;
+
    if (!mounted) return -ENODEV;
 
    LOCK;
@@ -406,7 +447,7 @@ static int my_read(const char *path, char *buf, size_t size, off_t offset, struc
    size_t len = narf_size(naf);
    naf = narf_sector(naf);
 
-   if (naf == INVALID_NAF || offset >= len) {
+   if (naf == INVALID_NAF || (size_t)offset >= len) {
       UNLOCK;
       return 0;
    }
@@ -430,7 +471,7 @@ static int my_read(const char *path, char *buf, size_t size, off_t offset, struc
          UNLOCK;
          return -EIO;
       }
-      if (NARF_SECTOR_SIZE - offset >= remaining) {
+      if ((size_t)(NARF_SECTOR_SIZE - offset) >= remaining) {
          memcpy(buf, data + offset, remaining);
          buf += remaining;
          remaining = 0;
@@ -449,6 +490,8 @@ static int my_read(const char *path, char *buf, size_t size, off_t offset, struc
 }
 
 static int my_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
+   (void) fi;
+
    if (!mounted) return -ENODEV;
 
    LOCK;
@@ -488,7 +531,7 @@ static int my_write(const char *path, const char *buf, size_t size, off_t offset
          UNLOCK;
          return -EIO;
       }
-      if (NARF_SECTOR_SIZE - offset >= remaining) {
+      if ((size_t)(NARF_SECTOR_SIZE - offset) >= remaining) {
          memcpy(data + offset, buf, remaining);
          buf += remaining;
          remaining = 0;
@@ -512,6 +555,8 @@ static int my_write(const char *path, const char *buf, size_t size, off_t offset
 }
 
 static int my_statfs(const char *path, struct statvfs *st) {
+   (void) path;
+
    if (!mounted) return -ENODEV;
 
    // Report filesystem stats
@@ -520,6 +565,9 @@ static int my_statfs(const char *path, struct statvfs *st) {
 }
 
 static int my_flush(const char *path, struct fuse_file_info *fi) {
+   (void) path;
+   (void) fi;
+
    if (!mounted) return -ENODEV;
 
    // Flush file contents (can often be a no-op)
@@ -527,6 +575,9 @@ static int my_flush(const char *path, struct fuse_file_info *fi) {
 }
 
 static int my_release(const char *path, struct fuse_file_info *fi) {
+   (void) path;
+   (void) fi;
+
    if (!mounted) return -ENODEV;
 
    // Close file
@@ -535,6 +586,10 @@ static int my_release(const char *path, struct fuse_file_info *fi) {
 }
 
 static int my_fsync(const char *path, int isdatasync, struct fuse_file_info *fi) {
+   (void) path;
+   (void) isdatasync;
+   (void) fi;
+
    if (!mounted) return -ENODEV;
 
    // Flush file to storage
@@ -543,6 +598,9 @@ static int my_fsync(const char *path, int isdatasync, struct fuse_file_info *fi)
 
 // --- Directory handling ---
 static int my_opendir(const char *path, struct fuse_file_info *fi) {
+   (void) path;
+   (void) fi;
+
    if (!mounted) return -ENODEV;
 
    // Open directory
@@ -551,6 +609,10 @@ static int my_opendir(const char *path, struct fuse_file_info *fi) {
 
 static int my_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
       off_t offset, struct fuse_file_info *fi, enum fuse_readdir_flags flags) {
+   (void) offset;
+   (void) fi;
+   (void) flags;
+
    if (!mounted) return -ENODEV;
 
    // List contents of directory
@@ -624,6 +686,9 @@ static int my_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 }
 
 static int my_releasedir(const char *path, struct fuse_file_info *fi) {
+   (void) path;
+   (void) fi;
+
    if (!mounted) return -ENODEV;
 
    // Close directory
@@ -631,6 +696,10 @@ static int my_releasedir(const char *path, struct fuse_file_info *fi) {
 }
 
 static int my_fsyncdir(const char *path, int isdatasync, struct fuse_file_info *fi) {
+   (void) path;
+   (void) isdatasync;
+   (void) fi;
+
    if (!mounted) return -ENODEV;
 
    // Sync directory to disk
@@ -639,6 +708,9 @@ static int my_fsyncdir(const char *path, int isdatasync, struct fuse_file_info *
 
 // --- File creation ---
 static int my_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
+   (void) mode;
+   (void) fi;
+
    if (!mounted) return -ENODEV;
 
    LOCK;
@@ -660,6 +732,10 @@ static int my_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
 
 // --- Time update ---
 static int my_utimens(const char *path, const struct timespec tv[2], struct fuse_file_info *fi) {
+   (void) path;
+   (void) tv;
+   (void) fi;
+
    if (!mounted) return -ENODEV;
 
    // Update file access/modification times
@@ -668,6 +744,10 @@ static int my_utimens(const char *path, const struct timespec tv[2], struct fuse
 
 // --- Block map (optional) ---
 static int my_bmap(const char *path, size_t blocksize, uint64_t *idx) {
+   (void) path;
+   (void) blocksize;
+   (void) idx;
+
    if (!mounted) return -ENODEV;
 
    // Map logical block to physical (rarely used)
@@ -676,24 +756,42 @@ static int my_bmap(const char *path, size_t blocksize, uint64_t *idx) {
 
 // --- Extended attributes (optional) ---
 static int my_setxattr(const char *path, const char *name, const char *value, size_t size, int flags) {
+   (void) path;
+   (void) name;
+   (void) value;
+   (void) size;
+   (void) flags;
+
    if (!mounted) return -ENODEV;
 
    return -ENOTSUP;
 }
 
 static int my_getxattr(const char *path, const char *name, char *value, size_t size) {
+   (void) path;
+   (void) name;
+   (void) value;
+   (void) size;
+
    if (!mounted) return -ENODEV;
 
    return -ENOTSUP;
 }
 
 static int my_listxattr(const char *path, char *list, size_t size) {
+   (void) path;
+   (void) list;
+   (void) size;
+
    if (!mounted) return -ENODEV;
 
    return -ENOTSUP;
 }
 
 static int my_removexattr(const char *path, const char *name) {
+   (void) path;
+   (void) name;
+
    if (!mounted) return -ENODEV;
 
    return -ENOTSUP;
@@ -701,6 +799,9 @@ static int my_removexattr(const char *path, const char *name) {
 
 // --- Filesystem lifecycle ---
 static void *my_init(struct fuse_conn_info *conn, struct fuse_config *cfg) {
+   (void) conn;
+   (void) cfg;
+
    // Called on mount
    LOCK;
    if (partition == -1) {
@@ -717,6 +818,8 @@ static void *my_init(struct fuse_conn_info *conn, struct fuse_config *cfg) {
 }
 
 static void my_destroy(void *private_data) {
+   (void) private_data;
+
    //if (!mounted) return -ENODEV;
 
    // Called on unmount
@@ -792,7 +895,7 @@ int main(int argc, char *argv[]) {
       perror("open existing");
       return 1;
    }
-   size = lseek(fd, SEEK_END, 0);
+   size = lseek(fd, 0, SEEK_END);
 
    argv[1] = argv[0];
    argc--;

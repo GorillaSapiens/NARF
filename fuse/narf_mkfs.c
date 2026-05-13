@@ -214,7 +214,7 @@ int main(int argc, char *argv[]) {
       }
       else {
          if (format) {
-            if (!narf_mkfs(0, size))   fail("narf_mkfs() fail");
+            if (!narf_mkfs(0, size / NARF_SECTOR_SIZE))   fail("narf_mkfs() fail");
          }
          if (!narf_init(0))   fail("narf_init() fail");
       }

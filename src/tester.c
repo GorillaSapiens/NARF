@@ -14,6 +14,8 @@ extern void narf_io_configure(const char *fname);
 
 __attribute__((weak)) 
 void narf_debug(NAF naf) {
+   (void) naf;
+
    printf("debug not supported\n");
 }
 
@@ -197,7 +199,7 @@ void process_cmd(char *buffer) {
       printf("ls '%s' (%ld)\n", key, strlen(key));
 
       for (sector = narf_dirfirst(key, "/");
-            sector != -1;
+            sector != (uint32_t) -1;
             sector = narf_dirnext(key, "/", sector)) {
          printf("[%08x] %s\n", sector, narf_key(sector));
       }
