@@ -25,6 +25,9 @@
 #define END INVALID_NAF
 #define NARF_MIN_FS_SECTORS 4
 
+// Uncomment for unicode line drawing characters in debug functions
+#define USE_UTF8_LINE_DRAWING
+
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
    #define static_assert(x,y) _Static_assert(x,y)
 #else
@@ -1729,25 +1732,96 @@ bool narf_defrag(void) {
 #endif
 
 #ifdef NARF_DEBUG
-//! @brief Print one debug tree in sorted order.
-static void print_tree(NarfRef ref, int indent, const char *label) {
-   Node n;
-   int i;
-   if (ref_is_null(ref)) return;
-   if (!read_node(ref, &n, NULL)) return;
-   print_tree(n.m_left, indent + 1, label);
-   for (i = 0; i < indent; i++) printf("   ");
+
+#ifdef USE_UTF8_LINE_DRAWING
+#define TREE_HORIZ "━"
+#define TREE_VERT  "┃"
+#define TREE_UPPER "┏"
+#define TREE_LOWER "┗"
+#define TREE_NIL   "✖"
+#else
+#define TREE_HORIZ "-"
+#define TREE_VERT  "|"
+#define TREE_UPPER "/"
+#define TREE_LOWER "\\"
+#define TREE_NIL   "(nil)"
+#endif
+
+//! @brief Test whether a tree-print pattern bit is set.
+static bool tree_pattern_bit(uint64_t pattern, int bit) {
+   if (bit < 0 || bit >= 64) return false;
+   return (pattern & (((uint64_t) 1) << bit)) != 0;
+}
+
+//! @brief Compute the line pattern for a right-child subtree.
+static uint64_t tree_right_pattern(uint64_t pattern, int indent) {
+   if (indent < 0 || indent >= 63) return pattern;
+   return (pattern ^ (((uint64_t) 3) << indent)) & ~((uint64_t) 1);
+}
+
+//! @brief Print one formatted debug-tree node.
+static void print_tree_node(NarfRef ref, const Node *n, const char *label) {
    if (label[0] == 'P' || label[0] == 'V' || label[0] == 'N') {
-      printf("%s [%08x:%08x] '%s' -> [%08x:%08x] h=%u\n",
-             label, ref.m_sector, ref.m_version, n.m_key,
-             n.m_index_ref.m_sector, n.m_index_ref.m_version, n.m_height);
+      printf("'%s' [%08x:%08x] %s-> [%08x:%08x] h=%u",
+             n->m_key, ref.m_sector, ref.m_version, label,
+             n->m_index_ref.m_sector, n->m_index_ref.m_version, n->m_height);
    }
    else {
-      printf("%s [%08x:%08x] '%s' start:len=(%08x:%u) bytes=%u h=%u\n",
-             label, ref.m_sector, ref.m_version, n.m_key,
-             n.m_start, (unsigned)n.m_length, (unsigned)n.m_bytes, n.m_height);
+      printf("'%s' [%08x:%08x] %s-> start:len=(%08x:%u) bytes=%u h=%u",
+             n->m_key, ref.m_sector, ref.m_version, label,
+             n->m_start, (unsigned)n->m_length, (unsigned)n->m_bytes, n->m_height);
    }
-   print_tree(n.m_right, indent + 1, label);
+}
+
+//! @brief Print one debug tree sideways, using line-drawing limbs when enabled.
+static void print_tree(NarfRef ref, int indent, uint64_t pattern, const char *label) {
+   Node n;
+   NarfRef left;
+   NarfRef right;
+   int i;
+   const char *arm;
+
+   if (!ref_is_null(ref)) {
+      if (!read_node(ref, &n, NULL)) {
+         return;
+      }
+
+      left = n.m_left;
+      right = n.m_right;
+      print_tree(left, indent + 1, pattern, label);
+   }
+
+   for (i = 0; i < indent; i++) {
+      if (tree_pattern_bit(pattern, i)) {
+         printf(TREE_VERT "  ");
+      }
+      else {
+         printf("   ");
+      }
+   }
+
+   if (indent) {
+      if (tree_pattern_bit(pattern, indent)) {
+         arm = TREE_LOWER TREE_HORIZ;
+      }
+      else {
+         arm = TREE_UPPER TREE_HORIZ;
+      }
+   }
+   else {
+      arm = TREE_HORIZ TREE_HORIZ;
+   }
+
+   if (ref_is_null(ref)) {
+      printf("%s%s\n", arm, TREE_NIL);
+      return;
+   }
+
+   printf("%s ", arm);
+   print_tree_node(ref, &n, label);
+   printf("\n");
+
+   print_tree(right, indent + 1, tree_right_pattern(pattern, indent), label);
 }
 
 //! @brief Print internal NARF root and tree state.
@@ -1766,15 +1840,15 @@ void narf_debug(void) {
    printf("root.m_bottom        = %08x\n", root.m_bottom);
    printf("root.m_top           = %08x\n", root.m_top);
    printf("data tree:\n");
-   print_tree(root.m_data_root, 0, "D");
+   print_tree(root.m_data_root, 0, 0, "D");
    printf("free tree:\n");
-   print_tree(root.m_free_root, 0, "F");
+   print_tree(root.m_free_root, 0, 0, "F");
    printf("parent index:\n");
-   print_tree(root.m_parent_root, 0, "P");
+   print_tree(root.m_parent_root, 0, 0, "P");
    printf("previous index:\n");
-   print_tree(root.m_prev_root, 0, "V");
+   print_tree(root.m_prev_root, 0, 0, "V");
    printf("next index:\n");
-   print_tree(root.m_next_root, 0, "N");
+   print_tree(root.m_next_root, 0, 0, "N");
 }
 #endif
 
