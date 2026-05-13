@@ -1133,74 +1133,68 @@ static void verify_integrity(void) {
 //! @brief add a naf to the free chain
 //!
 //! @param naf The NAF to add
-static void narf_chain(NAF naf) {
+static bool narf_chain(NAF naf) {
    NAF prev;
-   NAF next;
-   NarfSector length; // used in multiple places
+   NAF cur;
+   NarfSector length;
+   NarfSector cur_length;
 
-   // chain is in order of increasing length
-
-   // can we reclaim some bottom space?
-   read_buffer(naf);
-   length = node->m_length; // this is from the naf
-   if (node->m_start + length == root.m_bottom) {
-      root.m_bottom -= length;
-      node->m_start = END;
-      length = node->m_length = 0;
-      write_buffer(naf);
-   }
-
-   // can we reclaim some top space?
-   if (length == 0 && naf == root.m_top) {
-      // rare case where we can just drop it on the floor
-      root.m_top += 2;
-      return;
-   }
-
-   // get the first node length if possible
-   if (root.m_chain != END) {
-      read_buffer(root.m_chain);
-      length = node->m_length; // this is from first node in chain now
-   }
-
-   // some special cases go straight to the front
+   if (!valid_naf(naf)) return false;
 
    read_buffer(naf);
-   if (root.m_chain == END || node->m_length <= length) {
-      node->m_next = root.m_chain;
-      root.m_chain = naf;
-      write_buffer(naf);
-      return;
-   }
-
-   length = node->m_length; // this is from naf now
+   length = node->m_length;
 
    prev = END;
-   next = root.m_chain;
-   while(1) {
-      if (next != END) {
-         read_buffer(next);
-      }
-      if (next == END || node->m_length >= length) {
-         read_buffer(naf);
-         node->m_parent = END;
-         node->m_left = END;
-         node->m_right = END;
-         node->m_prev = END;
-         node->m_next = next;
-         write_buffer(naf);
+   cur = root.m_chain;
 
-         read_buffer(prev);
-         node->m_next = naf;
-         write_buffer(prev);
+   // Skip nodes smaller than this one.
+   while (cur != END) {
+      if (!valid_naf(cur)) return false;
+      if (cur == naf) return false;
 
-         return;
+      read_buffer(cur);
+      cur_length = node->m_length;
+
+      if (cur_length >= length) {
+         break;
       }
-      prev = next;
-      next = node->m_next;
+
+      prev = cur;
+      cur = node->m_next;
    }
 
-   assert(0); // we should never get this far
+   // Walk to the END of this size group.
+   // Also catches double-free within the equal-size group.
+   while (cur != END) {
+      if (!valid_naf(cur)) return false;
+      if (cur == naf) return false;
+
+      read_buffer(cur);
+      cur_length = node->m_length;
+
+      if (cur_length != length) {
+         break;
+      }
+
+      prev = cur;
+      cur = node->m_next;
+   }
+
+   // Insert naf between prev and cur.
+   read_buffer(naf);
+   node->m_next = cur;
+   write_buffer(naf);
+
+   if (prev == END) {
+      root.m_chain = naf;
+   }
+   else {
+      read_buffer(prev);
+      node->m_next = naf;
+      write_buffer(prev);
+   }
+
+   return true;
 }
 
 ///////////////////////////////////////////////////////
@@ -2118,7 +2112,10 @@ NAF narf_realloc(NAF naf, NarfByteSize bytes) {
       }
 
       narf_copyswap(naf, tmp, bytes);
-      narf_chain(tmp);
+      if (!narf_chain(tmp)) {
+         narf_rollback();
+         return END;
+      }
       narf_end();
 
       return naf;
@@ -2347,7 +2344,10 @@ bool narf_free(NAF naf) {
       root.m_first = next;
    }
 
-   narf_chain(naf);
+   if (!narf_chain(naf)) {
+      narf_rollback();
+      return false;
+   }
    --root.m_count;
 
    narf_end();
@@ -2393,7 +2393,7 @@ static void defrag_unchain(NAF naf) {
 //! @brief Combine two adjacent free data spaces
 //!
 //! this is power loss robust
-static void defrag_two_free(NAF free1, NAF free2) {
+static bool defrag_two_free(NAF free1, NAF free2) {
    NarfSector length;
 
    narf_begin();
@@ -2407,15 +2407,23 @@ static void defrag_two_free(NAF free1, NAF free2) {
    node->m_length = 0;
    write_buffer(free2);
 
-   narf_chain(free2);
+   if (!narf_chain(free2)) {
+      narf_rollback();
+      return false;
+   }
 
    read_buffer(free1);
    node->m_length += length;
    write_buffer(free1);
 
-   narf_chain(free1);
+   if (!narf_chain(free1)) {
+      narf_rollback();
+      return false;
+   }
 
    narf_end();
+
+   return true;
 }
 
 ///////////////////////////////////////////////////////
@@ -2454,7 +2462,10 @@ static bool defrag_free_tree(NAF free1, NAF tree2) {
       node->m_start = f_start + t_length;
       write_buffer(free1);
 
-      narf_chain(free1);
+      if (!narf_chain(free1)) {
+         narf_rollback();
+         return false;
+      }
       narf_end();
 
       return true;
@@ -2485,7 +2496,10 @@ static bool defrag_free_tree(NAF free1, NAF tree2) {
    node->m_length += t_length;
    write_buffer(free1);
 
-   narf_chain(free1);
+   if (!narf_chain(free1)) {
+      narf_rollback();
+      return false;
+   }
    narf_end();
 
    return true;
@@ -2531,7 +2545,10 @@ static bool defrag_carve(void) {
          node->m_length = new_length;
          write_buffer(free_naf);
 
-         narf_chain(free_naf);
+         if (!narf_chain(free_naf)) {
+            narf_rollback();
+            return false;
+         }
 
          narf_end();
       }
@@ -2575,7 +2592,9 @@ static bool defrag_squish(void) {
          read_buffer(tmp);
          if (node->m_start == start + length) {
             // we found it, let's combine them.
-            defrag_two_free(lowest, tmp);
+            if (!defrag_two_free(lowest, tmp)) {
+               return false;
+            }
             goto another;
          }
       }
