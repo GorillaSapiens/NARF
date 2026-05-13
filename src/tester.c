@@ -29,6 +29,17 @@ const char *tf[] = { "false", "true" };
 
 void gremlins(int s, int n);
 
+//! @brief Print a short tester command summary.
+void print_help(void) {
+   printf("commands:\n");
+   printf("  mkfs | mbr [name] | partition <n> | format <n> | mount <n>\n");
+   printf("  alloc <key> <bytes> | create <key> <string> | append <key> <string>\n");
+   printf("  realloc <key> <bytes> | free <key> | rename <old> <new>\n");
+   printf("  ls <dir> | cat <key> | tag <key> <metadata> | scan <key>\n");
+   printf("  pack <host-dir> | slurp <host-file> | debug | defrag | gremlins <seed> <n>\n");
+   printf("  help | quit | exit\n");
+}
+
 //! @brief Recursively pack a host directory into the mounted NARF image.
 void do_pack_dive(const char *realpath, const char *path, DIR *dir) {
    struct dirent *entry = readdir(dir);
@@ -168,7 +179,14 @@ void do_pack(const char *dirname) {
 
 //! @brief Parse and execute one tester command line.
 void process_cmd(char *buffer) {
-   if (!strncmp(buffer, "pack ", 5)) {
+   if (buffer == NULL || buffer[0] == 0) {
+      printf("huh? Empty command.\n");
+      print_help();
+   }
+   else if (!strncmp(buffer, "help", 4)) {
+      print_help();
+   }
+   else if (!strncmp(buffer, "pack ", 5)) {
       const char *arg = buffer + 5;
       do_pack(arg);
    }
@@ -492,6 +510,12 @@ void loop(void) {
 
    printf("#>");
    while(fgets(buffer, sizeof(buffer), stdin)) {
+      size_t len = strlen(buffer);
+
+      while (len > 0 && (unsigned char) buffer[len - 1] < ' ') {
+         buffer[--len] = 0;
+      }
+
       if (!strncmp(buffer, "exit", 4)) {
          break;
       }
@@ -499,9 +523,6 @@ void loop(void) {
          break;
       }
       else {
-         while(buffer[strlen(buffer) - 1] < ' ') {
-            buffer[strlen(buffer) - 1] = 0;
-         }
          process_cmd(buffer);
       }
       printf("#>");

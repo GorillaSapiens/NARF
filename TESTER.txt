@@ -42,7 +42,8 @@ After startup, the prompt is:
 #>
 ```
 
-Use `quit` or `exit` to leave.
+Use `help` to print a short command summary.  Use `quit` or `exit` to leave.
+An empty line prints `huh? Empty command.` and the same short help summary.
 
 Common setup
 ------------
@@ -65,6 +66,15 @@ init
 
 Commands
 --------
+
+
+### `help`
+
+Print a short command summary.
+
+Entering an empty line at the tester prompt is treated as an empty command:
+it prints `huh? Empty command.` followed by the short help summary, then returns
+to the prompt.
 
 ### `mbr [message]`
 
