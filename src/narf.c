@@ -916,6 +916,65 @@ static bool insert_free_extent(NarfSector start, NarfSector length) {
    return insert_free_extent_with_ref(ref, start, length);
 }
 
+static bool zero_extent(NarfSector start, NarfSector length) {
+   uint8_t zero[NARF_SECTOR_SIZE];
+   NarfSector i;
+
+   if (length == 0) return true;
+   if (start == END) return false;
+
+   memset(zero, 0, sizeof(zero));
+
+   for (i = 0; i < length; i++) {
+      if (!narf_io_write(root.m_origin + start + i, zero)) {
+         return false;
+      }
+   }
+
+   return true;
+}
+
+static bool allocate_data_extent(NarfSector length, NarfSector *start) {
+   NarfRef freeref;
+   NarfRef newroot;
+   NarfRef removed_ref;
+   Node free_node;
+   Node removed;
+
+   if (start == NULL) return false;
+
+   if (length == 0) {
+      *start = END;
+      return true;
+   }
+
+   if (free_best_rec(root.m_free_root, length, &freeref, &free_node)) {
+      if (!free_delete_rec(root.m_free_root, free_node.m_length,
+                           free_node.m_start, freeref.m_sector,
+                           &newroot, &removed_ref, &removed)) {
+         return false;
+      }
+
+      root.m_free_root = newroot;
+      *start = removed.m_start;
+
+      if (removed.m_length > length) {
+         return insert_free_extent_with_ref(removed_ref,
+                                            removed.m_start + length,
+                                            removed.m_length - length);
+      }
+
+      return insert_free_extent_with_ref(removed_ref, END, 0);
+   }
+
+   if (root.m_top < root.m_bottom) return false;
+   if (length > root.m_top - root.m_bottom) return false;
+
+   *start = root.m_bottom;
+   root.m_bottom += length;
+   return true;
+}
+
 static bool allocate_storage(NarfSector length, NarfRef *metaref, NarfSector *start) {
    NarfRef freeref, newroot;
    Node free_node, removed;
@@ -1180,6 +1239,12 @@ bool narf_alloc(const char *key, NarfByteSize bytes) {
       return false;
    }
 
+   if (!zero_extent(start, length)) {
+      root = saved;
+      dirty_clear();
+      return false;
+   }
+
    memset(&n, 0, sizeof(n));
    n.m_left = NULL_REF;
    n.m_right = NULL_REF;
@@ -1213,84 +1278,43 @@ bool narf_alloc(const char *key, NarfByteSize bytes) {
 
 bool narf_realloc(const char *key, NarfByteSize bytes) {
    Root saved = root;
-   NarfRef ref;
    NarfRef newroot;
    Node n;
-   NarfSector new_length;
-   NarfRef freeref;
-   NarfSector new_start;
-   uint8_t copybuf[NARF_SECTOR_SIZE];
-   NarfSector i;
 
    if (!verify()) return false;
    if (!valid_key(key)) return false;
-   if (!data_find_ref_rec(root.m_data_root, key, &ref, &n)) {
+
+   if (!data_find_ref_rec(root.m_data_root, key, NULL, &n)) {
       return narf_alloc(key, bytes);
    }
 
+   if (bytes > n.m_bytes) {
+      return narf_write(key, NULL, bytes - n.m_bytes, n.m_bytes);
+   }
+
    dirty_clear();
-   new_length = BYTES2SECTORS(bytes);
-   if (new_length <= n.m_length) {
-      n.m_bytes = bytes;
-      if (!data_update_rec(root.m_data_root, key, &n, &newroot)) {
-         root = saved;
-         return false;
-      }
-      root.m_data_root = newroot;
-      if (!rebuild_indexes()) {
-         root = saved;
-         dirty_clear();
-         return false;
-      }
-      if (!commit_root()) {
-         root = saved;
-         return false;
-      }
-      return true;
-   }
-
-   if (!allocate_storage(new_length, &freeref, &new_start)) {
-      root = saved;
-      dirty_clear();
-      return false;
-   }
-
-   for (i = 0; i < n.m_length; i++) {
-      if (!narf_io_read(root.m_origin + n.m_start + i, copybuf) ||
-          !narf_io_write(root.m_origin + new_start + i, copybuf)) {
-         root = saved;
-         return false;
-      }
-   }
-
-   if (n.m_length > 0) {
-      if (!insert_free_extent(n.m_start, n.m_length)) {
-         root = saved;
-         return false;
-      }
-   }
-
-   n.m_start = new_start;
-   n.m_length = new_length;
    n.m_bytes = bytes;
-   (void) freeref;
 
    if (!data_update_rec(root.m_data_root, key, &n, &newroot)) {
       root = saved;
       dirty_clear();
       return false;
    }
+
    root.m_data_root = newroot;
+
    if (!rebuild_indexes()) {
       root = saved;
       dirty_clear();
       return false;
    }
+
    if (!commit_root()) {
       root = saved;
       dirty_clear();
       return false;
    }
+
    return true;
 }
 
@@ -1443,38 +1467,131 @@ bool narf_set_metadata(const char *key, void *data) {
    return true;
 }
 
+bool narf_write(const char *key, const void *data, NarfByteSize size, NarfByteSize offset) {
+   Root saved = root;
+   NarfRef newroot;
+   Node n;
+   NarfByteSize write_end;
+   NarfByteSize new_bytes;
+   NarfSector new_length;
+   NarfSector new_start;
+   NarfSector i;
+   const uint8_t *src = (const uint8_t *) data;
+   uint8_t temp[NARF_SECTOR_SIZE];
+   uint8_t oldbuf[NARF_SECTOR_SIZE];
+
+   if (!verify()) return false;
+   if (!valid_key(key)) return false;
+   if (size > ((NarfByteSize) -1) - offset) return false;
+   if (!data_find_ref_rec(root.m_data_root, key, NULL, &n)) return false;
+
+   write_end = offset + size;
+   new_bytes = n.m_bytes;
+   if (write_end > new_bytes) new_bytes = write_end;
+
+   if (size == 0 && new_bytes == n.m_bytes) {
+      return true;
+   }
+
+   dirty_clear();
+   new_length = BYTES2SECTORS(new_bytes);
+
+   if (!allocate_data_extent(new_length, &new_start)) {
+      root = saved;
+      dirty_clear();
+      return false;
+   }
+
+   for (i = 0; i < new_length; i++) {
+      NarfByteSize base = (NarfByteSize) i * NARF_SECTOR_SIZE;
+      NarfByteSize sector_end = base + NARF_SECTOR_SIZE;
+
+      memset(temp, 0, sizeof(temp));
+
+      if (base < n.m_bytes && n.m_start != END && i < n.m_length) {
+         NarfByteSize old_n = NARF_SECTOR_SIZE;
+
+         if (sector_end > n.m_bytes) {
+            old_n = n.m_bytes - base;
+         }
+
+         if (!narf_io_read(root.m_origin + n.m_start + i, oldbuf)) {
+            root = saved;
+            dirty_clear();
+            return false;
+         }
+
+         memcpy(temp, oldbuf, old_n);
+      }
+
+      if (base < write_end && offset < sector_end) {
+         NarfByteSize begin = offset > base ? offset : base;
+         NarfByteSize end = write_end < sector_end ? write_end : sector_end;
+         NarfByteSize nbytes = end - begin;
+         NarfByteSize dest = begin - base;
+
+         if (src != NULL) {
+            memcpy(temp + dest, src + (begin - offset), nbytes);
+         }
+         else {
+            memset(temp + dest, 0, nbytes);
+         }
+      }
+
+      if (!narf_io_write(root.m_origin + new_start + i, temp)) {
+         root = saved;
+         dirty_clear();
+         return false;
+      }
+   }
+
+   if (n.m_length > 0) {
+      if (!insert_free_extent(n.m_start, n.m_length)) {
+         root = saved;
+         dirty_clear();
+         return false;
+      }
+   }
+
+   n.m_start = new_length ? new_start : END;
+   n.m_length = new_length;
+   n.m_bytes = new_bytes;
+
+   if (!data_update_rec(root.m_data_root, key, &n, &newroot)) {
+      root = saved;
+      dirty_clear();
+      return false;
+   }
+
+   root.m_data_root = newroot;
+
+   if (!rebuild_indexes()) {
+      root = saved;
+      dirty_clear();
+      return false;
+   }
+
+   if (!commit_root()) {
+      root = saved;
+      dirty_clear();
+      return false;
+   }
+
+   return true;
+}
+
 bool narf_append(const char *key, const void *data, NarfByteSize size) {
    NarfByteSize old_size;
-   NarfSector sector;
-   NarfByteSize offset;
-   NarfByteSize remain;
-   uint8_t temp[NARF_SECTOR_SIZE];
 
    if (!verify()) return false;
    if (!valid_key(key)) return false;
    if (data == NULL && size != 0) return false;
-   old_size = narf_size(key);
-   if (!narf_find(key)) return false;
-   if (size > ((NarfByteSize)-1) - old_size) return false;
-   if (!narf_realloc(key, old_size + size)) return false;
+   if (!data_find_ref_rec(root.m_data_root, key, NULL, NULL)) return false;
 
-   sector = narf_sector(key);
-   if (sector == END && size != 0) return false;
-   offset = old_size;
-   remain = size;
-   while (remain) {
-      NarfSector cur = sector + offset / NARF_SECTOR_SIZE;
-      NarfByteSize off = offset % NARF_SECTOR_SIZE;
-      NarfByteSize n = NARF_SECTOR_SIZE - off;
-      if (n > remain) n = remain;
-      if (!narf_io_read(cur, temp)) return false;
-      memcpy(temp + off, data, n);
-      if (!narf_io_write(cur, temp)) return false;
-      data = (const uint8_t *) data + n;
-      offset += n;
-      remain -= n;
-   }
-   return true;
+   old_size = narf_size(key);
+   if (size > ((NarfByteSize) -1) - old_size) return false;
+
+   return narf_write(key, data, size, old_size);
 }
 
 bool narf_append_key(const char *key, const void *data, NarfByteSize size) {

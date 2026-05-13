@@ -49,19 +49,19 @@ void do_pack_dive(const char *realpath, const char *path, DIR *dir) {
          char data[512];
          char buf[1024];
          char rbuf[1024];
+         size_t nread;
          sprintf(buf, "%s%s", path, entry->d_name);
          sprintf(rbuf, "%s%s", realpath, entry->d_name);
          FILE *f = fopen(rbuf, "rb");
-         fseek(f, 0, SEEK_END);
-         long size = ftell(f);
-         bool ok = narf_alloc(buf, size);
-         uint32_t start = ok ? narf_sector(buf) : (uint32_t)-1;
-         fseek(f, 0, SEEK_SET);
-         for (long i = 0; i < size; i += 512) {
-            fread(data, 512, 1, f);
-            narf_io_write(start + (i / 512), (void *) data);
+         bool ok = narf_alloc(buf, 0);
+         if (ok && f) {
+            while ((nread = fread(data, 1, sizeof(data), f)) != 0) {
+               if (!narf_append(buf, data, (NarfByteSize) nread)) {
+                  break;
+               }
+            }
          }
-         fclose(f);
+         if (f) fclose(f);
       }
       entry = readdir(dir);
    }

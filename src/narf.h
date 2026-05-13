@@ -42,6 +42,7 @@ NarfSector narf_sector(const char *key);
 NarfByteSize narf_size(const char *key);
 void *narf_metadata(const char *key);
 bool narf_set_metadata(const char *key, void *data);
+bool narf_write(const char *key, const void *data, NarfByteSize size, NarfByteSize offset);
 bool narf_append(const char *key, const void *data, NarfByteSize size);
 bool narf_append_key(const char *key, const void *data, NarfByteSize size);
 

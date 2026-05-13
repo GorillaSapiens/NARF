@@ -520,62 +520,28 @@ static int my_write(const char *path, const char *buf, size_t size, off_t offset
    (void) fi;
 
    if (!mounted) return -ENODEV;
+   if (offset < 0) return -EINVAL;
+   if ((NarfByteSize) offset != (uintmax_t) offset) return -EFBIG;
+   if ((NarfByteSize) size != size) return -EFBIG;
+   if ((NarfByteSize) size > ((NarfByteSize) -1) - (NarfByteSize) offset) return -EFBIG;
 
    LOCK;
 
-   // Write data to a file
+   // Write data to a file atomically by letting the core copy-on-write
+   // the payload extent and commit metadata last.
 
    if (!narf_find(path + 1)) {
       UNLOCK;
       return -ENOENT;
    }
 
-   size_t len = narf_size(path + 1);
-
-   if (len < offset + size) {
-      if (!narf_realloc(path + 1, offset + size)) {
-         UNLOCK;
-         return -EIO;
-      }
-      len = offset + size;
-   }
-
-   NarfSector sector = narf_sector(path + 1);
-
-   while (offset >= NARF_SECTOR_SIZE) {
-      offset -= NARF_SECTOR_SIZE;
-      sector++;
-   }
-
-   size_t remaining = size;
-
-   while (remaining) {
-      char data[NARF_SECTOR_SIZE];
-      if (!narf_io_read(sector, data)) {
-         UNLOCK;
-         return -EIO;
-      }
-      if ((size_t)(NARF_SECTOR_SIZE - offset) >= remaining) {
-         memcpy(data + offset, buf, remaining);
-         buf += remaining;
-         remaining = 0;
-      }
-      else {
-         memcpy(data + offset, buf, NARF_SECTOR_SIZE - offset);
-         buf += (NARF_SECTOR_SIZE - offset);
-         remaining -= (NARF_SECTOR_SIZE - offset);
-         offset = 0;
-      }
-      if (!narf_io_write(sector, data)) {
-         UNLOCK;
-         return -EIO;
-      }
-      sector++;
+   if (!narf_write(path + 1, buf, (NarfByteSize) size, (NarfByteSize) offset)) {
+      UNLOCK;
+      return -EIO;
    }
 
    UNLOCK;
-   return size;
-   //return -EROFS;
+   return (int) size;
 }
 
 static int my_statfs(const char *path, struct statvfs *st) {
