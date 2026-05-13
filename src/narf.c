@@ -1847,12 +1847,24 @@ static NAF narf_unchain(NarfSector length) {
 //! assumes narf_begin() has been called
 static NAF narf_new(NarfSector length) {
    NAF naf = END;
-   if ((root.m_bottom + 2) > (root.m_top - length)) {
-      // OUT OF SPACE COLLISSION!!!
+   NarfSector available;
 
-      // TODO FIX can we defrag for more room?
-      // let's just bail for now.
+   if (root.m_bottom > root.m_top) {
+      return END;
+   }
 
+   available = root.m_top - root.m_bottom;
+
+   /*
+    * Need room for:
+    *    length data sectors
+    *    2 NAF metadata sectors
+    */
+   if (available < 2) {
+      return END;
+   }
+
+   if (length > available - 2) {
       return END;
    }
 
