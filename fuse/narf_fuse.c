@@ -175,10 +175,10 @@ static int my_getattr(const char *path, struct stat *st, struct fuse_file_info *
    // see if it exists as a directory
    char *p = xformpath(path);
    if (narf_find(p)) {
+      free(p);
       st->st_mode = S_IFDIR | 0755;
       st->st_nlink = 2;
       st->st_size = narf_size(p);
-      free(p);
       UNLOCK;
       return 0;
    }
@@ -377,7 +377,7 @@ static int my_rename(const char *oldpath, const char *newpath, unsigned int flag
    // olddir is a directory.  this will be tricky.
    // this is only safe because i know what i'm doing...
    int olen = strlen(olddir);
-   // TODO FIX remove this line // int nlen = strlen(newdir);
+   int nlen = strlen(newdir);
    const char *entry2;
    char prevkey[512];
    char buf[512];
