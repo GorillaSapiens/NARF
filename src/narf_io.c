@@ -157,22 +157,39 @@ uint32_t narf_io_sectors(void) {
    return total_bytes / SECTOR_SIZE;
 }
 
+//! sanity checking
+static bool sector_is_valid(uint32_t sector) {
+   if (image == NULL || image == MAP_FAILED) {
+      return false;
+   }
+
+   if (sector >= narf_io_sectors()) {
+      return false;
+   }
+
+   return true;
+}
+
 //! @see narf_io.h
 bool narf_io_write(uint32_t sector, void *data) {
-   bool ret = true;
-   if (NULL == memcpy(image + sector * SECTOR_SIZE, data, SECTOR_SIZE)) {
-      ret = false;
+   if (!sector_is_valid(sector) || data == NULL) {
+      return false;
    }
-   return ret;
+   if (NULL == memcpy(image + sector * SECTOR_SIZE, data, SECTOR_SIZE)) {
+      return false;
+   }
+   return true;
 }
 
 //! @see narf_io.h
 bool narf_io_read(uint32_t sector, void *data) {
-   bool ret = true;
-   if (NULL == memcpy(data, image + sector * SECTOR_SIZE, SECTOR_SIZE)) {
-      ret = false;
+   if (!sector_is_valid(sector) || data == NULL) {
+      return false;
    }
-   return ret;
+   if (NULL == memcpy(data, image + sector * SECTOR_SIZE, SECTOR_SIZE)) {
+      return false;
+   }
+   return true;
 }
 
 // vim:set ai softtabstop=3 shiftwidth=3 tabstop=3 expandtab: ff=unix

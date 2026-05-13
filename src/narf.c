@@ -1529,6 +1529,10 @@ bool narf_init(NarfSector start) {
 
    if (!narf_io_open()) return false;
 
+   if (start >= narf_io_sectors()) {
+      return false;
+   }
+
    ret = narf_io_read(start, buffer);
    if (!ret) return false;
    ck_lo = crc32(0, (void *) asroot, sizeof(Root) - sizeof(uint32_t));
