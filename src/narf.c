@@ -1339,6 +1339,11 @@ bool narf_realloc(const char *key, NarfByteSize bytes) {
    Root saved = root;
    NarfRef newroot;
    Node n;
+   NarfSector old_start;
+   NarfSector old_length;
+   NarfSector new_length;
+   NarfSector free_start;
+   NarfSector free_length;
 
    if (!verify()) return false;
    if (!valid_key(key)) return false;
@@ -1351,8 +1356,59 @@ bool narf_realloc(const char *key, NarfByteSize bytes) {
       return narf_write(key, NULL, bytes - n.m_bytes, n.m_bytes);
    }
 
+   old_start = n.m_start;
+   old_length = n.m_length;
+   new_length = BYTES2SECTORS(bytes);
+
    dirty_clear();
-   n.m_bytes = bytes;
+
+   if (bytes == 0) {
+      if (old_length != 0) {
+         if (old_start == END) {
+            root = saved;
+            dirty_clear();
+            return false;
+         }
+
+         if (!insert_free_extent(old_start, old_length)) {
+            root = saved;
+            dirty_clear();
+            return false;
+         }
+      }
+
+      n.m_start = END;
+      n.m_length = 0;
+      n.m_bytes = 0;
+   }
+   else if (new_length < old_length) {
+      if (old_start == END) {
+         root = saved;
+         dirty_clear();
+         return false;
+      }
+
+      free_start = old_start + new_length;
+      free_length = old_length - new_length;
+
+      if (free_start < old_start) {
+         root = saved;
+         dirty_clear();
+         return false;
+      }
+
+      if (!insert_free_extent(free_start, free_length)) {
+         root = saved;
+         dirty_clear();
+         return false;
+      }
+
+      n.m_length = new_length;
+      n.m_bytes = bytes;
+   }
+   else {
+      n.m_bytes = bytes;
+   }
 
    if (!data_update_rec(root.m_data_root, key, &n, &newroot)) {
       root = saved;
