@@ -28,15 +28,30 @@ static bool mounted = false;
 // adds trailing slash if missing
 // must be free'd !!!
 char *xformpath(const char *path) {
+   size_t n;
+   char *p;
+
+   if (path == NULL) return NULL;
+
    if (path[0] == '/') {
       path++;
    }
-   int n = strlen(path);
-   char *p = malloc(n + 2);
-   strcpy(p, path);
-   if (p[strlen(p) - 1] != '/') {
-      strcat(p, "/");
+
+   n = strlen(path);
+   p = malloc(n + 2);
+
+   if (p == NULL) {
+      return NULL;
    }
+
+   memcpy(p, path, n);
+   p[n] = 0;
+
+   if (n == 0 || p[n - 1] != '/') {
+      p[n] = '/';
+      p[n + 1] = 0;
+   }
+
    return p;
 }
 
