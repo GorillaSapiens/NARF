@@ -164,31 +164,29 @@ static int my_getattr(const char *path, struct stat *st, struct fuse_file_info *
    }
 
    // see if it exists as a file
-   NAF naf = narf_find(path + 1);
-   if (naf != INVALID_NAF) {
+   if (narf_find(path + 1)) {
       st->st_mode = S_IFREG | 0444;
       st->st_nlink = 1;
-      st->st_size = narf_size(naf);
+      st->st_size = narf_size(path + 1);
       UNLOCK;
       return 0;
    }
 
    // see if it exists as a directory
    char *p = xformpath(path);
-   naf = narf_find(p);
-   if (naf != INVALID_NAF) {
-      free(p);
+   if (narf_find(p)) {
       st->st_mode = S_IFDIR | 0755;
       st->st_nlink = 2;
-      st->st_size = narf_size(naf);
+      st->st_size = narf_size(p);
+      free(p);
       UNLOCK;
       return 0;
    }
 
    // see if it exists as a phantom directory
-   naf = narf_dirfirst(p, "/");
+   const char *dirent0 = narf_dirfirst(p, "/");
    free(p);
-   if (naf != INVALID_NAF) {
+   if (dirent0 != NULL) {
       st->st_mode = S_IFDIR | 0755;
       st->st_nlink = 2;
       st->st_size = 0;
@@ -241,7 +239,7 @@ static int my_mkdir(const char *path, mode_t mode) {
    LOCK;
 
    // Create a directory
-   if (narf_find(path + 1) != INVALID_NAF) {
+   if (narf_find(path + 1)) {
       // it already exists as a file
       UNLOCK;
       return -EEXIST;
@@ -249,13 +247,13 @@ static int my_mkdir(const char *path, mode_t mode) {
 
    char *p = xformpath(path);
 
-   if (narf_find(p) != INVALID_NAF) {
+   if (narf_find(p)) {
       // it already exists as a directory
       free(p);
       UNLOCK;
       return -EEXIST;
    }
-   else if (narf_alloc(p, 0) != INVALID_NAF) {
+   else if (narf_alloc(p, 0)) {
       // we had to create it
       free(p);
       UNLOCK;
@@ -287,29 +285,29 @@ static int my_rmdir(const char *path) {
 
    // Remove a directory
 
-   if (narf_find(path + 1) != INVALID_NAF) {
+   if (narf_find(path + 1)) {
       UNLOCK;
       return -ENOTDIR;
    }
 
    char *p = xformpath(path);
-   NAF naf = narf_dirfirst(p, "/");
+   const char *entry = narf_dirfirst(p, "/");
 
-   if (naf == INVALID_NAF) {
+   if (entry == NULL) {
       free(p);
       UNLOCK;
       return -ENOENT;
    }
 
-   if (strcmp(p, narf_key(naf))) {
+   if (strcmp(p, entry)) {
       free(p);
       UNLOCK;
       return -ENOTEMPTY;
    }
 
-   naf = narf_dirnext(p, "/", naf);
+   entry = narf_dirnext(p, "/", entry);
 
-   if (naf != INVALID_NAF) {
+   if (entry != NULL) {
       free(p);
       UNLOCK;
       return -ENOTEMPTY;
@@ -353,22 +351,22 @@ static int my_rename(const char *oldpath, const char *newpath, unsigned int flag
    char *olddir = xformpath(oldpath);
    char *newdir = xformpath(newpath);
 
-   NAF oldfile = narf_find(oldpath + 1);
-   NAF newfile = narf_find(newpath + 1);
-   NAF olddirnaf = narf_find(olddir);
-   NAF newdirnaf = narf_find(newdir);
+   bool oldfile = narf_find(oldpath + 1);
+   bool newfile = narf_find(newpath + 1);
+   bool olddirnaf = narf_find(olddir);
+   bool newdirnaf = narf_find(newdir);
 
-   if (oldfile == INVALID_NAF && olddirnaf == INVALID_NAF) {
+   if (!oldfile && !olddirnaf) {
       ret = -ENOENT;
       goto fini;
    }
 
-   if (newfile != INVALID_NAF || newdirnaf != INVALID_NAF) {
+   if (newfile || newdirnaf) {
       ret = -EEXIST;
       goto fini;
    }
 
-   if (oldfile != INVALID_NAF) {
+   if (oldfile) {
       ret = 0;
       if (!narf_rename_key(oldpath + 1, newpath + 1)) {
          ret = -EIO;
@@ -379,27 +377,19 @@ static int my_rename(const char *oldpath, const char *newpath, unsigned int flag
    // olddir is a directory.  this will be tricky.
    // this is only safe because i know what i'm doing...
    int olen = strlen(olddir);
-   int nlen = strlen(newdir);
-   NAF naf, nextnaf;
-   for (naf = narf_find(olddir);
-         naf != INVALID_NAF;
-         naf = nextnaf) {
-      nextnaf = narf_next(naf);
-      char buf[512];
-      char *x = strdup(narf_key(naf));
-      if (!strncmp(olddir, x, olen)) {
-         strcpy(buf + sizeof(buf) - 1 - strlen(x), x);
-         memcpy(buf + sizeof(buf) - 1 - strlen(x) + olen - nlen, newdir, nlen);
-         if (!narf_rename_key(x, buf + sizeof(buf) - 1 - strlen(x) + olen - nlen)) {
-            free(x);
-            ret = -EIO;
-            goto fini;
-         }
-         free(x);
+   // TODO FIX remove this line // int nlen = strlen(newdir);
+   const char *entry2;
+   char prevkey[512];
+   char buf[512];
+   entry2 = narf_dirfirst(olddir, "/");
+   while (entry2 != NULL) {
+      snprintf(prevkey, sizeof(prevkey), "%s", entry2);
+      snprintf(buf, sizeof(buf), "%s%s", newdir, prevkey + olen);
+      if (!narf_rename_key(prevkey, buf)) {
+         ret = -EIO;
+         goto fini;
       }
-      else {
-         break;
-      }
+      entry2 = narf_dirnext(olddir, "/", prevkey);
    }
    ret = 0;
 
@@ -476,16 +466,15 @@ static int my_read(const char *path, char *buf, size_t size, off_t offset, struc
 
    // Read data from a file
 
-   NAF naf = narf_find(path + 1);
-   if (naf == INVALID_NAF) {
+   if (!narf_find(path + 1)) {
       UNLOCK;
       return -ENOENT;
    }
 
-   size_t len = narf_size(naf);
-   naf = narf_sector(naf);
+   size_t len = narf_size(path + 1);
+   NarfSector sector = narf_sector(path + 1);
 
-   if (naf == INVALID_NAF || (size_t)offset >= len) {
+   if (sector == INVALID_NAF || (size_t)offset >= len) {
       UNLOCK;
       return 0;
    }
@@ -498,14 +487,14 @@ static int my_read(const char *path, char *buf, size_t size, off_t offset, struc
 
    while (offset >= NARF_SECTOR_SIZE) {
       offset -= NARF_SECTOR_SIZE;
-      naf++;
+      sector++;
    }
 
    size_t remaining = size;
 
    while (remaining) {
       char data[NARF_SECTOR_SIZE];
-      if (!narf_io_read(naf, data)) {
+      if (!narf_io_read(sector, data)) {
          UNLOCK;
          return -EIO;
       }
@@ -520,7 +509,7 @@ static int my_read(const char *path, char *buf, size_t size, off_t offset, struc
          remaining -= (NARF_SECTOR_SIZE - offset);
          offset = 0;
       }
-      naf++;
+      sector++;
    }
 
    UNLOCK;
@@ -536,36 +525,33 @@ static int my_write(const char *path, const char *buf, size_t size, off_t offset
 
    // Write data to a file
 
-   NAF naf = narf_find(path + 1);
-
-   if (naf == INVALID_NAF) {
+   if (!narf_find(path + 1)) {
       UNLOCK;
       return -ENOENT;
    }
 
-   size_t len = narf_size(naf);
+   size_t len = narf_size(path + 1);
 
    if (len < offset + size) {
-      naf = narf_realloc(naf, offset + size);
-      if (naf == INVALID_NAF) {
+      if (!narf_realloc(path + 1, offset + size)) {
          UNLOCK;
          return -EIO;
       }
       len = offset + size;
    }
 
-   naf = narf_sector(naf);
+   NarfSector sector = narf_sector(path + 1);
 
    while (offset >= NARF_SECTOR_SIZE) {
       offset -= NARF_SECTOR_SIZE;
-      naf++;
+      sector++;
    }
 
    size_t remaining = size;
 
    while (remaining) {
       char data[NARF_SECTOR_SIZE];
-      if (!narf_io_read(naf, data)) {
+      if (!narf_io_read(sector, data)) {
          UNLOCK;
          return -EIO;
       }
@@ -580,11 +566,11 @@ static int my_write(const char *path, const char *buf, size_t size, off_t offset
          remaining -= (NARF_SECTOR_SIZE - offset);
          offset = 0;
       }
-      if (!narf_io_write(naf, data)) {
+      if (!narf_io_write(sector, data)) {
          UNLOCK;
          return -EIO;
       }
-      naf++;
+      sector++;
    }
 
    UNLOCK;
@@ -661,61 +647,33 @@ static int my_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
    filler(buf, "..", NULL, 0, 0);
 
    if (!strcmp(path, "/")) {
-      NAF naf;
-      char *p = NULL, *q = NULL, *r = NULL;
-
-      for (naf = narf_first(); naf != INVALID_NAF; naf = narf_next(naf)) {
-         p = strdup(narf_key(naf));
-         r = strchr(p, '/');
-         if (r == NULL) {
-            // just add it
-            filler(buf, p, NULL, 0, 0);
-            if (q) {
-               free(q);
-               q = NULL;
-            }
-            free(p);
+      const char *entry = narf_dirfirst("", "/");
+      while (entry != NULL) {
+         const char *slash = strchr(entry, '/');
+         if (slash == NULL) {
+            filler(buf, entry, NULL, 0, 0);
          }
-         else {
-            *r = 0;
-            if (!q || strcmp(p, q)) {
-               // a new one!
-               if (q) {
-                  free(q);
-               }
-               q = p;
-               filler(buf, p, NULL, 0, 0);
-            }
-            else {
-               // seen it!
-               free(p);
-            }
-         }
+         entry = narf_dirnext("", "/", entry);
       }
    }
    else {
       char *p = xformpath(path);
-
-      NAF naf = narf_dirfirst(p, "/");
-
-      if (naf != INVALID_NAF) {
-         while (naf != INVALID_NAF) {
-            const char *q = narf_key(naf) + strlen(p);
-            if (*q) {
-               if (q[strlen(q) - 1] == '/') {
-                  char *dirname = strdup(q);
-                  dirname[strlen(dirname) - 1] = 0;
-                  filler(buf, dirname, NULL, 0, 0);
-                  free(dirname);
-               }
-               else {
-                  filler(buf, q, NULL, 0, 0);
-               }
+      const char *entry = narf_dirfirst(p, "/");
+      while (entry != NULL) {
+         const char *q = entry + strlen(p);
+         if (*q) {
+            if (q[strlen(q) - 1] == '/') {
+               char *dirname = strdup(q);
+               dirname[strlen(dirname) - 1] = 0;
+               filler(buf, dirname, NULL, 0, 0);
+               free(dirname);
             }
-            naf = narf_dirnext(p, "/", naf);
+            else {
+               filler(buf, q, NULL, 0, 0);
+            }
          }
+         entry = narf_dirnext(p, "/", entry);
       }
-
       free(p);
    }
 
@@ -754,12 +712,12 @@ static int my_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
    LOCK;
 
    // Create and open a file
-   if (narf_find(path+1) != INVALID_NAF) {
+   if (narf_find(path+1)) {
       // it already exists
       UNLOCK;
       return 0;
    }
-   else if (narf_alloc(path+1, 0) != INVALID_NAF) {
+   else if (narf_alloc(path+1, 0)) {
       // we had to create it
       UNLOCK;
       return 0;

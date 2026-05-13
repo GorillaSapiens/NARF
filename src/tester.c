@@ -13,9 +13,7 @@
 extern void narf_io_configure(const char *fname);
 
 __attribute__((weak)) 
-void narf_debug(NAF naf) {
-   (void) naf;
-
+void narf_debug(void) {
    printf("debug not supported\n");
 }
 
@@ -56,8 +54,8 @@ void do_pack_dive(const char *realpath, const char *path, DIR *dir) {
          FILE *f = fopen(rbuf, "rb");
          fseek(f, 0, SEEK_END);
          long size = ftell(f);
-         uint32_t naf = narf_alloc(buf, size);
-         uint32_t start = narf_sector(naf);
+         bool ok = narf_alloc(buf, size);
+         uint32_t start = ok ? narf_sector(buf) : (uint32_t)-1;
          fseek(f, 0, SEEK_SET);
          for (long i = 0; i < size; i += 512) {
             fread(data, 512, 1, f);
@@ -128,28 +126,28 @@ void process_cmd(char *buffer) {
             part, tf[narf_mount(part)]);
    }
    else if (!strncmp(buffer, "debug ", 6)) {
-      narf_debug(atoi(buffer + 6));
+      narf_debug();
    }
    else if (!strncmp(buffer, "debug", 5)) {
-      narf_debug(-1);
+      narf_debug();
    }
    else if (!strncmp(buffer, "alloc ", 6)) {
       char key[256];
       int size;
-      NAF result;
+      bool result;
 
       sscanf(buffer, "alloc %s %d", key, &size);
-      printf("narf_alloc(%s,%d)=%d\n",
-            key, size, result ASSIGN narf_alloc(key, size));
+      printf("narf_alloc(%s,%d)=%s\n",
+            key, size, tf[result ASSIGN narf_alloc(key, size)]);
    }
    else if (!strncmp(buffer, "realloc ", 8)) {
       char key[256];
       int size;
-      NAF result;
+      bool result;
 
       sscanf(buffer, "realloc %s %d", key, &size);
-      printf("narf_realloc_key(%s,%d)=%d\n",
-            key, size, result ASSIGN narf_realloc_key(key, size));
+      printf("narf_realloc_key(%s,%d)=%s\n",
+            key, size, tf[result ASSIGN narf_realloc_key(key, size)]);
    }
    else if (!strncmp(buffer, "rename ", 7)) {
       char n1[32];
@@ -169,7 +167,7 @@ void process_cmd(char *buffer) {
    else if (!strncmp(buffer, "slurp ",6)) {
       char p[512];
       FILE *f;
-      NAF result;
+      bool result;
 
       sscanf(buffer, "slurp %s", p);
       f = fopen(p, "r");
@@ -177,8 +175,8 @@ void process_cmd(char *buffer) {
       if (f) {
          while (fgets(p, sizeof(p), f)) {
             p[strlen(p) - 1] = 0;
-            printf("narf_alloc(%s,%d)=%d\n",
-                  p, 1024, result ASSIGN narf_alloc(p, 1024));
+            printf("narf_alloc(%s,%d)=%s\n",
+                  p, 1024, tf[result ASSIGN narf_alloc(p, 1024)]);
          }
          fclose(f);
       }
@@ -192,32 +190,33 @@ void process_cmd(char *buffer) {
             key, tf[result ASSIGN narf_free_key(key)]);
    }
    else if (!strncmp(buffer, "ls ", 3)) {
-      uint32_t sector;
+      const char *entry;
       char key[256];
       sscanf(buffer, "ls %s", key);
 
       printf("ls '%s' (%ld)\n", key, strlen(key));
 
-      for (sector = narf_dirfirst(key, "/");
-            sector != (uint32_t) -1;
-            sector = narf_dirnext(key, "/", sector)) {
-         printf("[%08x] %s\n", sector, narf_key(sector));
+      for (entry = narf_dirfirst(key, "/");
+            entry != NULL;
+            entry = narf_dirnext(key, "/", entry)) {
+         printf("%s\n", entry);
       }
-      printf("[%08x]\n", sector);
+      printf("(end)\n");
       printf("\n");
    }
    else if (!strncmp(buffer, "cat ", 4)) {
       char key[512];
       char line[17];
-      NAF naf;
+      bool found;
       int len;
       int start;
       int addr = 0;
       int tail;
       sscanf(buffer, "cat %s", key);
-      printf("narf_find(%s)=%d\n", key, naf ASSIGN narf_find(key));
-      start = narf_sector(naf);
-      len = narf_size(naf);
+      printf("narf_find(%s)=%s\n", key, tf[found ASSIGN narf_find(key)]);
+      if (!found) return;
+      start = narf_sector(key);
+      len = narf_size(key);
       tail = len % 16;
 
       while (len > 0) {
@@ -249,17 +248,15 @@ void process_cmd(char *buffer) {
       bool result;
 
       sscanf(buffer, "tag %s %s", key, data);
-      NAF naf = narf_find(key);
       printf("narf_set_metadata(%s,%s)=%s\n",
-            key, data, tf[result ASSIGN narf_set_metadata(naf, (uint8_t *)data)]);
+            key, data, tf[result ASSIGN narf_set_metadata(key, (uint8_t *)data)]);
    }
    else if (!strncmp(buffer, "scan ", 5)) {
       char key[256];
       char *result;
 
       sscanf(buffer, "scan %s", key);
-      NAF naf = narf_find(key);
-      result = (char *)narf_metadata(naf);
+      result = (char *)narf_metadata(key);
       printf("narf_metadata(%s)=%s\n",
             key, result ? result : "(null)");
    }
@@ -333,6 +330,8 @@ void gremlins(int s, int n) {
                char *n1 = strdup(rname(l));
                char *n2 = strdup(rname(l));
                sprintf(buf, "rename %s %s", n1, n2);
+               free(n1);
+               free(n2);
             }
             break;
       }
@@ -343,7 +342,7 @@ void gremlins(int s, int n) {
       printf("\n");
       process_cmd(buf);
       printf("\nAFTER:\n");
-      narf_debug(-1);
+      narf_debug();
       printf("\n");
    }
 
