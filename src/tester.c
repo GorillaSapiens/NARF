@@ -67,6 +67,90 @@ void do_pack_dive(const char *realpath, const char *path, DIR *dir) {
    }
 }
 
+
+static bool parse_key_text(const char *buffer, const char *command,
+      char *key, size_t key_size, char *text, size_t text_size) {
+   const char *p;
+   char *out;
+   size_t n;
+
+   if (buffer == NULL || command == NULL || key == NULL || text == NULL) {
+      return false;
+   }
+
+   p = buffer + strlen(command);
+
+   while (*p > 0 && *p <= ' ') {
+      ++p;
+   }
+
+   n = 0;
+   while (p[n] > ' ') {
+      ++n;
+   }
+
+   if (n == 0 || n >= key_size) {
+      return false;
+   }
+
+   memcpy(key, p, n);
+   key[n] = 0;
+   p += n;
+
+   while (*p > 0 && *p <= ' ') {
+      ++p;
+   }
+
+   out = text;
+
+   if (*p == '"') {
+      ++p;
+
+      while (*p && *p != '"') {
+         char ch = *p++;
+
+         if (ch == '\\' && *p) {
+            ch = *p++;
+
+            switch (ch) {
+               case 'n':
+                  ch = '\n';
+                  break;
+               case 'r':
+                  ch = '\r';
+                  break;
+               case 't':
+                  ch = '\t';
+                  break;
+               case '\\':
+               case '"':
+                  break;
+               default:
+                  break;
+            }
+         }
+
+         if ((size_t)(out - text) + 1 >= text_size) {
+            return false;
+         }
+
+         *out++ = ch;
+      }
+   }
+   else {
+      while (*p) {
+         if ((size_t)(out - text) + 1 >= text_size) {
+            return false;
+         }
+
+         *out++ = *p++;
+      }
+   }
+
+   *out = 0;
+   return true;
+}
+
 void do_pack(const char *dirname) {
    DIR *dir = opendir(dirname);
    if (dir) {
@@ -139,6 +223,46 @@ void process_cmd(char *buffer) {
       sscanf(buffer, "alloc %s %d", key, &size);
       printf("narf_alloc(%s,%d)=%s\n",
             key, size, tf[result ASSIGN narf_alloc(key, size)]);
+   }
+   else if (!strncmp(buffer, "create ", 7)) {
+      char key[256];
+      char data[512];
+      bool result;
+      NarfByteSize size;
+
+      if (!parse_key_text(buffer, "create", key, sizeof(key),
+               data, sizeof(data))) {
+         printf("create: usage: create <key> <string>\n");
+         return;
+      }
+
+      size = (NarfByteSize) strlen(data);
+      result = narf_alloc(key, 0);
+
+      if (result && size) {
+         result = narf_append(key, data, size);
+      }
+
+      printf("create(%s,\"%s\")=%s\n",
+            key, data, tf[result]);
+   }
+   else if (!strncmp(buffer, "append ", 7)) {
+      char key[256];
+      char data[512];
+      bool result;
+      NarfByteSize size;
+
+      if (!parse_key_text(buffer, "append", key, sizeof(key),
+               data, sizeof(data))) {
+         printf("append: usage: append <key> <string>\n");
+         return;
+      }
+
+      size = (NarfByteSize) strlen(data);
+      result = narf_append(key, data, size);
+
+      printf("narf_append(%s,\"%s\",%lu)=%s\n",
+            key, data, (unsigned long) size, tf[result]);
    }
    else if (!strncmp(buffer, "realloc ", 8)) {
       char key[256];
