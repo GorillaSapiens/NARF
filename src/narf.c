@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <time.h>
+#include <unistd.h>
 
 #ifdef HAVE_ZLIB
 #include <zlib.h>
@@ -16,11 +18,6 @@
    #define PACKED __attribute__((packed))
 #else
    #define PACKED
-#endif
-
-#ifndef HAVE_LRAND48
-#define lrand48 rand
-#define srand48 srand
 #endif
 
 #define SIGNATURE 0x4652414E
@@ -90,7 +87,7 @@ typedef struct PACKED {
    NarfSector   m_top;
    NarfSector   m_origin;
    uint8_t      m_root_version;
-   uint32_t     m_random;
+   uint32_t     m_lfsr_seed;
    uint8_t      m_reserved[NARF_SECTOR_SIZE - ROOT_USED];
    uint32_t     m_checksum;
 } Root;
@@ -125,6 +122,7 @@ static uint8_t buffer[NARF_SECTOR_SIZE];
 static Root root;
 static int root_copy = 0;
 static char dir_key[KEYSIZE];
+static uint32_t lfsr_state = 1;
 
 typedef struct {
    bool used;
@@ -160,28 +158,66 @@ static bool ref_is_null(NarfRef ref) {
    return ref.m_sector == END || ref.m_version == 0;
 }
 
+static bool valid_sector_pair(NarfSector sector);
+static bool read_node_copy_any(NarfSector sector, int which, Node *out);
 
 static bool version_after(uint8_t a, uint8_t b) {
    uint8_t diff = (uint8_t)(a - b);
    return diff != 0 && diff < 128;
 }
 
-static uint32_t random_uint32(void) {
-   uint32_t hi;
-   uint32_t lo;
+static uint32_t lfsr_next(void) {
+   uint32_t lsb;
 
-   hi = (uint32_t)(lrand48() & 0xffff);
-   lo = (uint32_t)(lrand48() & 0xffff);
+   if (lfsr_state == 0) {
+      lfsr_state = 0x1f2e3d4c;
+   }
 
-   return (hi << 16) | lo;
+   lsb = lfsr_state & 1;
+   lfsr_state >>= 1;
+
+   if (lsb) {
+      lfsr_state ^= 0x80200003u;
+   }
+
+   if (lfsr_state == 0) {
+      lfsr_state = 0x1f2e3d4c;
+   }
+
+   return lfsr_state;
 }
 
-static uint32_t new_node_version(uint32_t old) {
+static uint32_t mkfs_lfsr_seed(NarfSector origin, NarfSector size) {
+   uint32_t seed;
+
+   seed = (uint32_t) rand();
+   seed ^= (uint32_t) time(NULL);
+   seed ^= (uint32_t) getpid();
+   seed ^= (uint32_t) origin;
+   seed ^= (uint32_t) size;
+   seed ^= 0x1f2e3d4c;
+
+   if (seed == 0) {
+      seed = 0x1f2e3d4c;
+   }
+
+   return seed;
+}
+
+static uint32_t new_node_version(uint32_t old, NarfSector sector) {
    uint32_t v;
+   uint32_t c0 = 0;
+   uint32_t c1 = 0;
+   Node n;
+
+   if (valid_sector_pair(sector)) {
+      if (read_node_copy_any(sector, 0, &n)) c0 = n.m_node_version;
+      if (read_node_copy_any(sector, 1, &n)) c1 = n.m_node_version;
+   }
 
    do {
-      v = random_uint32();
-   } while (v == 0 || v == old);
+      v = lfsr_next();
+   } while (v == 0 || v == old || v == c0 || v == c1);
 
    return v;
 }
@@ -239,7 +275,7 @@ static bool read_root_copy(NarfSector origin, int which, Root *out) {
 static bool commit_root(void) {
    int dest = 1 - root_copy;
    root.m_root_version = (uint8_t)(root.m_root_version + 1);
-   root.m_random = (uint32_t) lrand48();
+   root.m_lfsr_seed = lfsr_next();
    root.m_checksum = 0;
    root.m_checksum = crc32(0, &root, NARF_SECTOR_SIZE - sizeof(uint32_t));
    if (!narf_io_write(root.m_origin + (NarfSector) dest, &root)) return false;
@@ -264,7 +300,8 @@ static bool init_root(NarfSector origin, NarfSector size) {
    root.m_top = size;
    root.m_origin = origin;
    root.m_root_version = 1;
-   root.m_random = (uint32_t) lrand48();
+   root.m_lfsr_seed = mkfs_lfsr_seed(origin, size);
+   lfsr_state = root.m_lfsr_seed;
    root.m_checksum = 0;
    root.m_checksum = crc32(0, &root, NARF_SECTOR_SIZE - sizeof(uint32_t));
    root_copy = 0;
@@ -278,6 +315,16 @@ static uint32_t node_checksum(Node *n) {
    ck = crc32(0, n, NARF_SECTOR_SIZE - sizeof(uint32_t));
    n->m_checksum = old;
    return ck;
+}
+
+static bool read_node_copy_any(NarfSector sector, int which, Node *out) {
+   if (out == NULL) return false;
+   if (which < 0 || which > 1) return false;
+   if (!valid_sector_pair(sector)) return false;
+   if (!narf_io_read(root.m_origin + sector + (NarfSector) which, out)) return false;
+   if (out->m_checksum != node_checksum(out)) return false;
+   if (out->m_node_version == 0) return false;
+   return true;
 }
 
 static bool read_node_copy(NarfRef ref, int which, Node *out) {
@@ -351,7 +398,7 @@ static bool write_node(NarfRef oldref, Node *n, NarfRef *newref) {
       else {
          dest = 0;
       }
-      n->m_node_version = new_node_version(oldver);
+      n->m_node_version = new_node_version(oldver, sector);
       if (!dirty_remember(sector, n->m_node_version, dest)) return false;
    }
 
@@ -1032,7 +1079,15 @@ bool narf_init(NarfSector start) {
       return false;
    }
 
-   return verify();
+   if (verify()) {
+      lfsr_state = root.m_lfsr_seed;
+      if (lfsr_state == 0) {
+         lfsr_state = 0x1f2e3d4c;
+      }
+      return true;
+   }
+
+   return false;
 }
 
 bool narf_find(const char *key) {
@@ -1463,6 +1518,7 @@ void narf_debug(void) {
    printf("root.m_parent_root   = [%08x:%08x]\n", root.m_parent_root.m_sector, root.m_parent_root.m_version);
    printf("root.m_prev_root     = [%08x:%08x]\n", root.m_prev_root.m_sector, root.m_prev_root.m_version);
    printf("root.m_next_root     = [%08x:%08x]\n", root.m_next_root.m_sector, root.m_next_root.m_version);
+   printf("root.m_lfsr_seed     = %08x\n", root.m_lfsr_seed);
    printf("root.m_count         = %08x\n", root.m_count);
    printf("root.m_bottom        = %08x\n", root.m_bottom);
    printf("root.m_top           = %08x\n", root.m_top);
