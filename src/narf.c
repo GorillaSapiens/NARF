@@ -568,22 +568,28 @@ static bool valid_naf(NAF naf) {
       return false;
    }
 
-   /*
-    * read_buffer(naf) reads naf and naf + 1,
-    * so naf must not be the final sector.
-    */
+   // read_buffer(naf) reads naf and naf + 1,
+   // so naf must not be the final sector.
    if (naf > root.m_total_sectors - 2) {
       return false;
    }
 
-   /*
-    * NAF nodes are allocated in 2-sector pairs from the top.
-    * This catches sector addresses that land in the middle of a pair.
-    */
+   // NAF nodes are allocated in 2-sector pairs from the top.
+   // This catches sector addresses that land in the middle of a pair.
    if ((naf & 1) != (root.m_total_sectors & 1)) {
       return false;
    }
 
+   return true;
+}
+
+///////////////////////////////////////////////////////
+//! @brief Verify we're working with a valid key
+//!
+//! @return true on success
+static bool valid_key(const char *key) {
+   if (key == NULL) return false;
+   if (strlen(key) >= KEYSIZE) return false;
    return true;
 }
 
@@ -1715,6 +1721,7 @@ NAF narf_find(const char *key) {
    int cmp;
 
    if (!verify()) return END;
+   if (!valid_key(key)) return END;
 
    while(1) {
       if (naf == END) {
@@ -1961,6 +1968,7 @@ NAF narf_alloc(const char *key, NarfByteSize bytes) {
    length = BYTES2SECTORS(bytes);
 
    if (!verify()) return END;
+   if (!valid_key(key)) return END;
 
    naf = narf_find(key);
 
@@ -2110,6 +2118,7 @@ NAF narf_realloc(NAF naf, NarfByteSize bytes) {
 ///////////////////////////////////////////////////////
 //! @see narf.h
 NAF narf_realloc_key(const char *key, NarfByteSize bytes) {
+   if (!valid_key(key)) return END;
    NAF naf = narf_find(key);
    if (naf == END) {
       return narf_alloc(key, bytes);
@@ -2120,6 +2129,10 @@ NAF narf_realloc_key(const char *key, NarfByteSize bytes) {
 ///////////////////////////////////////////////////////
 //! @see narf.h
 bool narf_rename_key(const char *key, const char *newkey) {
+   if (!valid_key(key) || !valid_key(newkey)) {
+      return false;
+   }
+
    NAF newnaf = END, oldnaf = narf_find(key);
    NarfSector   start;       // data start sector
    NarfSector   length;      // data length in sectors
@@ -2332,6 +2345,7 @@ bool narf_free(NAF naf) {
 ///////////////////////////////////////////////////////
 //! @see narf.h
 bool narf_free_key(const char *key) {
+   if (!valid_key(key)) return false;
    NAF naf = narf_find(key);
    return narf_free(naf);
 }
