@@ -3,67 +3,177 @@ NARF
 
 Not A Real Filesystem
 
-yes, i really wrote it all in one night. i just needed something i could
-use in a small embedded system project i was working on, and FAT32 took
-up way more space than i was happy with.
+NARF is a small key/value storage layer for sector-addressed media.  It is
+meant for embedded projects where FAT-style directory machinery is more than
+you want, but where you still want named blobs, simple metadata, and reasonably
+robust updates.
 
-then i wrote it again.  3 times.
+NARF assumes the underlying device is made of 512-byte sectors with linear
+sector addressing.  The platform-specific I/O layer supplies the functions in
+`narf_io.h`:
 
-we assume there's storage media, and it is organized in sectors of 512
-bytes that we can access with linear addressing.  you the developer need
-to supply the functions described in narf_io.h.  this is the hardware
-abstraction layer used by NARF.  these are straightforward and pretty
-much what you would expect to read and write data, and get the total
-size of the media in sectors.
-
-bool narf_io_open(void);
-bool narf_io_close(void);
+```
+bool     narf_io_open(void);
+bool     narf_io_close(void);
 uint32_t narf_io_sectors(void);
-bool narf_io_write(uint32_t sector, uint8_t *data);
-bool narf_io_read(uint32_t sector, uint8_t *data);
+bool     narf_io_write(uint32_t sector, void *data);
+bool     narf_io_read(uint32_t sector, void *data);
+```
 
-see narf_io.h for details.
+The core filesystem code does not know whether those sectors come from a disk
+image, flash, RAM, an SD card, or an especially well-trained pigeon.
 
-on the media, we maintain a mapping from KEYS (expressed as C strings)
-to DATA SIZE and DATA LOCATION.  an entry in this mapping is called a NAF.
-a NAF is Not A File.  the size of the key is limited to about 340 bytes,
-which is longer than total path length limits on some real file systems.
-any character is allowed in a key, except '\0', for obvious reasons.
+Public model
+------------
 
-the mapping is stored in both a binary tree and doubly linked list.
-each NAF in the tree contains "left", "right", and "parent" pointers
-of a binary tree, as well as "previous" and "next" pointers of a doubly
-linked list.  this gives O(log₂N) searching and O(N) in-order traversal.
-ordering is done by "strcmp" on keys.
+The public API is key-based.  A caller does not hold raw filesystem node
+addresses.  Operations identify entries by string key:
 
-the first two sectors, sector 0 and 1, are reserved for holding pointers
-to the root of the tree, and the beginning and end of the linked list.
+```
+narf_alloc("/foo", 0);
+narf_append("/foo", data, size);
+narf_size("/foo");
+narf_free("/foo");
+```
 
-free'd sectors are placed in a chain in order of increasing size.
-new allocations are made from the chain if possible, or by expanding
-into unused storage.
+A key is a NUL-terminated C string.  NUL is not allowed inside the key.  The
+maximum key length is determined by the current on-disk node layout and is
+intentionally large, roughly hundreds of bytes.  Keys are ordered with
+`strcmp()`.
 
-===
+NARF does not have real directories.  It has keys.  Convenience functions such
+as `narf_dirfirst()` and `narf_dirnext()` interpret keys as path-like strings by
+using a caller-supplied separator, usually `/`.
 
-If you're concerned about wear leveling and bad block detection, modern
-micro SD cards have this built in to the silicon.  there's no need for
-NARF to worry about it on uSD.
+On-disk layout
+--------------
 
-===
+A mounted NARF filesystem starts at an origin sector.  For a whole-image
+filesystem, the origin is usually 0.  For an MBR partition, the origin is the
+partition start sector.
 
-If you're concerned about robustness to power loss, as of version 1,
-NARF keeps copies of "good / complete" and "in progress" changes via
-"generation" numbering.  if a change is interrupted midway, NARF falls
-back to the "good / complete" version of the data.
+The first two sectors at the origin contain two copies of the root block.  A
+root block contains:
 
-===
+* filesystem signature and format version
+* sector size and total sector count
+* root references for the data tree and free tree
+* root references for three index trees
+* allocation frontier values
+* a persisted LFSR seed for node-version generation
+* an 8-bit root commit version
+* checksum
 
-there are two convenience functions worth mentioning, narf_dirfirst()
-and narf_dirnext().  together they allow you to traverse keys as if they
-were full paths.
+At mount time, NARF reads both root copies, validates checksums, and chooses the
+newer valid root using modulo-256 version comparison.  Root writes alternate
+between the two root sectors.
 
-imagine you have a NARF with the following keys:
+Nodes and references
+--------------------
 
+Internal node references are not just sector numbers.  They are exact copy
+references:
+
+```
+{ sector, node_version }
+```
+
+The sector identifies the two-sector node slot.  The node version identifies
+which valid copy is expected.  Each node slot has two physical sectors, allowing
+copy-on-write replacement of individual metadata nodes.
+
+Each node contains:
+
+* left and right child references
+* data start sector, data length in sectors, and byte size
+* AVL height
+* either user metadata or an index-tree reference
+* key string
+* random-looking 32-bit node version
+* checksum
+
+Node versions come from a 32-bit LFSR.  The current LFSR state is stored in the
+root when a transaction commits, so remounting continues from the committed
+state.  When a node copy is written, NARF rejects version 0 and rejects versions
+already visible in that node slot.  That prevents abandoned copies from being
+mistaken for the exact node version referenced by committed metadata.
+
+Trees
+-----
+
+Current NARF metadata is stored in five AVL trees:
+
+1. **Data tree**
+
+   Keyed by file key.  This is the authoritative tree for files/blobs.  Data
+   nodes hold the file extent, byte size, and user metadata.
+
+2. **Free tree**
+
+   Keyed by `(length, start, node-sector)`.  This tracks free extents by size,
+   with deterministic tie breakers for equal-sized extents.
+
+3. **Parent index tree**
+
+   Keyed by file key.  Each index node stores a `NarfRef` for that key's parent
+   in the data tree.
+
+4. **Previous index tree**
+
+   Keyed by file key.  Each index node stores the previous in-order data-tree
+   entry.
+
+5. **Next index tree**
+
+   Keyed by file key.  Each index node stores the next in-order data-tree entry.
+
+The data tree and free tree are authoritative.  The index trees are committed
+secondary indexes used to make traversal and debugging easier without putting
+parent/previous/next links back into data nodes.  Keeping those links out of the
+data tree matters because versioned references and copy-on-write work cleanly
+when updates do not require every inbound pointer in the graph to be rewritten.
+
+Transactions and power loss
+---------------------------
+
+NARF uses copy-on-write metadata.  A metadata update writes new node copies
+first and writes the new root last.  If power is lost before the root write, the
+previous root still points to the old exact node versions.  The abandoned node
+copies are just unreachable junk.  If power is lost after the root write, the
+new root points to the new exact node versions.
+
+Rollback on normal runtime failure restores the in-memory root state and clears
+transaction-local dirty tracking.  It does not need to erase abandoned node
+copies; committed roots decide what is reachable.
+
+Payload data writes follow the same commit rule: new payload sectors are written
+before metadata is committed.  Overwrites and appends allocate/write a fresh
+extent, copy any unchanged old data, write the new bytes, then commit metadata
+that points at the new extent.  This keeps committed metadata from pointing at
+unwritten file data.
+
+Allocation
+----------
+
+Data allocation first tries to satisfy the request from the free tree.  If no
+suitable free extent exists, NARF allocates from the open space between the low
+data frontier and the high metadata frontier.
+
+Metadata nodes are allocated from the high end of the filesystem in two-sector
+pairs.  File payload data grows upward from the low end.  The root tracks the
+current bottom/top frontier values.
+
+Directory-style traversal
+-------------------------
+
+`narf_dirfirst(dirname, sep)` and `narf_dirnext(dirname, sep, previous_key)`
+provide path-like traversal over keys.  They do not create real directories.
+They simply find keys that begin with `dirname` and do not contain another
+separator below that level.
+
+Example keys:
+
+```
 /bar
 /biz
 /foo
@@ -71,16 +181,35 @@ imagine you have a NARF with the following keys:
 /groink/elephant
 /groink/zebra
 /zebra
+```
 
-if you then call narf_dirfirst("/", "/"), it will return the NAF for
-"/bar". continuing on with narf_dirnext(), it will return NAF for each
-key EXCEPT "/groink/elephant" and "/groink/zebra".
+`narf_dirfirst("/", "/")` yields entries directly under `/`, such as `/bar`,
+`/biz`, `/foo`, `/groink/`, and `/zebra`.  It does not yield
+`/groink/elephant` or `/groink/zebra` at that level.
 
-if you instead call narf_dirfirst("/groink/", "/"), it will return the
-NAF for "/groink/", and the call to narf_dirnext() will return the NAF
-for "/groink/elephant" followed by "/groink/zebra".
+`narf_dirfirst("/groink/", "/")` yields `/groink/`, `/groink/elephant`, and
+`/groink/zebra`.
 
-this makes sense if you think of entries ending in "/" as directories
-and others as just files.  just be sure your dirname parameter ends
-with your separator.  you can of course use any separator you like,
-including multicharacter separators (which might be useful for utf8).
+MBR support
+-----------
+
+When `NARF_MBR_UTILS` is enabled, NARF includes simple MBR helper functions:
+
+* `narf_mbr()` writes a classic MBR sector.
+* `narf_partition()` creates a NARF partition entry.
+* `narf_format()` formats a NARF partition.
+* `narf_findpart()` searches for a NARF partition.
+* `narf_mount()` mounts a partition by number.
+
+This is convenience code, not a general-purpose partition manager.
+
+Limitations
+-----------
+
+NARF is intentionally small.  It is not thread-safe.  It has no permissions, no
+ownership, no timestamps, no journaling API exposed to callers, and no real
+directories.  It assumes the media layer handles bad blocks and wear leveling,
+which is a reasonable assumption for many modern microSD cards but may not be
+true for raw flash.
+
+NARF is still Not A Real Filesystem.  The name is doing legal work.

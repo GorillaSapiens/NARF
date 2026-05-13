@@ -13,11 +13,13 @@
 extern void narf_io_configure(const char *fname);
 
 __attribute__((weak)) 
+//! @brief Weak fallback used when debug support is not linked.
 void narf_debug(void) {
    printf("debug not supported\n");
 }
 
 __attribute__((weak)) 
+//! @brief Weak fallback used when defrag support is not linked.
 bool narf_defrag(void) {
    printf("defrag not supported\n");
    return false;
@@ -27,6 +29,7 @@ const char *tf[] = { "false", "true" };
 
 void gremlins(int s, int n);
 
+//! @brief Recursively pack a host directory into the mounted NARF image.
 void do_pack_dive(const char *realpath, const char *path, DIR *dir) {
    struct dirent *entry = readdir(dir);
 
@@ -151,6 +154,7 @@ static bool parse_key_text(const char *buffer, const char *command,
    return true;
 }
 
+//! @brief Pack a host directory into the mounted NARF image.
 void do_pack(const char *dirname) {
    DIR *dir = opendir(dirname);
    if (dir) {
@@ -162,6 +166,7 @@ void do_pack(const char *dirname) {
    }
 }
 
+//! @brief Parse and execute one tester command line.
 void process_cmd(char *buffer) {
    if (!strncmp(buffer, "pack ", 5)) {
       const char *arg = buffer + 5;
@@ -404,6 +409,7 @@ char *rname(int l) {
    return buf;
 }
 
+//! @brief Run randomized tester operations for stress testing.
 void gremlins(int s, int n) {
    char buf[1024];
    int m;
@@ -475,6 +481,7 @@ void gremlins(int s, int n) {
    //exit(0);
 }
 
+//! @brief Run the interactive tester prompt.
 void loop(void) {
    char buffer[1024];
 
@@ -496,6 +503,7 @@ void loop(void) {
    }
 }
 
+//! @brief Open the image and run the tester prompt.
 int main(int argc, char **argv) {
    bool result;
 

@@ -1,0 +1,223 @@
+NARF tester
+===========
+
+The tester is a small interactive command-line program for exercising NARF disk
+images.
+
+Building
+--------
+
+From the `src` directory:
+
+```
+make
+```
+
+This builds `tester` or `tester.exe`, depending on the host environment and
+Makefile target naming.
+
+Invoking
+--------
+
+```
+./tester <image>
+./tester =<size>,<image>
+```
+
+Examples:
+
+```
+./tester test.img
+./tester =16M,test.img
+./tester =512K,tiny.img
+```
+
+If the argument starts with `=`, the tester's mmap I/O layer creates the image
+when it does not already exist.  Size suffixes `K`, `M`, and `G` are accepted by
+the example I/O layer.
+
+After startup, the prompt is:
+
+```
+#>
+```
+
+Use `quit` or `exit` to leave.
+
+Common setup
+------------
+
+For an MBR-partitioned test image:
+
+```
+mbr
+partition 1
+format 1
+mount 1
+```
+
+For a whole-image filesystem:
+
+```
+mkfs
+init
+```
+
+Commands
+--------
+
+### `mbr [message]`
+
+Write a classic MBR to sector 0.  With no message, the default boot message is
+used.  With a message, the provided text is embedded in the boot-code area.
+
+### `partition <number>`
+
+Create a NARF partition entry.  Valid partition numbers are 1 through 4.
+
+### `findpart`
+
+Search the MBR for a NARF partition and print the partition number found.
+
+### `format <number>`
+
+Format the selected NARF partition.
+
+### `mount <number>`
+
+Mount the selected NARF partition.
+
+### `mkfs`
+
+Format the whole image as a NARF filesystem starting at sector 0.
+
+### `init`
+
+Mount/initialize a whole-image filesystem starting at sector 0.
+
+### `alloc <key> <bytes>`
+
+Create a new key with the requested byte size.  The initial payload is
+zero-filled.
+
+Example:
+
+```
+alloc /empty.bin 1024
+```
+
+### `create <key> <string>`
+
+Create a new key and initialize it with string data.  Quoted strings are
+accepted.  Inside quotes, the tester understands `\n`, `\r`, `\t`, `\\`, and
+`\"`.
+
+Examples:
+
+```
+create /hello.txt "hello from NARF"
+create /lines.txt "one\ntwo\n"
+```
+
+### `append <key> <string>`
+
+Append string data to an existing key.  Quoted strings and the same simple
+escapes used by `create` are accepted.
+
+Example:
+
+```
+append /hello.txt " plus more"
+```
+
+### `realloc <key> <bytes>`
+
+Resize an existing key.  Growing a file exposes zero-filled bytes.  Shrinking
+reduces the byte size and may release storage according to the current core
+implementation.
+
+### `rename <old-key> <new-key>`
+
+Rename a key.
+
+### `free <key>`
+
+Delete a key and return its storage to the filesystem.
+
+### `ls <dirname>`
+
+List keys that appear directly under `dirname` using `/` as the separator.
+NARF has no real directories; this is prefix/separator traversal.
+
+Examples:
+
+```
+ls /
+ls /dir/
+```
+
+### `cat <key>`
+
+Print a hex/ASCII dump of a key's payload.
+
+### `tag <key> <text>`
+
+Store a short metadata string in the key's metadata area.
+
+### `scan <key>`
+
+Read and print the key's metadata area as a string.
+
+### `pack <host-directory>`
+
+Recursively copy files from a host directory into NARF.  Keys are generated from
+relative paths under the host directory.  Directory keys end in `/`.
+
+Example:
+
+```
+pack /tmp/narfpack/
+```
+
+### `slurp <host-file>`
+
+Read line-oriented keys from a host text file and allocate each key with 1024
+bytes.  This is mostly a stress-test helper.
+
+### `defrag`
+
+Call `narf_defrag()`.  In current builds this may be a safe no-op depending on
+configuration.
+
+### `debug`
+
+Print internal root/tree/index/free information.  This requires `NARF_DEBUG` to
+be enabled in the build.
+
+### `gremlins <seed> <count>`
+
+Run randomized tester operations.  The seed makes a run reproducible.  The count
+controls how many random operations are executed.
+
+Example:
+
+```
+gremlins 1234 100
+```
+
+Example session
+---------------
+
+```
+mbr
+partition 1
+format 1
+mount 1
+create /hello.txt "hello from NARF"
+append /hello.txt "\nmore text"
+cat /hello.txt
+ls /
+gremlins 1234 50
+debug
+quit
+```

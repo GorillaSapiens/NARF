@@ -144,6 +144,7 @@ bool narf_io_read(uint32_t sector, void *data) {
 
 
 // --- File & directory metadata ---
+//! @brief FUSE getattr callback.
 static int my_getattr(const char *path, struct stat *st, struct fuse_file_info *fi) {
    (void) fi;
 
@@ -198,6 +199,7 @@ static int my_getattr(const char *path, struct stat *st, struct fuse_file_info *
    return -ENOENT;
 }
 
+//! @brief FUSE access callback.
 static int my_access(const char *path, int mask) {
    (void) path;
    (void) mask;
@@ -209,6 +211,7 @@ static int my_access(const char *path, int mask) {
              // return -EACCES; // denied
 }
 
+//! @brief FUSE readlink callback.
 static int my_readlink(const char *path, char *buf, size_t size) {
    (void) path;
    (void) buf;
@@ -220,6 +223,7 @@ static int my_readlink(const char *path, char *buf, size_t size) {
    return -EINVAL;
 }
 
+//! @brief FUSE mknod callback.
 static int my_mknod(const char *path, mode_t mode, dev_t rdev) {
    (void) path;
    (void) mode;
@@ -231,6 +235,7 @@ static int my_mknod(const char *path, mode_t mode, dev_t rdev) {
    return -EPERM;
 }
 
+//! @brief FUSE mkdir callback.
 static int my_mkdir(const char *path, mode_t mode) {
    (void) mode;
 
@@ -264,6 +269,7 @@ static int my_mkdir(const char *path, mode_t mode) {
    // return -EROFS;
 }
 
+//! @brief FUSE unlink callback.
 static int my_unlink(const char *path) {
    if (!mounted) return -ENODEV;
 
@@ -278,6 +284,7 @@ static int my_unlink(const char *path) {
    return -EROFS;
 }
 
+//! @brief FUSE rmdir callback.
 static int my_rmdir(const char *path) {
    if (!mounted) return -ENODEV;
 
@@ -327,6 +334,7 @@ static int my_rmdir(const char *path) {
    //return -EROFS;
 }
 
+//! @brief FUSE symlink callback.
 static int my_symlink(const char *target, const char *linkpath) {
    (void) target;
    (void) linkpath;
@@ -337,6 +345,7 @@ static int my_symlink(const char *target, const char *linkpath) {
    return -EROFS;
 }
 
+//! @brief FUSE rename callback.
 static int my_rename(const char *oldpath, const char *newpath, unsigned int flags) {
    (void) flags;
 
@@ -401,6 +410,7 @@ fini:
    // return -EROFS;
 }
 
+//! @brief FUSE link callback.
 static int my_link(const char *from, const char *to) {
    (void) from;
    (void) to;
@@ -411,6 +421,7 @@ static int my_link(const char *from, const char *to) {
    return -EROFS;
 }
 
+//! @brief FUSE chmod callback.
 static int my_chmod(const char *path, mode_t mode, struct fuse_file_info *fi) {
    (void) path;
    (void) mode;
@@ -422,6 +433,7 @@ static int my_chmod(const char *path, mode_t mode, struct fuse_file_info *fi) {
    return -EPERM;
 }
 
+//! @brief FUSE chown callback.
 static int my_chown(const char *path, uid_t uid, gid_t gid, struct fuse_file_info *fi) {
    (void) path;
    (void) uid;
@@ -434,6 +446,7 @@ static int my_chown(const char *path, uid_t uid, gid_t gid, struct fuse_file_inf
    return -EPERM;
 }
 
+//! @brief FUSE truncate callback.
 static int my_truncate(const char *path, off_t size, struct fuse_file_info *fi) {
    (void) path;
    (void) size;
@@ -446,6 +459,7 @@ static int my_truncate(const char *path, off_t size, struct fuse_file_info *fi) 
 }
 
 // --- File I/O ---
+//! @brief FUSE open callback.
 static int my_open(const char *path, struct fuse_file_info *fi) {
    (void) path;
    (void) fi;
@@ -457,6 +471,7 @@ static int my_open(const char *path, struct fuse_file_info *fi) {
    return 0;
 }
 
+//! @brief FUSE read callback.
 static int my_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
    (void) fi;
 
@@ -516,6 +531,7 @@ static int my_read(const char *path, char *buf, size_t size, off_t offset, struc
    return size;
 }
 
+//! @brief FUSE write callback.
 static int my_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
    (void) fi;
 
@@ -544,6 +560,7 @@ static int my_write(const char *path, const char *buf, size_t size, off_t offset
    return (int) size;
 }
 
+//! @brief FUSE statfs callback.
 static int my_statfs(const char *path, struct statvfs *st) {
    (void) path;
 
@@ -554,6 +571,7 @@ static int my_statfs(const char *path, struct statvfs *st) {
    return 0;
 }
 
+//! @brief FUSE flush callback.
 static int my_flush(const char *path, struct fuse_file_info *fi) {
    (void) path;
    (void) fi;
@@ -564,6 +582,7 @@ static int my_flush(const char *path, struct fuse_file_info *fi) {
    return 0;
 }
 
+//! @brief FUSE release callback.
 static int my_release(const char *path, struct fuse_file_info *fi) {
    (void) path;
    (void) fi;
@@ -575,6 +594,7 @@ static int my_release(const char *path, struct fuse_file_info *fi) {
    return 0;
 }
 
+//! @brief FUSE fsync callback.
 static int my_fsync(const char *path, int isdatasync, struct fuse_file_info *fi) {
    (void) path;
    (void) isdatasync;
@@ -587,6 +607,7 @@ static int my_fsync(const char *path, int isdatasync, struct fuse_file_info *fi)
 }
 
 // --- Directory handling ---
+//! @brief FUSE opendir callback.
 static int my_opendir(const char *path, struct fuse_file_info *fi) {
    (void) path;
    (void) fi;
@@ -647,6 +668,7 @@ static int my_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
    return 0;
 }
 
+//! @brief FUSE releasedir callback.
 static int my_releasedir(const char *path, struct fuse_file_info *fi) {
    (void) path;
    (void) fi;
@@ -657,6 +679,7 @@ static int my_releasedir(const char *path, struct fuse_file_info *fi) {
    return 0;
 }
 
+//! @brief FUSE fsyncdir callback.
 static int my_fsyncdir(const char *path, int isdatasync, struct fuse_file_info *fi) {
    (void) path;
    (void) isdatasync;
@@ -669,6 +692,7 @@ static int my_fsyncdir(const char *path, int isdatasync, struct fuse_file_info *
 }
 
 // --- File creation ---
+//! @brief FUSE create callback.
 static int my_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
    (void) mode;
    (void) fi;
@@ -693,6 +717,7 @@ static int my_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
 }
 
 // --- Time update ---
+//! @brief FUSE utimens callback.
 static int my_utimens(const char *path, const struct timespec tv[2], struct fuse_file_info *fi) {
    (void) path;
    (void) tv;
@@ -705,6 +730,7 @@ static int my_utimens(const char *path, const struct timespec tv[2], struct fuse
 }
 
 // --- Block map (optional) ---
+//! @brief FUSE bmap callback.
 static int my_bmap(const char *path, size_t blocksize, uint64_t *idx) {
    (void) path;
    (void) blocksize;
@@ -717,6 +743,7 @@ static int my_bmap(const char *path, size_t blocksize, uint64_t *idx) {
 }
 
 // --- Extended attributes (optional) ---
+//! @brief FUSE setxattr callback.
 static int my_setxattr(const char *path, const char *name, const char *value, size_t size, int flags) {
    (void) path;
    (void) name;
@@ -729,6 +756,7 @@ static int my_setxattr(const char *path, const char *name, const char *value, si
    return -ENOTSUP;
 }
 
+//! @brief FUSE getxattr callback.
 static int my_getxattr(const char *path, const char *name, char *value, size_t size) {
    (void) path;
    (void) name;
@@ -740,6 +768,7 @@ static int my_getxattr(const char *path, const char *name, char *value, size_t s
    return -ENOTSUP;
 }
 
+//! @brief FUSE listxattr callback.
 static int my_listxattr(const char *path, char *list, size_t size) {
    (void) path;
    (void) list;
@@ -750,6 +779,7 @@ static int my_listxattr(const char *path, char *list, size_t size) {
    return -ENOTSUP;
 }
 
+//! @brief FUSE removexattr callback.
 static int my_removexattr(const char *path, const char *name) {
    (void) path;
    (void) name;
@@ -779,6 +809,7 @@ static void *my_init(struct fuse_conn_info *conn, struct fuse_config *cfg) {
    return NULL;
 }
 
+//! @brief FUSE destroy callback.
 static void my_destroy(void *private_data) {
    (void) private_data;
 
@@ -823,6 +854,7 @@ static struct fuse_operations my_ops = {
    .destroy     = my_destroy,
 };
 
+//! @brief Print FUSE front-end usage help.
 void usage(const char *progname) {
     fprintf(stderr,
         "Usage: %s <backing_file[:N]> [FUSE options...]\n"
@@ -833,6 +865,7 @@ void usage(const char *progname) {
     exit(1);
 }
 
+//! @brief Parse arguments and start the FUSE mount.
 int main(int argc, char *argv[]) {
    if (argc < 3) {
       usage(argv[0]);

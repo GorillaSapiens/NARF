@@ -122,12 +122,14 @@ bool narf_io_read(uint32_t sector, void *data) {
    return true;
 }
 
+//! @brief Print narf_mkfs usage help.
 void usage(const char *progname) {
    fprintf(stderr, "Usage: %s <size>[K|M|G] <target.img> [mbr] [format] [part=N]\n", progname);
    fprintf(stderr, "       %s <target.img> [mbr] [format] [part=N]    (if file already exists)\n", progname);
    exit(1);
 }
 
+//! @brief Parse a size string with optional K/M/G suffix.
 off_t parsesize(const char *arg) {
    char *endptr;
    off_t size = strtoull(arg, &endptr, 10);
@@ -142,6 +144,7 @@ off_t parsesize(const char *arg) {
    }
 }
 
+//! @brief Create or open the target image file.
 int create_open_file(void){
    struct stat st;
 
@@ -193,11 +196,13 @@ int create_open_file(void){
    return 0;
 }
 
+//! @brief Report an operation failure and exit with failure status.
 int fail(const char *mesg) {
    fprintf(stderr, "ERROR: %s\n", mesg);
    exit(-1);
 }
 
+//! @brief Parse arguments and format the requested NARF image.
 int main(int argc, char *argv[]) {
    int argi = 1;
 

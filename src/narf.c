@@ -138,6 +138,7 @@ static int dirty_count = 0;
 static void dirty_clear(void);
 
 #ifndef HAVE_ZLIB
+//! @brief Compute a fallback CRC-32 checksum when zlib is not available.
 uint32_t crc32(uint32_t crc, const void *data, int length) {
    int i, j;
    const uint8_t *p = (const uint8_t *) data;
@@ -154,6 +155,7 @@ uint32_t crc32(uint32_t crc, const void *data, int length) {
 }
 #endif
 
+//! @brief Return true when a versioned NARF reference is null.
 static bool ref_is_null(NarfRef ref) {
    return ref.m_sector == END || ref.m_version == 0;
 }
@@ -161,11 +163,13 @@ static bool ref_is_null(NarfRef ref) {
 static bool valid_sector_pair(NarfSector sector);
 static bool read_node_copy_any(NarfSector sector, int which, Node *out);
 
+//! @brief Compare 8-bit root versions using wraparound ordering.
 static bool version_after(uint8_t a, uint8_t b) {
    uint8_t diff = (uint8_t)(a - b);
    return diff != 0 && diff < 128;
 }
 
+//! @brief Advance the persisted 32-bit LFSR and return the next token.
 static uint32_t lfsr_next(void) {
    uint32_t lsb;
 
@@ -187,6 +191,7 @@ static uint32_t lfsr_next(void) {
    return lfsr_state;
 }
 
+//! @brief Build an initial nonzero LFSR seed for a new filesystem.
 static uint32_t mkfs_lfsr_seed(NarfSector origin, NarfSector size) {
    uint32_t seed;
 
@@ -204,6 +209,7 @@ static uint32_t mkfs_lfsr_seed(NarfSector origin, NarfSector size) {
    return seed;
 }
 
+//! @brief Choose a new node-copy version that does not collide with visible copies.
 static uint32_t new_node_version(uint32_t old, NarfSector sector) {
    uint32_t v;
    uint32_t c0 = 0;
@@ -222,6 +228,7 @@ static uint32_t new_node_version(uint32_t old, NarfSector sector) {
    return v;
 }
 
+//! @brief Validate that the mounted root looks like a current NARF root.
 static bool verify(void) {
    if (root.m_signature != SIGNATURE) return false;
    if (root.m_version != VERSION) return false;
@@ -229,12 +236,14 @@ static bool verify(void) {
    return true;
 }
 
+//! @brief Validate a public key string.
 static bool valid_key(const char *key) {
    if (key == NULL) return false;
    if (strlen(key) >= KEYSIZE) return false;
    return true;
 }
 
+//! @brief Validate directory traversal arguments.
 static bool valid_dir_args(const char *dirname, const char *sep) {
    if (dirname == NULL) return false;
    if (sep == NULL) return false;
@@ -244,6 +253,7 @@ static bool valid_dir_args(const char *dirname, const char *sep) {
    return true;
 }
 
+//! @brief Validate a two-sector metadata node slot.
 static bool valid_sector_pair(NarfSector sector) {
    if (!verify()) return false;
    if (sector == END) return false;
@@ -254,6 +264,7 @@ static bool valid_sector_pair(NarfSector sector) {
    return true;
 }
 
+//! @brief Compute the checksum for a root block.
 static uint32_t root_checksum(Root *r) {
    uint32_t old = r->m_checksum;
    uint32_t ck;
@@ -263,6 +274,7 @@ static uint32_t root_checksum(Root *r) {
    return ck;
 }
 
+//! @brief Read and validate one of the two root copies.
 static bool read_root_copy(NarfSector origin, int which, Root *out) {
    if (!narf_io_read(origin + (NarfSector) which, out)) return false;
    if (out->m_signature != SIGNATURE) return false;
@@ -272,6 +284,7 @@ static bool read_root_copy(NarfSector origin, int which, Root *out) {
    return true;
 }
 
+//! @brief Commit the current in-memory root as the newest root copy.
 static bool commit_root(void) {
    int dest = 1 - root_copy;
    root.m_root_version = (uint8_t)(root.m_root_version + 1);
@@ -284,6 +297,7 @@ static bool commit_root(void) {
    return true;
 }
 
+//! @brief Initialize an empty root block for a new filesystem.
 static bool init_root(NarfSector origin, NarfSector size) {
    memset(&root, 0, sizeof(root));
    root.m_signature = SIGNATURE;
@@ -308,6 +322,7 @@ static bool init_root(NarfSector origin, NarfSector size) {
    return narf_io_write(origin, &root);
 }
 
+//! @brief Compute the checksum for a metadata node.
 static uint32_t node_checksum(Node *n) {
    uint32_t old = n->m_checksum;
    uint32_t ck;
@@ -317,6 +332,7 @@ static uint32_t node_checksum(Node *n) {
    return ck;
 }
 
+//! @brief Read either physical copy of a node without requiring a specific version.
 static bool read_node_copy_any(NarfSector sector, int which, Node *out) {
    if (out == NULL) return false;
    if (which < 0 || which > 1) return false;
@@ -327,6 +343,7 @@ static bool read_node_copy_any(NarfSector sector, int which, Node *out) {
    return true;
 }
 
+//! @brief Read one physical copy of a node matching an exact reference.
 static bool read_node_copy(NarfRef ref, int which, Node *out) {
    if (ref_is_null(ref)) return false;
    if (!valid_sector_pair(ref.m_sector)) return false;
@@ -336,6 +353,7 @@ static bool read_node_copy(NarfRef ref, int which, Node *out) {
    return true;
 }
 
+//! @brief Read the valid physical copy matching an exact node reference.
 static bool read_node(NarfRef ref, Node *out, int *which) {
    if (read_node_copy(ref, 0, out)) {
       if (which) *which = 0;
@@ -348,6 +366,7 @@ static bool read_node(NarfRef ref, Node *out, int *which) {
    return false;
 }
 
+//! @brief Find a node slot already dirtied by the current transaction.
 static int dirty_find(NarfSector sector) {
    int i;
    for (i = 0; i < dirty_count; i++) {
@@ -356,6 +375,7 @@ static int dirty_find(NarfSector sector) {
    return -1;
 }
 
+//! @brief Record which node copy/version is dirty in the current transaction.
 static bool dirty_remember(NarfSector sector, uint32_t version, int copy) {
    int i = dirty_find(sector);
    if (i >= 0) {
@@ -372,6 +392,7 @@ static bool dirty_remember(NarfSector sector, uint32_t version, int copy) {
    return true;
 }
 
+//! @brief Clear transaction-local dirty-node tracking.
 static void dirty_clear(void) {
    dirty_count = 0;
 }
@@ -414,6 +435,7 @@ static bool write_node(NarfRef oldref, Node *n, NarfRef *newref) {
    return true;
 }
 
+//! @brief Return the AVL height for a referenced node.
 static int height(NarfRef ref) {
    Node n;
    if (ref_is_null(ref)) return 0;
@@ -421,12 +443,14 @@ static int height(NarfRef ref) {
    return n.m_height;
 }
 
+//! @brief Recompute an AVL node height from its children.
 static void update_height(Node *n) {
    int lh = height(n->m_left);
    int rh = height(n->m_right);
    n->m_height = (uint8_t)((lh > rh ? lh : rh) + 1);
 }
 
+//! @brief Compute the AVL balance factor for a referenced node.
 static int balance_factor(NarfRef ref) {
    Node n;
    if (ref_is_null(ref)) return 0;
@@ -434,6 +458,7 @@ static int balance_factor(NarfRef ref) {
    return height(n.m_left) - height(n.m_right);
 }
 
+//! @brief Perform a copy-on-write AVL right rotation.
 static bool rotate_right(NarfRef yref, NarfRef *out) {
    Node y, x;
    NarfRef xref, y2, x2;
@@ -454,6 +479,7 @@ static bool rotate_right(NarfRef yref, NarfRef *out) {
    return true;
 }
 
+//! @brief Perform a copy-on-write AVL left rotation.
 static bool rotate_left(NarfRef xref, NarfRef *out) {
    Node x, y;
    NarfRef yref, x2, y2;
@@ -474,6 +500,7 @@ static bool rotate_left(NarfRef xref, NarfRef *out) {
    return true;
 }
 
+//! @brief Rebalance a copy-on-write AVL subtree.
 static bool rebalance(NarfRef ref, NarfRef *out) {
    Node n, child;
    NarfRef tmp;
@@ -513,6 +540,7 @@ static bool rebalance(NarfRef ref, NarfRef *out) {
    return write_node(ref, &child, out);
 }
 
+//! @brief Compare a free-tree search key with a free-tree node.
 static int free_cmp_values(NarfSector length, NarfSector start, NarfSector sector, const Node *n, NarfSector nsector) {
    if (length < n->m_length) return -1;
    if (length > n->m_length) return 1;
@@ -523,6 +551,7 @@ static int free_cmp_values(NarfSector length, NarfSector start, NarfSector secto
    return 0;
 }
 
+//! @brief Find a data-tree node by key.
 static bool data_find_ref_rec(NarfRef ref, const char *key, NarfRef *found, Node *outnode) {
    Node n;
    int cmp;
@@ -541,6 +570,7 @@ static bool data_find_ref_rec(NarfRef ref, const char *key, NarfRef *found, Node
    return false;
 }
 
+//! @brief Insert a node reference into the data AVL tree.
 static bool data_insert_rec(NarfRef rootref, NarfRef itemref, const char *key, NarfRef *out) {
    Node n;
    int cmp;
@@ -569,6 +599,7 @@ static bool data_insert_rec(NarfRef rootref, NarfRef itemref, const char *key, N
    return rebalance(rootref, out);
 }
 
+//! @brief Find the smallest key in a data AVL subtree.
 static bool data_min(NarfRef ref, NarfRef *minref, Node *minnode) {
    Node n;
    if (ref_is_null(ref)) return false;
@@ -583,6 +614,7 @@ static bool data_min(NarfRef ref, NarfRef *minref, Node *minnode) {
    }
 }
 
+//! @brief Delete a key from the data AVL tree.
 static bool data_delete_rec(NarfRef rootref, const char *key, NarfRef *out, NarfRef *removed_ref, Node *removed_node) {
    Node n, succ;
    NarfRef child, succref;
@@ -628,6 +660,7 @@ static bool data_delete_rec(NarfRef rootref, const char *key, NarfRef *out, Narf
    return rebalance(rootref, out);
 }
 
+//! @brief Replace the payload metadata for an existing data-tree key.
 static bool data_update_rec(NarfRef rootref, const char *key, const Node *newnode, NarfRef *out) {
    Node n;
    NarfRef child;
@@ -654,6 +687,7 @@ static bool data_update_rec(NarfRef rootref, const char *key, const Node *newnod
    return rebalance(rootref, out);
 }
 
+//! @brief Insert an extent node into the free AVL tree.
 static bool free_insert_rec(NarfRef rootref, NarfRef itemref, NarfSector length, NarfSector start, NarfRef *out) {
    Node n;
    NarfRef child;
@@ -683,6 +717,7 @@ static bool free_insert_rec(NarfRef rootref, NarfRef itemref, NarfSector length,
    return rebalance(rootref, out);
 }
 
+//! @brief Find the smallest node in a free AVL subtree.
 static bool free_min(NarfRef ref, NarfRef *minref, Node *minnode) {
    Node n;
    if (ref_is_null(ref)) return false;
@@ -697,6 +732,7 @@ static bool free_min(NarfRef ref, NarfRef *minref, Node *minnode) {
    }
 }
 
+//! @brief Delete a specific extent node from the free AVL tree.
 static bool free_delete_rec(NarfRef rootref, NarfSector length, NarfSector start, NarfSector sector, NarfRef *out, NarfRef *removed_ref, Node *removed_node) {
    Node n, succ;
    NarfRef child, succref;
@@ -741,6 +777,7 @@ static bool free_delete_rec(NarfRef rootref, NarfSector length, NarfSector start
    return rebalance(rootref, out);
 }
 
+//! @brief Find the smallest free extent that can satisfy an allocation.
 static bool free_best_rec(NarfRef ref, NarfSector need, NarfRef *bestref, Node *bestnode) {
    Node n;
    bool found = false;
@@ -761,6 +798,7 @@ static bool free_best_rec(NarfRef ref, NarfSector need, NarfRef *bestref, Node *
    return found;
 }
 
+//! @brief Allocate a two-sector metadata node slot.
 static bool alloc_node_sector(NarfRef *ref) {
    NarfRef freeref;
    NarfRef newroot;
@@ -789,6 +827,7 @@ static bool alloc_node_sector(NarfRef *ref) {
    return true;
 }
 
+//! @brief Insert an already allocated node as a free extent.
 static bool insert_free_extent_with_ref(NarfRef ref, NarfSector start, NarfSector length) {
    Node n;
    NarfRef written, newroot;
@@ -809,6 +848,7 @@ static bool insert_free_extent_with_ref(NarfRef ref, NarfSector start, NarfSecto
 }
 
 
+//! @brief Set or replace a key-to-reference entry in an index tree.
 static bool index_set(NarfRef *rootref, const char *key, NarfRef value) {
    Node n;
    NarfRef ref;
@@ -843,6 +883,7 @@ static bool index_set(NarfRef *rootref, const char *key, NarfRef value) {
    return true;
 }
 
+//! @brief Delete an index-tree entry when it exists.
 static bool index_delete_if_exists(NarfRef *rootref, const char *key) {
    NarfRef newroot;
    NarfRef removed_ref;
@@ -859,6 +900,7 @@ static bool index_delete_if_exists(NarfRef *rootref, const char *key) {
    return insert_free_extent_with_ref(removed_ref, END, 0);
 }
 
+//! @brief Look up a key in an index tree.
 static bool index_get(NarfRef rootref, const char *key, NarfRef *value) {
    Node n;
 
@@ -870,6 +912,7 @@ static bool index_get(NarfRef rootref, const char *key, NarfRef *value) {
    return true;
 }
 
+//! @brief Rebuild parent/previous/next indexes from the data tree.
 static bool rebuild_indexes_rec(NarfRef ref, NarfRef parent, NarfRef *previous, char *previous_key) {
    Node n;
 
@@ -893,6 +936,7 @@ static bool rebuild_indexes_rec(NarfRef ref, NarfRef parent, NarfRef *previous, 
    return true;
 }
 
+//! @brief Rebuild all committed traversal index trees.
 static bool rebuild_indexes(void) {
    NarfRef previous = NULL_REF;
    char previous_key[KEYSIZE];
@@ -910,12 +954,14 @@ static bool rebuild_indexes(void) {
    return true;
 }
 
+//! @brief Create a free-tree node for a free data extent.
 static bool insert_free_extent(NarfSector start, NarfSector length) {
    NarfRef ref;
    if (!alloc_node_sector(&ref)) return false;
    return insert_free_extent_with_ref(ref, start, length);
 }
 
+//! @brief Write zeroes to every sector in an extent.
 static bool zero_extent(NarfSector start, NarfSector length) {
    uint8_t zero[NARF_SECTOR_SIZE];
    NarfSector i;
@@ -934,6 +980,7 @@ static bool zero_extent(NarfSector start, NarfSector length) {
    return true;
 }
 
+//! @brief Allocate data sectors for a payload extent.
 static bool allocate_data_extent(NarfSector length, NarfSector *start) {
    NarfRef freeref;
    NarfRef newroot;
@@ -975,6 +1022,7 @@ static bool allocate_data_extent(NarfSector length, NarfSector *start) {
    return true;
 }
 
+//! @brief Allocate metadata and optional payload storage for a new entry.
 static bool allocate_storage(NarfSector length, NarfRef *metaref, NarfSector *start) {
    NarfRef freeref, newroot;
    Node free_node, removed;
@@ -1010,6 +1058,7 @@ static const uint8_t boot_code_stub[] = {
    0xc3 };
 static const char boot_code_msg[] = "NARF! not bootable.\r\n";
 
+//! @brief Write a basic MBR sector containing NARF partition support.
 bool narf_mbr(const char *message) {
    MBR *mbr = (MBR *) buffer;
    size_t len;
@@ -1028,6 +1077,7 @@ bool narf_mbr(const char *message) {
    return narf_io_write(0, buffer);
 }
 
+//! @brief Create or replace a NARF MBR partition entry.
 bool narf_partition(int partition) {
    int i;
    NarfSector start;
@@ -1063,6 +1113,7 @@ bool narf_partition(int partition) {
    return narf_io_write(0, buffer);
 }
 
+//! @brief Format an existing NARF MBR partition.
 bool narf_format(int partition) {
    MBR *mbr;
    if (!narf_io_open()) return false;
@@ -1075,6 +1126,7 @@ bool narf_format(int partition) {
                     mbr->partitions[partition].partition_size);
 }
 
+//! @brief Find the first NARF MBR partition entry.
 int narf_findpart(void) {
    int i;
    MBR *mbr;
@@ -1087,6 +1139,7 @@ int narf_findpart(void) {
    return -1;
 }
 
+//! @brief Mount a NARF MBR partition by number.
 bool narf_mount(int partition) {
    MBR *mbr;
    if (!narf_io_open()) return false;
@@ -1099,6 +1152,7 @@ bool narf_mount(int partition) {
 }
 #endif
 
+//! @brief Format a NARF filesystem at a sector origin.
 bool narf_mkfs(NarfSector start, NarfSector size) {
    if (!narf_io_open()) return false;
    if (size < NARF_MIN_FS_SECTORS) return false;
@@ -1107,6 +1161,7 @@ bool narf_mkfs(NarfSector start, NarfSector size) {
    return init_root(start, size);
 }
 
+//! @brief Mount a NARF filesystem at a sector origin.
 bool narf_init(NarfSector start) {
    Root lo, hi;
    bool loval;
@@ -1149,6 +1204,7 @@ bool narf_init(NarfSector start) {
    return false;
 }
 
+//! @brief Return whether a key exists in the data tree.
 bool narf_find(const char *key) {
    return valid_key(key) && verify() && data_find_ref_rec(root.m_data_root, key, NULL, NULL);
 }
@@ -1163,6 +1219,7 @@ static bool dir_match(const char *key, const char *dirname, const char *sep) {
    return p == NULL || p[sep_len] == 0;
 }
 
+//! @brief Scan the data tree for the next directory entry after a key.
 static bool dir_scan_rec(NarfRef ref, const char *dirname, const char *sep, const char *after, const char **best) {
    Node n;
    int cmp_after;
@@ -1218,6 +1275,7 @@ const char *narf_dirnext(const char *dirname, const char *sep, const char *previ
    return best;
 }
 
+//! @brief Create a key with zero-filled payload storage.
 bool narf_alloc(const char *key, NarfByteSize bytes) {
    Root saved = root;
    NarfSector length;
@@ -1276,6 +1334,7 @@ bool narf_alloc(const char *key, NarfByteSize bytes) {
    return true;
 }
 
+//! @brief Resize an existing key.
 bool narf_realloc(const char *key, NarfByteSize bytes) {
    Root saved = root;
    NarfRef newroot;
@@ -1318,6 +1377,7 @@ bool narf_realloc(const char *key, NarfByteSize bytes) {
    return true;
 }
 
+//! @brief Compatibility wrapper around narf_realloc().
 bool narf_realloc_key(const char *key, NarfByteSize bytes) {
    return narf_realloc(key, bytes);
 }
@@ -1359,6 +1419,7 @@ bool narf_free(const char *key) {
    return true;
 }
 
+//! @brief Compatibility wrapper around narf_free().
 bool narf_free_key(const char *key) {
    return narf_free(key);
 }
@@ -1408,6 +1469,7 @@ bool narf_rename_key(const char *key, const char *newkey) {
    return true;
 }
 
+//! @brief Return the physical sector of a key payload.
 NarfSector narf_sector(const char *key) {
    Node n;
    if (!verify()) return END;
@@ -1419,6 +1481,7 @@ NarfSector narf_sector(const char *key) {
    return root.m_origin + n.m_start;
 }
 
+//! @brief Return the byte size of a key payload.
 NarfByteSize narf_size(const char *key) {
    Node n;
    if (!verify()) return 0;
@@ -1437,6 +1500,7 @@ void *narf_metadata(const char *key) {
    return metadata;
 }
 
+//! @brief Replace a key metadata area.
 bool narf_set_metadata(const char *key, void *data) {
    Root saved = root;
    Node n;
@@ -1467,6 +1531,7 @@ bool narf_set_metadata(const char *key, void *data) {
    return true;
 }
 
+//! @brief Atomically write bytes at an offset in a key payload.
 bool narf_write(const char *key, const void *data, NarfByteSize size, NarfByteSize offset) {
    Root saved = root;
    NarfRef newroot;
@@ -1580,6 +1645,7 @@ bool narf_write(const char *key, const void *data, NarfByteSize size, NarfByteSi
    return true;
 }
 
+//! @brief Append bytes to a key payload.
 bool narf_append(const char *key, const void *data, NarfByteSize size) {
    NarfByteSize old_size;
 
@@ -1594,17 +1660,20 @@ bool narf_append(const char *key, const void *data, NarfByteSize size) {
    return narf_write(key, data, size, old_size);
 }
 
+//! @brief Compatibility wrapper around narf_append().
 bool narf_append_key(const char *key, const void *data, NarfByteSize size) {
    return narf_append(key, data, size);
 }
 
 #ifdef NARF_USE_DEFRAG
+//! @brief Defragment the filesystem when defrag support is enabled.
 bool narf_defrag(void) {
    return verify();
 }
 #endif
 
 #ifdef NARF_DEBUG
+//! @brief Print one debug tree in sorted order.
 static void print_tree(NarfRef ref, int indent, const char *label) {
    Node n;
    int i;
@@ -1625,6 +1694,7 @@ static void print_tree(NarfRef ref, int indent, const char *label) {
    print_tree(n.m_right, indent + 1, label);
 }
 
+//! @brief Print internal NARF root and tree state.
 void narf_debug(void) {
    printf("root.m_signature     = %08x '%.4s'\n", root.m_signature, root.m_sigbytes);
    printf("root.m_version       = %08x\n", root.m_version);
