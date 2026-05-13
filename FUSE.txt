@@ -1,0 +1,230 @@
+NARF FUSE quick start
+=====================
+
+This document shows how to create a NARF filesystem image with the interactive
+`tester` program, mount it with the FUSE driver, and unmount it cleanly.
+
+The commands below assume you are in the top-level NARF source directory.
+
+
+1. Install build/runtime dependencies
+-------------------------------------
+
+On Debian or Ubuntu, install FUSE 3 development support:
+
+   sudo apt install build-essential pkg-config fuse3 libfuse3-dev
+
+If you are using local `.deb` files instead of packages from a repository, install
+those instead, for example:
+
+   sudo apt install ./fuse3_*.deb ./libfuse3-dev_*.deb
+
+Make sure `/dev/fuse` exists and your user is allowed to use FUSE.  On a normal
+Linux desktop this is already handled.  In containers, FUSE may not be available
+or mounting may be blocked by container policy.
+
+
+2. Build tester and the FUSE tools
+----------------------------------
+
+From the top-level source directory:
+
+   make
+
+Expected outputs:
+
+   src/tester
+   fuse/narf_fuse
+   fuse/narf_mkfs
+
+You can also build pieces directly:
+
+   cd src
+   make
+   cd ../fuse
+   make
+   cd ..
+
+
+3. Create a whole-image NARF filesystem with tester
+---------------------------------------------------
+
+This creates a 16 MiB image named `narf.img`, formats the whole image as NARF,
+mounts it inside tester, creates a few sample keys, lists the root, and exits.
+
+   ./src/tester =16M,narf.img <<'EOF'
+   mkfs
+   init
+   create /hello.txt "hello from NARF\n"
+   create /dir/readme.txt "this file is inside a pseudo-directory\n"
+   ls /
+   ls /dir/
+   quit
+   EOF
+
+The important tester commands for a whole-image filesystem are:
+
+   mkfs      format the whole image starting at sector 0
+   init      mount/initialize the whole-image filesystem inside tester
+   quit      close tester before using the image with FUSE
+
+Do not leave tester running while mounting the same image through FUSE.  NARF is
+not designed for two independent writers at the same time.
+
+
+4. Mount the whole-image filesystem with FUSE
+---------------------------------------------
+
+Create a host mount point:
+
+   mkdir -p mnt-narf
+
+Mount the image:
+
+   ./fuse/narf_fuse narf.img mnt-narf
+
+Now use ordinary shell commands against the mounted tree:
+
+   ls -la mnt-narf
+   cat mnt-narf/hello.txt
+   cat mnt-narf/dir/readme.txt
+
+To keep the FUSE process in the foreground, add `-f` after the mount point:
+
+   ./fuse/narf_fuse narf.img mnt-narf -f
+
+That is useful for debugging.  Open another terminal to inspect or unmount it.
+
+
+5. Unmount the FUSE filesystem
+------------------------------
+
+Use `fusermount3`:
+
+   fusermount3 -u mnt-narf
+
+If your distribution uses the generic unmount command for FUSE filesystems, this
+also usually works:
+
+   umount mnt-narf
+
+If a command says the mount point is busy, leave any shell whose current
+directory is inside `mnt-narf`, close programs using files there, and retry.
+
+If a crashed FUSE process leaves a stale mount behind, this often clears it:
+
+   fusermount3 -uz mnt-narf
+
+The `-z` option is lazy unmount.  Use it only for cleanup, not as the normal
+happy path.
+
+
+6. Optional: create an MBR-partitioned image with tester
+-------------------------------------------------------
+
+The FUSE driver can also mount a NARF partition from an image with an MBR.
+This creates a 16 MiB image, writes an MBR, creates partition 1, formats it,
+mounts partition 1 inside tester, and creates one file.
+
+   ./src/tester =16M,narf-part.img <<'EOF'
+   mbr
+   partition 1
+   format 1
+   mount 1
+   create /hello.txt "hello from NARF partition 1\n"
+   ls /
+   quit
+   EOF
+
+Mount partition 1 explicitly:
+
+   mkdir -p mnt-narf
+   ./fuse/narf_fuse narf-part.img:1 mnt-narf
+
+Or ask the FUSE driver to auto-detect the first NARF partition by using a colon
+with no number:
+
+   ./fuse/narf_fuse narf-part.img: mnt-narf
+
+Unmount the same way:
+
+   fusermount3 -u mnt-narf
+
+
+7. Useful FUSE options
+----------------------
+
+Pass normal FUSE options after the mount point:
+
+   ./fuse/narf_fuse narf.img mnt-narf -f
+   ./fuse/narf_fuse narf.img mnt-narf -d
+   ./fuse/narf_fuse narf.img mnt-narf -f -d
+
+Common options:
+
+   -f      run in foreground
+   -d      enable FUSE debug output; also implies foreground mode
+   -s      single-threaded operation
+
+The driver already serializes access with a mutex because the NARF core is not
+thread-safe.  `-s` can still make debugging simpler.
+
+
+8. Basic write test through FUSE
+--------------------------------
+
+After mounting:
+
+   echo "created through FUSE" > mnt-narf/fuse-created.txt
+   cat mnt-narf/fuse-created.txt
+   truncate -s 4 mnt-narf/fuse-created.txt
+   cat mnt-narf/fuse-created.txt
+   mkdir -p mnt-narf/newdir
+   mv mnt-narf/fuse-created.txt mnt-narf/newdir/renamed.txt
+   ls -la mnt-narf/newdir
+
+Then unmount:
+
+   fusermount3 -u mnt-narf
+
+You can reopen the image with tester to inspect it:
+
+   ./src/tester narf.img <<'EOF'
+   init
+   ls /
+   ls /newdir/
+   cat /newdir/renamed.txt
+   quit
+   EOF
+
+
+9. Troubleshooting
+------------------
+
+`pkg-config fuse3 --cflags --libs` fails during build:
+
+   Install `pkg-config` and `libfuse3-dev`.
+
+`./fuse/narf_fuse: open existing: No such file or directory`:
+
+   The image path is wrong.  Create the image with tester first or pass the
+   correct path.
+
+`fusermount3: failed to open /dev/fuse`:
+
+   FUSE is not available to this environment.  This is common in locked-down
+   containers.  Try on a normal Linux host or run the container with FUSE device
+   access and the needed privileges.
+
+`mountpoint is not empty`:
+
+   Use an empty directory as the mount point, or pass the appropriate FUSE option
+   if your setup deliberately allows non-empty mount points.
+
+`Transport endpoint is not connected`:
+
+   The FUSE process probably crashed or was killed.  Clean up with:
+
+      fusermount3 -uz mnt-narf
+
+Then remount and reproduce with `-f -d` so the failure is visible.
