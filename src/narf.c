@@ -315,6 +315,9 @@ static bool commit_root(void) {
 
 //! @brief Initialize an empty root block for a new filesystem.
 static bool init_root(NarfSector origin, NarfSector size) {
+   Root copy0;
+   Root copy1;
+
    memset(&root, 0, sizeof(root));
    root.m_signature = SIGNATURE;
    root.m_version = VERSION;
@@ -330,10 +333,24 @@ static bool init_root(NarfSector origin, NarfSector size) {
    root.m_root_version = 1;
    root.m_lfsr_seed = mkfs_lfsr_seed(origin, size);
    lfsr_state = root.m_lfsr_seed;
-   root.m_checksum = 0;
-   root.m_checksum = crc32(0, &root, NARF_SECTOR_SIZE - sizeof(uint32_t));
+
+   copy0 = root;
+   copy1 = root;
+
+   copy0.m_root_version = 1;
+   copy0.m_checksum = 0;
+   copy0.m_checksum = crc32(0, &copy0, NARF_SECTOR_SIZE - sizeof(uint32_t));
+
+   copy1.m_root_version = 0;
+   copy1.m_checksum = 0;
+   copy1.m_checksum = crc32(0, &copy1, NARF_SECTOR_SIZE - sizeof(uint32_t));
+
+   if (!narf_io_write(origin + 1, &copy1)) return false;
+   if (!narf_io_write(origin + 0, &copy0)) return false;
+
+   root = copy0;
    root_copy = 0;
-   return narf_io_write(origin, &root);
+   return true;
 }
 
 //! @brief Compute the checksum for a record node.
