@@ -61,12 +61,14 @@ root block contains:
 * root references for three index trees
 * allocation frontier values
 * a persisted LFSR seed for node-version generation
-* an 8-bit root commit version
+* a 32-bit root commit version
 * checksum
 
 At mount time, NARF reads both root copies, validates checksums, and chooses the
-newer valid root using modulo-256 version comparison.  Root writes alternate
-between the two root sectors.
+newer valid root using modulo-2^32 version comparison.  Root writes alternate
+between the two root sectors.  Version comparison uses wraparound ordering:
+a root version is considered newer only when the forward distance from the
+other version is nonzero and less than 2^31.
 
 Nodes and references
 --------------------

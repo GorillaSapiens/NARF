@@ -67,7 +67,7 @@ typedef struct PACKED {
 #define REF_BYTES (sizeof(NarfRef))
 #define ROOT_USED (4 + 4 + sizeof(NarfByteSize) + sizeof(NarfSector) + \
                    5 * sizeof(NarfRef) + 4 * sizeof(NarfSector) + \
-                   1 + 4 + 4)
+                   4 + 4 + 4)
 
 typedef struct PACKED {
    union {
@@ -86,7 +86,7 @@ typedef struct PACKED {
    NarfSector   m_bottom;
    NarfSector   m_top;
    NarfSector   m_origin;
-   uint8_t      m_root_version;
+   uint32_t     m_root_version;
    uint32_t     m_lfsr_seed;
    uint8_t      m_reserved[NARF_SECTOR_SIZE - ROOT_USED];
    uint32_t     m_checksum;
@@ -163,10 +163,10 @@ static bool ref_is_null(NarfRef ref) {
 static bool valid_sector_pair(NarfSector sector);
 static bool read_node_copy_any(NarfSector sector, int which, Node *out);
 
-//! @brief Compare 8-bit root versions using wraparound ordering.
-static bool version_after(uint8_t a, uint8_t b) {
-   uint8_t diff = (uint8_t)(a - b);
-   return diff != 0 && diff < 128;
+//! @brief Compare 32-bit root versions using wraparound ordering.
+static bool version_after(uint32_t a, uint32_t b) {
+   uint32_t diff = a - b;
+   return diff != 0 && diff < 0x80000000u;
 }
 
 //! @brief Advance the persisted 32-bit LFSR and return the next token.
@@ -287,7 +287,7 @@ static bool read_root_copy(NarfSector origin, int which, Root *out) {
 //! @brief Commit the current in-memory root as the newest root copy.
 static bool commit_root(void) {
    int dest = 1 - root_copy;
-   root.m_root_version = (uint8_t)(root.m_root_version + 1);
+   root.m_root_version = root.m_root_version + 1;
    root.m_lfsr_seed = lfsr_next();
    root.m_checksum = 0;
    root.m_checksum = crc32(0, &root, NARF_SECTOR_SIZE - sizeof(uint32_t));
