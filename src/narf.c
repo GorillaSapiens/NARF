@@ -340,21 +340,29 @@ static const char boot_code_msg[] =
 //! @return true for success
 bool narf_mbr(const char *message) {
    MBR *mbr = (MBR *) buffer;
+   size_t len;
+   size_t max_msg;
 
    if (!narf_io_open()) return false;
 
-   if (strlen(message) + 1 + sizeof(boot_code_stub) > sizeof(buffer)) return false;
-
-   memset(buffer, 0, sizeof(buffer));
-   memcpy(buffer, boot_code_stub, sizeof(boot_code_stub));
    if (message == NULL) {
       message = boot_code_msg;
    }
-   strcpy((char *)(buffer + sizeof(boot_code_stub)), message);
-   mbr->signature = MBR_SIGNATURE;
-   narf_io_write(0, buffer);
 
-   return true;
+   max_msg = sizeof(mbr->boot_code) - sizeof(boot_code_stub);
+   len = strlen(message);
+
+   // Need room for the trailing NUL.
+   if (len + 1 > max_msg) {
+      return false;
+   }
+
+   memset(buffer, 0, sizeof(buffer));
+   memcpy(mbr->boot_code, boot_code_stub, sizeof(boot_code_stub));
+   memcpy(mbr->boot_code + sizeof(boot_code_stub), message, len + 1);
+
+   mbr->signature = MBR_SIGNATURE;
+   return narf_io_write(0, buffer);
 }
 
 ///////////////////////////////////////////////////////
