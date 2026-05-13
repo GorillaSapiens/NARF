@@ -593,6 +593,21 @@ static bool valid_key(const char *key) {
    return true;
 }
 
+///////////////////////////////////////////////////////
+//! @brief Verify args for narf_dirfirst / narf_dirnext
+//!
+//! @return true on success
+static bool valid_dir_args(const char *dirname, const char *sep) {
+   if (dirname == NULL) return false;
+   if (sep == NULL) return false;
+   if (sep[0] == 0) return false;
+
+   if (strlen(dirname) >= KEYSIZE) return false;
+   if (strlen(sep) >= KEYSIZE) return false;
+
+   return true;
+}
+
 #ifdef NARF_DEBUG
 
 #ifdef USE_UTF8_LINE_DRAWING
@@ -1749,6 +1764,7 @@ NAF narf_dirfirst(const char *dirname, const char *sep) {
    int cmp;
 
    if (!verify()) return END;
+   if (!valid_dir_args(dirname, sep)) return END;
    if (root.m_root == END) return END;
 
    if (dirname && dirname[0]) {
@@ -1804,11 +1820,13 @@ NAF narf_dirnext(const char *dirname, const char *sep, NAF naf) {
    char *p;
 
    if (!verify()) return END;
+   if (!valid_key(dirname)) return END;
+   if (sep == NULL || sep[0] == 0 || strlen(sep) >= KEYSIZE) return END;
 
-   if (naf < root.m_top) {
+   if (naf != END && !valid_naf(naf)) {
       return END;
    }
-  
+
    if (naf != END) {
       read_buffer(naf);
       naf = node->m_next;
@@ -1823,31 +1841,26 @@ NAF narf_dirnext(const char *dirname, const char *sep, NAF naf) {
 
    read_buffer(naf);
 
-   // at this point, "naf" is (probably) valid,
-   // it is in the buffer,
-   // and it is the first node after us.
-
    dirname_len = strlen(dirname);
    if (strncmp(dirname, node->m_key, dirname_len)) {
-      // not a match at all!
       return END;
    }
 
    sep_len = strlen(sep);
    while (!strncmp(dirname, node->m_key, dirname_len)) {
-      // beginning matches
       p = strstr(node->m_key + dirname_len, sep);
+
       if (p == NULL || p[sep_len] == 0) {
-         // no sep, or only one sep at end
          return naf;
       }
+
       naf = node->m_next;
-      if (naf != END) {
-         read_buffer(naf);
+
+      if (naf == END) {
+         return END;
       }
-      else {
-         break;
-      }
+
+      read_buffer(naf);
    }
 
    return END;

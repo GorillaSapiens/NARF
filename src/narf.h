@@ -223,6 +223,9 @@ NAF narf_dirfirst(const char *dirname,
 //!
 //! For rational use, dirname should end with sep.
 //!
+//! The naf argument must be the naf returned from narf_dirfirst()
+//! or a previous call to narf_dirnext()
+//!
 //! narf_dirnext() is power loss robust because it does
 //! not write to the media.
 //!
