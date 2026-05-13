@@ -343,6 +343,8 @@ bool narf_mbr(const char *message) {
 
    if (!narf_io_open()) return false;
 
+   if (strlen(message) + 1 + sizeof(boot_code_stub) > sizeof(buffer)) return false;
+
    memset(buffer, 0, sizeof(buffer));
    memcpy(buffer, boot_code_stub, sizeof(boot_code_stub));
    if (message == NULL) {
@@ -1459,6 +1461,8 @@ static bool narf_insert(NAF naf, const char *key) {
 //! @see narf.h
 bool narf_mkfs(NarfSector start, NarfSector size) {
    if (!narf_io_open()) return false;
+
+   if (size <= 0) return false;
 
    memset(buffer, 0, NARF_SECTOR_SIZE);
 
