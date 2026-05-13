@@ -29,15 +29,340 @@ const char *tf[] = { "false", "true" };
 
 void gremlins(int s, int n);
 
+typedef void (*TesterCommandFn)(int argc, char **argv);
+
+//! @brief Interactive tester command definition.
+typedef struct {
+   const char *name;
+   TesterCommandFn fn;
+   const char *help;
+} TesterCommand;
+
+#define TESTER_MAX_ARGS 32
+
+static bool g_quit_requested = false;
+
+static void cmd_alloc(int argc, char **argv);
+static void cmd_append(int argc, char **argv);
+static void cmd_cat(int argc, char **argv);
+static void cmd_create(int argc, char **argv);
+static void cmd_debug(int argc, char **argv);
+static void cmd_defrag(int argc, char **argv);
+static void cmd_exit(int argc, char **argv);
+static void cmd_findpart(int argc, char **argv);
+static void cmd_format(int argc, char **argv);
+static void cmd_free(int argc, char **argv);
+static void cmd_gremlins(int argc, char **argv);
+static void cmd_help(int argc, char **argv);
+static void cmd_init(int argc, char **argv);
+static void cmd_ls(int argc, char **argv);
+static void cmd_mbr(int argc, char **argv);
+static void cmd_mkfs(int argc, char **argv);
+static void cmd_mount(int argc, char **argv);
+static void cmd_pack(int argc, char **argv);
+static void cmd_partition(int argc, char **argv);
+static void cmd_quit(int argc, char **argv);
+static void cmd_realloc(int argc, char **argv);
+static void cmd_rename(int argc, char **argv);
+static void cmd_scan(int argc, char **argv);
+static void cmd_slurp(int argc, char **argv);
+static void cmd_tag(int argc, char **argv);
+
+static void do_pack(const char *dirname);
+static const TesterCommand *find_command(const char *name);
+static void print_help(void);
+static void print_usage(const char *name);
+static bool join_args(int argc, char **argv, int first,
+      char *text, size_t text_size);
+static int split_args(char *buffer, char **argv, int max_argc);
+static int parse_int_arg(const char *text, int *value);
+static int parse_size_arg(const char *text, NarfByteSize *value);
+
+static const TesterCommand commands[] = {
+   { "alloc", cmd_alloc,
+      "alloc <key> <bytes>\n"
+      "Create a new key with the requested byte size. The initial payload is zero-filled." },
+   { "append", cmd_append,
+      "append <key> <string>\n"
+      "Append string data to an existing key. Quote strings that contain spaces." },
+   { "cat", cmd_cat,
+      "cat <key>\n"
+      "Print a hex/ASCII dump of a key's payload." },
+   { "create", cmd_create,
+      "create <key> <string>\n"
+      "Create a new key and initialize it with string data. Quote strings that contain spaces." },
+   { "debug", cmd_debug,
+      "debug\n"
+      "Print internal root/data-tree/free-tree/index-tree information." },
+   { "defrag", cmd_defrag,
+      "defrag\n"
+      "Call narf_defrag() when defrag support is linked into the tester." },
+   { "exit", cmd_exit,
+      "exit\n"
+      "Leave the tester prompt." },
+   { "findpart", cmd_findpart,
+      "findpart\n"
+      "Search the MBR for a NARF partition and print the partition number found." },
+   { "format", cmd_format,
+      "format <n>\n"
+      "Format the selected NARF partition." },
+   { "free", cmd_free,
+      "free <key>\n"
+      "Delete a key and return its storage to the filesystem." },
+   { "gremlins", cmd_gremlins,
+      "gremlins <seed> <count>\n"
+      "Run randomized tester operations. The seed makes a run reproducible." },
+   { "help", cmd_help,
+      "help [command]\n"
+      "With no argument, list commands. With a command name, print detailed help for that command." },
+   { "init", cmd_init,
+      "init\n"
+      "Mount/initialize a whole-image filesystem starting at sector 0." },
+   { "ls", cmd_ls,
+      "ls <dirname>\n"
+      "List keys directly under dirname using / as the separator. Root may be listed as /." },
+   { "mbr", cmd_mbr,
+      "mbr [message]\n"
+      "Write a classic MBR to sector 0. With a message, embed the text in the boot-code area." },
+   { "mkfs", cmd_mkfs,
+      "mkfs\n"
+      "Format the whole image as a NARF filesystem starting at sector 0." },
+   { "mount", cmd_mount,
+      "mount <n>\n"
+      "Mount the selected NARF partition." },
+   { "pack", cmd_pack,
+      "pack <host-directory>\n"
+      "Recursively copy files from a host directory into NARF." },
+   { "partition", cmd_partition,
+      "partition <n>\n"
+      "Create a NARF partition entry. Valid partition numbers are 1 through 4." },
+   { "quit", cmd_quit,
+      "quit\n"
+      "Leave the tester prompt." },
+   { "realloc", cmd_realloc,
+      "realloc <key> <bytes>\n"
+      "Resize an existing key." },
+   { "rename", cmd_rename,
+      "rename <old-key> <new-key>\n"
+      "Rename a key." },
+   { "scan", cmd_scan,
+      "scan <key>\n"
+      "Read and print the key's metadata area as a string." },
+   { "slurp", cmd_slurp,
+      "slurp <host-file>\n"
+      "Read line-oriented keys from a host text file and allocate each with 1024 bytes." },
+   { "tag", cmd_tag,
+      "tag <key> <metadata>\n"
+      "Store a metadata string in the key's metadata area. Quote metadata that contains spaces." },
+   { NULL, NULL, NULL }
+};
+
+//! @brief Return the command table entry for a command name.
+static const TesterCommand *find_command(const char *name) {
+   const TesterCommand *cmd;
+
+   if (name == NULL) {
+      return NULL;
+   }
+
+   for (cmd = commands; cmd->name != NULL; ++cmd) {
+      if (strcmp(cmd->name, name) == 0) {
+         return cmd;
+      }
+   }
+
+   return NULL;
+}
+
+//! @brief Print the first line of one command's help text.
+static void print_help_summary_line(const TesterCommand *cmd) {
+   const char *p;
+
+   printf("  %-10s ", cmd->name);
+
+   for (p = cmd->help; *p && *p != '\n'; ++p) {
+      putchar(*p);
+   }
+
+   putchar('\n');
+}
+
 //! @brief Print a short tester command summary.
-void print_help(void) {
+static void print_help(void) {
+   const TesterCommand *cmd;
+
    printf("commands:\n");
-   printf("  mkfs | mbr [name] | partition <n> | format <n> | mount <n>\n");
-   printf("  alloc <key> <bytes> | create <key> <string> | append <key> <string>\n");
-   printf("  realloc <key> <bytes> | free <key> | rename <old> <new>\n");
-   printf("  ls <dir> | cat <key> | tag <key> <metadata> | scan <key>\n");
-   printf("  pack <host-dir> | slurp <host-file> | debug | defrag | gremlins <seed> <n>\n");
-   printf("  help | quit | exit\n");
+   for (cmd = commands; cmd->name != NULL; ++cmd) {
+      print_help_summary_line(cmd);
+   }
+   printf("Use 'help <command>' for details.\n");
+}
+
+//! @brief Print one command's detailed usage string.
+static void print_usage(const char *name) {
+   const TesterCommand *cmd = find_command(name);
+
+   if (cmd != NULL) {
+      printf("%s\n", cmd->help);
+   }
+}
+
+//! @brief Join argv entries into a single space-separated text argument.
+static bool join_args(int argc, char **argv, int first,
+      char *text, size_t text_size) {
+   size_t used = 0;
+
+   if (text == NULL || text_size == 0) {
+      return false;
+   }
+
+   text[0] = 0;
+
+   if (first >= argc) {
+      return false;
+   }
+
+   for (int i = first; i < argc; ++i) {
+      size_t len = strlen(argv[i]);
+      size_t extra = len + ((i == first) ? 0u : 1u);
+
+      if (extra >= text_size - used) {
+         return false;
+      }
+
+      if (i != first) {
+         text[used++] = ' ';
+      }
+
+      memcpy(text + used, argv[i], len);
+      used += len;
+      text[used] = 0;
+   }
+
+   return true;
+}
+
+//! @brief Decode a backslash escape used by the tester command tokenizer.
+static char decode_escape(char ch) {
+   switch (ch) {
+      case 'n':
+         return '\n';
+      case 'r':
+         return '\r';
+      case 't':
+         return '\t';
+      default:
+         return ch;
+   }
+}
+
+//! @brief Split a mutable command buffer into argc/argv style arguments.
+static int split_args(char *buffer, char **argv, int max_argc) {
+   char *src = buffer;
+   int argc = 0;
+
+   while (*src) {
+      char *out;
+
+      while (*src > 0 && (unsigned char)*src <= ' ') {
+         ++src;
+      }
+
+      if (*src == 0) {
+         break;
+      }
+
+      if (argc >= max_argc) {
+         return -1;
+      }
+
+      if (*src == '"') {
+         bool closed = false;
+
+         ++src;
+         argv[argc++] = src;
+         out = src;
+
+         while (*src) {
+            char ch = *src++;
+
+            if (ch == '"') {
+               closed = true;
+               break;
+            }
+
+            if (ch == '\\' && *src != 0) {
+               ch = decode_escape(*src++);
+            }
+
+            *out++ = ch;
+         }
+
+         if (!closed) {
+            return -2;
+         }
+      }
+      else {
+         argv[argc++] = src;
+         out = src;
+
+         while (*src && (unsigned char)*src > ' ') {
+            char ch = *src++;
+
+            if (ch == '\\' && *src != 0) {
+               ch = decode_escape(*src++);
+            }
+
+            *out++ = ch;
+         }
+      }
+
+      while (*src > 0 && (unsigned char)*src <= ' ') {
+         ++src;
+      }
+
+      *out = 0;
+   }
+
+   return argc;
+}
+
+//! @brief Parse a decimal integer argument.
+static int parse_int_arg(const char *text, int *value) {
+   char *end = NULL;
+   long parsed;
+
+   if (text == NULL || value == NULL || *text == 0) {
+      return 0;
+   }
+
+   parsed = strtol(text, &end, 0);
+
+   if (*end != 0) {
+      return 0;
+   }
+
+   *value = (int) parsed;
+   return 1;
+}
+
+//! @brief Parse a non-negative byte-size argument.
+static int parse_size_arg(const char *text, NarfByteSize *value) {
+   char *end = NULL;
+   unsigned long parsed;
+
+   if (text == NULL || value == NULL || *text == 0 || *text == '-') {
+      return 0;
+   }
+
+   parsed = strtoul(text, &end, 0);
+
+   if (*end != 0) {
+      return 0;
+   }
+
+   *value = (NarfByteSize) parsed;
+   return 1;
 }
 
 //! @brief Recursively pack a host directory into the mounted NARF image.
@@ -81,92 +406,8 @@ void do_pack_dive(const char *realpath, const char *path, DIR *dir) {
    }
 }
 
-
-static bool parse_key_text(const char *buffer, const char *command,
-      char *key, size_t key_size, char *text, size_t text_size) {
-   const char *p;
-   char *out;
-   size_t n;
-
-   if (buffer == NULL || command == NULL || key == NULL || text == NULL) {
-      return false;
-   }
-
-   p = buffer + strlen(command);
-
-   while (*p > 0 && *p <= ' ') {
-      ++p;
-   }
-
-   n = 0;
-   while (p[n] > ' ') {
-      ++n;
-   }
-
-   if (n == 0 || n >= key_size) {
-      return false;
-   }
-
-   memcpy(key, p, n);
-   key[n] = 0;
-   p += n;
-
-   while (*p > 0 && *p <= ' ') {
-      ++p;
-   }
-
-   out = text;
-
-   if (*p == '"') {
-      ++p;
-
-      while (*p && *p != '"') {
-         char ch = *p++;
-
-         if (ch == '\\' && *p) {
-            ch = *p++;
-
-            switch (ch) {
-               case 'n':
-                  ch = '\n';
-                  break;
-               case 'r':
-                  ch = '\r';
-                  break;
-               case 't':
-                  ch = '\t';
-                  break;
-               case '\\':
-               case '"':
-                  break;
-               default:
-                  break;
-            }
-         }
-
-         if ((size_t)(out - text) + 1 >= text_size) {
-            return false;
-         }
-
-         *out++ = ch;
-      }
-   }
-   else {
-      while (*p) {
-         if ((size_t)(out - text) + 1 >= text_size) {
-            return false;
-         }
-
-         *out++ = *p++;
-      }
-   }
-
-   *out = 0;
-   return true;
-}
-
 //! @brief Pack a host directory into the mounted NARF image.
-void do_pack(const char *dirname) {
+static void do_pack(const char *dirname) {
    DIR *dir = opendir(dirname);
    if (dir) {
       do_pack_dive(dirname, "", dir);
@@ -177,249 +418,439 @@ void do_pack(const char *dirname) {
    }
 }
 
+static void cmd_alloc(int argc, char **argv) {
+   NarfByteSize size;
+   bool result;
+
+   if (argc != 3 || !parse_size_arg(argv[2], &size)) {
+      print_usage(argv[0]);
+      return;
+   }
+
+   printf("narf_alloc(%s,%lu)=%s\n",
+         argv[1], (unsigned long) size,
+         tf[result ASSIGN narf_alloc(argv[1], size)]);
+}
+
+static void cmd_append(int argc, char **argv) {
+   char data[512];
+   bool result;
+   NarfByteSize size;
+
+   if (argc < 3 || !join_args(argc, argv, 2, data, sizeof(data))) {
+      print_usage(argv[0]);
+      return;
+   }
+
+   size = (NarfByteSize) strlen(data);
+   result = narf_append(argv[1], data, size);
+
+   printf("narf_append(%s,\"%s\",%lu)=%s\n",
+         argv[1], data, (unsigned long) size, tf[result]);
+}
+
+static void cmd_cat(int argc, char **argv) {
+   char key[512];
+   char line[17];
+   bool found;
+   NarfByteSize len;
+   NarfSector start;
+   int addr = 0;
+   int tail;
+
+   if (argc != 2) {
+      print_usage(argv[0]);
+      return;
+   }
+
+   snprintf(key, sizeof(key), "%s", argv[1]);
+   printf("narf_find(%s)=%s\n", key, tf[found ASSIGN narf_find(key)]);
+   if (!found) return;
+
+   start = narf_sector(key);
+   len = narf_size(key);
+   tail = (int)(len % 16);
+
+   while (len > 0) {
+      narf_io_read(start, key);
+      for (NarfByteSize i = 0; i < len && i < 512; i++) {
+         if ((i % 16) == 0) {
+            printf("%04x: ", addr);
+            addr += 16;
+         }
+         printf("%02x ", (uint8_t) key[i]);
+         line[i % 16] = (key[i] >= ' ' && key[i] <= '~') ? key[i] : '.';
+         line[(i % 16) + 1] = 0;
+         if ((i % 16) == 15) {
+            printf(" %s\n", line);
+            line[0] = 0;
+         }
+      }
+      start++;
+      len -= (len > 512) ? 512 : len;
+   }
+   if (tail) {
+      printf("%*s %s\n", 3 * (16 - tail), " ", line);
+   }
+   printf("\n");
+}
+
+static void cmd_create(int argc, char **argv) {
+   char data[512];
+   bool result;
+   NarfByteSize size;
+
+   if (argc < 3 || !join_args(argc, argv, 2, data, sizeof(data))) {
+      print_usage(argv[0]);
+      return;
+   }
+
+   size = (NarfByteSize) strlen(data);
+   result = narf_alloc(argv[1], 0);
+
+   if (result && size) {
+      result = narf_append(argv[1], data, size);
+   }
+
+   printf("create(%s,\"%s\")=%s\n",
+         argv[1], data, tf[result]);
+}
+
+static void cmd_debug(int argc, char **argv) {
+   (void) argv;
+
+   if (argc != 1) {
+      print_usage("debug");
+      return;
+   }
+
+   narf_debug();
+}
+
+static void cmd_defrag(int argc, char **argv) {
+   bool result;
+   (void) argv;
+
+   if (argc != 1) {
+      print_usage("defrag");
+      return;
+   }
+
+   printf("narf_defrag()=%s\n",
+         tf[result ASSIGN narf_defrag()]);
+}
+
+static void cmd_exit(int argc, char **argv) {
+   if (argc != 1) {
+      print_usage(argv[0]);
+      return;
+   }
+
+   g_quit_requested = true;
+}
+
+static void cmd_findpart(int argc, char **argv) {
+   (void) argv;
+
+   if (argc != 1) {
+      print_usage("findpart");
+      return;
+   }
+
+   printf("narf_findpart()=%d\n",
+         narf_findpart());
+}
+
+static void cmd_format(int argc, char **argv) {
+   int part;
+
+   if (argc != 2 || !parse_int_arg(argv[1], &part)) {
+      print_usage(argv[0]);
+      return;
+   }
+
+   printf("narf_format(%d)=%s\n",
+         part, tf[narf_format(part)]);
+}
+
+static void cmd_free(int argc, char **argv) {
+   bool result;
+
+   if (argc != 2) {
+      print_usage(argv[0]);
+      return;
+   }
+
+   printf("narf_free_key(%s)=%s\n",
+         argv[1], tf[result ASSIGN narf_free_key(argv[1])]);
+}
+
+static void cmd_gremlins(int argc, char **argv) {
+   int s;
+   int n;
+
+   if (argc != 3 || !parse_int_arg(argv[1], &s) || !parse_int_arg(argv[2], &n)) {
+      print_usage(argv[0]);
+      return;
+   }
+
+   gremlins(s, n);
+}
+
+static void cmd_help(int argc, char **argv) {
+   const TesterCommand *cmd;
+
+   if (argc == 1) {
+      print_help();
+      return;
+   }
+
+   if (argc != 2) {
+      print_usage("help");
+      return;
+   }
+
+   cmd = find_command(argv[1]);
+   if (cmd == NULL) {
+      printf("huh? Unknown command '%s'.\n", argv[1]);
+      print_help();
+      return;
+   }
+
+   printf("%s\n", cmd->help);
+}
+
+static void cmd_init(int argc, char **argv) {
+   uint32_t start = 0;
+   (void) argv;
+
+   if (argc != 1) {
+      print_usage("init");
+      return;
+   }
+
+   printf("narf_init(0x%x)=%s\n",
+         start, tf[narf_init(start)]);
+}
+
+static void cmd_ls(int argc, char **argv) {
+   const char *entry;
+
+   if (argc != 2) {
+      print_usage(argv[0]);
+      return;
+   }
+
+   printf("ls '%s' (%zu)\n", argv[1], strlen(argv[1]));
+
+   for (entry = narf_dirfirst(argv[1], "/");
+         entry != NULL;
+         entry = narf_dirnext(argv[1], "/", entry)) {
+      printf("%s\n", entry);
+   }
+   printf("(end)\n");
+   printf("\n");
+}
+
+static void cmd_mbr(int argc, char **argv) {
+   char message[512];
+
+   if (argc == 1) {
+      printf("narf_mbr(NULL)=%s\n",
+            tf[narf_mbr(NULL)]);
+      return;
+   }
+
+   if (!join_args(argc, argv, 1, message, sizeof(message))) {
+      print_usage(argv[0]);
+      return;
+   }
+
+   printf("narf_mbr(%s)=%s\n",
+         message, tf[narf_mbr(message)]);
+}
+
+static void cmd_mkfs(int argc, char **argv) {
+   uint32_t start = 0;
+   uint32_t size = narf_io_sectors();
+   bool result;
+   (void) argv;
+
+   if (argc != 1) {
+      print_usage("mkfs");
+      return;
+   }
+
+   printf("narf_mkfs(0x%x, 0x%x)=%s\n",
+         start, size, tf[result ASSIGN narf_mkfs(start, size)]);
+}
+
+static void cmd_mount(int argc, char **argv) {
+   int part;
+
+   if (argc != 2 || !parse_int_arg(argv[1], &part)) {
+      print_usage(argv[0]);
+      return;
+   }
+
+   printf("narf_mount(%d)=%s\n",
+         part, tf[narf_mount(part)]);
+}
+
+static void cmd_pack(int argc, char **argv) {
+   if (argc != 2) {
+      print_usage(argv[0]);
+      return;
+   }
+
+   do_pack(argv[1]);
+}
+
+static void cmd_partition(int argc, char **argv) {
+   int part;
+
+   if (argc != 2 || !parse_int_arg(argv[1], &part)) {
+      print_usage(argv[0]);
+      return;
+   }
+
+   printf("narf_partition(%d)=%s\n",
+         part, tf[narf_partition(part)]);
+}
+
+static void cmd_quit(int argc, char **argv) {
+   if (argc != 1) {
+      print_usage(argv[0]);
+      return;
+   }
+
+   g_quit_requested = true;
+}
+
+static void cmd_realloc(int argc, char **argv) {
+   NarfByteSize size;
+   bool result;
+
+   if (argc != 3 || !parse_size_arg(argv[2], &size)) {
+      print_usage(argv[0]);
+      return;
+   }
+
+   printf("narf_realloc_key(%s,%lu)=%s\n",
+         argv[1], (unsigned long) size,
+         tf[result ASSIGN narf_realloc_key(argv[1], size)]);
+}
+
+static void cmd_rename(int argc, char **argv) {
+   bool result;
+
+   if (argc != 3) {
+      print_usage(argv[0]);
+      return;
+   }
+
+   printf("narf_rename(%s,%s)=%d\n",
+         argv[1], argv[2], result ASSIGN narf_rename_key(argv[1], argv[2]));
+}
+
+static void cmd_scan(int argc, char **argv) {
+   char *result;
+
+   if (argc != 2) {
+      print_usage(argv[0]);
+      return;
+   }
+
+   result = (char *)narf_metadata(argv[1]);
+   printf("narf_metadata(%s)=%s\n",
+         argv[1], result ? result : "(null)");
+}
+
+static void cmd_slurp(int argc, char **argv) {
+   char p[512];
+   FILE *f;
+   bool result;
+
+   if (argc != 2) {
+      print_usage(argv[0]);
+      return;
+   }
+
+   f = fopen(argv[1], "r");
+
+   if (f) {
+      while (fgets(p, sizeof(p), f)) {
+         size_t len = strlen(p);
+
+         while (len > 0 && (unsigned char) p[len - 1] < ' ') {
+            p[--len] = 0;
+         }
+
+         if (len == 0) {
+            continue;
+         }
+
+         printf("narf_alloc(%s,%d)=%s\n",
+               p, 1024, tf[result ASSIGN narf_alloc(p, 1024)]);
+      }
+      fclose(f);
+   }
+}
+
+static void cmd_tag(int argc, char **argv) {
+   char data[NARF_METADATA_SIZE] = { 0 };
+   bool result;
+
+   if (argc < 3 || !join_args(argc, argv, 2, data, sizeof(data))) {
+      print_usage(argv[0]);
+      return;
+   }
+
+   printf("narf_set_metadata(%s,%s)=%s\n",
+         argv[1], data, tf[result ASSIGN narf_set_metadata(argv[1], (uint8_t *)data)]);
+}
+
 //! @brief Parse and execute one tester command line.
-void process_cmd(char *buffer) {
-   if (buffer == NULL || buffer[0] == 0) {
+void process_cmd(const char *buffer) {
+   char line[1024];
+   char *argv[TESTER_MAX_ARGS];
+   int argc;
+   int n;
+   const TesterCommand *cmd;
+
+   if (buffer == NULL) {
+      buffer = "";
+   }
+
+   n = snprintf(line, sizeof(line), "%s", buffer);
+   if (n < 0 || (size_t)n >= sizeof(line)) {
+      printf("huh? Command line too long.\n");
+      return;
+   }
+
+   argc = split_args(line, argv, TESTER_MAX_ARGS);
+   if (argc == 0) {
       printf("huh? Empty command.\n");
       print_help();
+      return;
    }
-   else if (!strncmp(buffer, "help", 4)) {
-      print_help();
+   if (argc == -1) {
+      printf("huh? Too many arguments.\n");
+      return;
    }
-   else if (!strncmp(buffer, "pack ", 5)) {
-      const char *arg = buffer + 5;
-      do_pack(arg);
+   if (argc == -2) {
+      printf("huh? Unterminated quote.\n");
+      return;
    }
-   else if (!strncmp(buffer, "mkfs", 4)) {
-      uint32_t start = 0;
-      uint32_t size = narf_io_sectors();
-      bool result;
 
-      printf("narf_mkfs(0x%x, 0x%x)=%s\n",
-            start, size, tf[result ASSIGN narf_mkfs(start, size)]);
+   cmd = find_command(argv[0]);
+   if (cmd == NULL) {
+      printf("huh? Unknown command '%s'.\n", argv[0]);
+      printf("Use 'help' for a command list.\n");
+      return;
    }
-   else if (!strncmp(buffer, "init", 4)) {
-      uint32_t start = 0;
-      printf("narf_init(0x%x)=%s\n",
-            start, tf[narf_init(start)]);
-   }
-   else if (!strncmp(buffer, "mbr", 3)) {
-      if (strlen(buffer) > 4) {
-         printf("narf_mbr(%s)=%s\n",
-               buffer + 4, tf[narf_mbr(buffer + 4)]);
-      }
-      else {
-         printf("narf_mbr(NULL)=%s\n",
-               tf[narf_mbr(NULL)]);
-      }
-   }
-   else if (!strncmp(buffer, "partition ", 10)) {
-      int part = atoi(buffer + 10);
-      printf("narf_partition(%d)=%s\n",
-            part, tf[narf_partition(part)]);
-   }
-   else if (!strncmp(buffer, "findpart", 8)) {
-      printf("narf_findpart()=%d\n",
-            narf_findpart());
-   }
-   else if (!strncmp(buffer, "format ", 7)) {
-      int part = atoi(buffer + 7);
-      printf("narf_format(%d)=%s\n",
-            part, tf[narf_format(part)]);
-   }
-   else if (!strncmp(buffer, "mount ", 6)) {
-      int part = atoi(buffer + 6);
-      printf("narf_mount(%d)=%s\n",
-            part, tf[narf_mount(part)]);
-   }
-   else if (!strncmp(buffer, "debug ", 6)) {
-      narf_debug();
-   }
-   else if (!strncmp(buffer, "debug", 5)) {
-      narf_debug();
-   }
-   else if (!strncmp(buffer, "alloc ", 6)) {
-      char key[256];
-      int size;
-      bool result;
 
-      sscanf(buffer, "alloc %s %d", key, &size);
-      printf("narf_alloc(%s,%d)=%s\n",
-            key, size, tf[result ASSIGN narf_alloc(key, size)]);
-   }
-   else if (!strncmp(buffer, "create ", 7)) {
-      char key[256];
-      char data[512];
-      bool result;
-      NarfByteSize size;
-
-      if (!parse_key_text(buffer, "create", key, sizeof(key),
-               data, sizeof(data))) {
-         printf("create: usage: create <key> <string>\n");
-         return;
-      }
-
-      size = (NarfByteSize) strlen(data);
-      result = narf_alloc(key, 0);
-
-      if (result && size) {
-         result = narf_append(key, data, size);
-      }
-
-      printf("create(%s,\"%s\")=%s\n",
-            key, data, tf[result]);
-   }
-   else if (!strncmp(buffer, "append ", 7)) {
-      char key[256];
-      char data[512];
-      bool result;
-      NarfByteSize size;
-
-      if (!parse_key_text(buffer, "append", key, sizeof(key),
-               data, sizeof(data))) {
-         printf("append: usage: append <key> <string>\n");
-         return;
-      }
-
-      size = (NarfByteSize) strlen(data);
-      result = narf_append(key, data, size);
-
-      printf("narf_append(%s,\"%s\",%lu)=%s\n",
-            key, data, (unsigned long) size, tf[result]);
-   }
-   else if (!strncmp(buffer, "realloc ", 8)) {
-      char key[256];
-      int size;
-      bool result;
-
-      sscanf(buffer, "realloc %s %d", key, &size);
-      printf("narf_realloc_key(%s,%d)=%s\n",
-            key, size, tf[result ASSIGN narf_realloc_key(key, size)]);
-   }
-   else if (!strncmp(buffer, "rename ", 7)) {
-      char n1[32];
-      char n2[32];
-      bool result;
-
-      sscanf(buffer, "rename %s %s", n1, n2);
-      printf("narf_rename(%s,%s)=%d\n",
-            n1, n2, result ASSIGN narf_rename_key(n1, n2));
-   }
-   else if (!strncmp(buffer, "defrag", 6)) {
-      bool result;
-
-      printf("narf_defrag()=%s\n",
-            tf[result ASSIGN narf_defrag()]);
-   }
-   else if (!strncmp(buffer, "slurp ",6)) {
-      char p[512];
-      FILE *f;
-      bool result;
-
-      sscanf(buffer, "slurp %s", p);
-      f = fopen(p, "r");
-
-      if (f) {
-         while (fgets(p, sizeof(p), f)) {
-            p[strlen(p) - 1] = 0;
-            printf("narf_alloc(%s,%d)=%s\n",
-                  p, 1024, tf[result ASSIGN narf_alloc(p, 1024)]);
-         }
-         fclose(f);
-      }
-   }
-   else if (!strncmp(buffer, "free ", 5)) {
-      char key[256];
-      bool result;
-
-      sscanf(buffer, "free %s", key);
-      printf("narf_free_key(%s)=%s\n",
-            key, tf[result ASSIGN narf_free_key(key)]);
-   }
-   else if (!strncmp(buffer, "ls ", 3)) {
-      const char *entry;
-      char key[256];
-      sscanf(buffer, "ls %s", key);
-
-      printf("ls '%s' (%ld)\n", key, strlen(key));
-
-      for (entry = narf_dirfirst(key, "/");
-            entry != NULL;
-            entry = narf_dirnext(key, "/", entry)) {
-         printf("%s\n", entry);
-      }
-      printf("(end)\n");
-      printf("\n");
-   }
-   else if (!strncmp(buffer, "cat ", 4)) {
-      char key[512];
-      char line[17];
-      bool found;
-      int len;
-      int start;
-      int addr = 0;
-      int tail;
-      sscanf(buffer, "cat %s", key);
-      printf("narf_find(%s)=%s\n", key, tf[found ASSIGN narf_find(key)]);
-      if (!found) return;
-      start = narf_sector(key);
-      len = narf_size(key);
-      tail = len % 16;
-
-      while (len > 0) {
-         narf_io_read(start, key);
-         for (int i = 0; i < len && i < 512; i++) {
-            if ((i % 16) == 0) {
-               printf("%04x: ", addr);
-               addr += 16;
-            }
-            printf("%02x ", (uint8_t) key[i]);
-            line[i % 16] = (key[i] >= ' ' && key[i] <= '~') ? key[i] : '.';
-            line[(i % 16) + 1] = 0;
-            if ((i % 16) == 15) {
-               printf(" %s\n", line);
-               line[0] = 0;
-            }
-         }
-         start++;
-         len -= 512;
-      }
-      if (tail) {
-         printf("%*s %s\n", 3 * (16 - tail), " ", line);
-      }
-      printf("\n");
-   }
-   else if (!strncmp(buffer, "tag ", 4)) {
-      char key[256];
-      char data[NARF_METADATA_SIZE] = { 0 };
-      bool result;
-
-      if (!parse_key_text(buffer, "tag", key, sizeof(key),
-               data, sizeof(data))) {
-         printf("tag: usage: tag <key> <metadata>\n");
-         return;
-      }
-
-      printf("narf_set_metadata(%s,%s)=%s\n",
-            key, data, tf[result ASSIGN narf_set_metadata(key, (uint8_t *)data)]);
-   }
-   else if (!strncmp(buffer, "scan ", 5)) {
-      char key[256];
-      char *result;
-
-      sscanf(buffer, "scan %s", key);
-      result = (char *)narf_metadata(key);
-      printf("narf_metadata(%s)=%s\n",
-            key, result ? result : "(null)");
-   }
-   else if (!strncmp(buffer, "gremlins ", 9)) {
-      int s, n;
-      sscanf(buffer, "gremlins %d %d", &s, &n);
-      gremlins(s, n);
-   }
-   else {
-      printf("huh?\n");
-   }
+   cmd->fn(argc, argv);
 }
 
 char *rname(int l) {
@@ -508,24 +939,20 @@ void gremlins(int s, int n) {
 void loop(void) {
    char buffer[1024];
 
+   g_quit_requested = false;
    printf("#>");
-   while(fgets(buffer, sizeof(buffer), stdin)) {
+   while(!g_quit_requested && fgets(buffer, sizeof(buffer), stdin)) {
       size_t len = strlen(buffer);
 
       while (len > 0 && (unsigned char) buffer[len - 1] < ' ') {
          buffer[--len] = 0;
       }
 
-      if (!strncmp(buffer, "exit", 4)) {
-         break;
+      process_cmd(buffer);
+
+      if (!g_quit_requested) {
+         printf("#>");
       }
-      else if (!strncmp(buffer, "quit", 4)) {
-         break;
-      }
-      else {
-         process_cmd(buffer);
-      }
-      printf("#>");
    }
 }
 

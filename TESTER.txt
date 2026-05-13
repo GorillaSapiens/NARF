@@ -42,7 +42,8 @@ After startup, the prompt is:
 #>
 ```
 
-Use `help` to print a short command summary.  Use `quit` or `exit` to leave.
+Use `help` to print a short command summary.  Use `help <command>` to print
+that command's detailed help string.  Use `quit` or `exit` to leave.
 An empty line prints `huh? Empty command.` and the same short help summary.
 
 Common setup
@@ -64,13 +65,41 @@ mkfs
 init
 ```
 
+
+Command parser notes
+--------------------
+
+Tester commands are registered in a table containing the command name, an
+`argc`/`argv` style handler function, and the help text used by `help` and
+`help <command>`.  Command names must match exactly; accidental prefix matches
+such as `debugger` no longer dispatch to `debug`.
+
+Arguments are split roughly like a tiny shell: whitespace separates arguments,
+double quotes keep spaces inside one argument, and `\n`, `\r`, `\t`, `\\`, and
+`\"` are decoded.  Commands such as `create`, `append`, `tag`, and `mbr` join
+remaining arguments back together with spaces, so both of these work:
+
+```
+tag foo "v1 uid=1000 gid=1000 mode=100644 mtime=1778706214 bs=4K"
+tag foo v1 uid=1000 gid=1000 mode=100644 mtime=1778706214 bs=4K
+```
+
 Commands
 --------
 
 
-### `help`
+### `help [command]`
 
-Print a short command summary.
+With no argument, print a short command summary generated from the tester's
+command table.  With a command name, print that command's detailed help string.
+
+Examples:
+
+```
+help
+help tag
+help gremlins
+```
 
 Entering an empty line at the tester prompt is treated as an empty command:
 it prints `huh? Empty command.` followed by the short help summary, then returns
