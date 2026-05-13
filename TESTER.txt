@@ -42,9 +42,10 @@ After startup, the prompt is:
 #>
 ```
 
-Use `help` to print a short command summary.  Use `help <command>` to print
+Use `help` to print a compact command summary: the first line of each command's
+help text, several per line, separated by `|`.  Use `help <command>` to print
 that command's detailed help string.  Use `quit` or `exit` to leave.
-An empty line prints `huh? Empty command.` and the same short help summary.
+An empty line prints `huh? Empty command.` and the same compact help summary.
 
 Common setup
 ------------
@@ -90,8 +91,10 @@ Commands
 
 ### `help [command]`
 
-With no argument, print a short command summary generated from the tester's
-command table.  With a command name, print that command's detailed help string.
+With no argument, print a compact command summary generated from the tester's
+command table.  It uses the first line of each command's help text, wrapped
+across several `|`-separated entries per line.  With a command name, print that
+command's detailed help string.
 
 Examples:
 
@@ -102,8 +105,8 @@ help gremlins
 ```
 
 Entering an empty line at the tester prompt is treated as an empty command:
-it prints `huh? Empty command.` followed by the short help summary, then returns
-to the prompt.
+it prints `huh? Empty command.` followed by the compact help summary, then
+returns to the prompt.
 
 ### `mbr [message]`
 

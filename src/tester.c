@@ -174,28 +174,50 @@ static const TesterCommand *find_command(const char *name) {
    return NULL;
 }
 
-//! @brief Print the first line of one command's help text.
-static void print_help_summary_line(const TesterCommand *cmd) {
+#define TESTER_HELP_WIDTH 78
+
+//! @brief Return the printable length of the first line of a help string.
+static size_t help_first_line_len(const char *help) {
    const char *p;
 
-   printf("  %-10s ", cmd->name);
-
-   for (p = cmd->help; *p && *p != '\n'; ++p) {
-      putchar(*p);
+   for (p = help; *p && *p != '\n'; ++p) {
    }
 
-   putchar('\n');
+   return (size_t)(p - help);
 }
 
-//! @brief Print a short tester command summary.
+//! @brief Print the first line of a help string.
+static void print_help_first_line(const char *help) {
+   const char *p;
+
+   for (p = help; *p && *p != '\n'; ++p) {
+      putchar(*p);
+   }
+}
+
+//! @brief Print a compact tester command summary.
 static void print_help(void) {
    const TesterCommand *cmd;
+   size_t col = 0;
 
-   printf("commands:\n");
+   printf("commands:\n  ");
    for (cmd = commands; cmd->name != NULL; ++cmd) {
-      print_help_summary_line(cmd);
+      size_t item_len = help_first_line_len(cmd->help);
+
+      if (col > 0) {
+         if (col + 3 + item_len > TESTER_HELP_WIDTH) {
+            printf("\n  ");
+            col = 0;
+         } else {
+            printf(" | ");
+            col += 3;
+         }
+      }
+
+      print_help_first_line(cmd->help);
+      col += item_len;
    }
-   printf("Use 'help <command>' for details.\n");
+   printf("\nUse 'help <command>' for details.\n");
 }
 
 //! @brief Print one command's detailed usage string.
