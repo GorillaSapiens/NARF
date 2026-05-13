@@ -40,6 +40,8 @@
 
 #define END INVALID_NAF // i hate typing
 
+#define NARF_MIN_FS_SECTORS 4
+
 #ifndef HAVE_LRAND48
 #define lrand48 rand
 #define srand48 srand
@@ -383,47 +385,45 @@ bool narf_partition(int partition) {
    int i;
    NarfSector start;
    NarfSector end;
+   NarfSector sectors;
    MBR *mbr;
 
    if (!narf_io_open()) return false;
+   if (partition < 1 || partition > 4) return false;
 
+   sectors = narf_io_sectors();
    start = 2048;
-   end = narf_io_sectors();
-   mbr = (MBR *) buffer;
-   narf_io_read(0, buffer);
+   end = sectors;
 
-   if (partition < 1 || partition > 4) {
+   if (sectors < start + NARF_MIN_FS_SECTORS) {
       return false;
    }
+
+   mbr = (MBR *) buffer;
+   if (!narf_io_read(0, buffer)) return false;
+
    --partition;
 
-   // TODO FIX we're making a lot of assumptions here.
-   // do we REALLY know partitions are ordered?
-   // is this just more complexity than we need?
-
    for (i = 0; i < 4; i++) {
-      if (i < partition) {
-         if (mbr->partitions[i].partition_type) {
-            start =
-               mbr->partitions[i].start_lba +
-               mbr->partitions[i].partition_size;
-         }
+      if (i < partition && mbr->partitions[i].partition_type) {
+         start = mbr->partitions[i].start_lba +
+                 mbr->partitions[i].partition_size;
       }
-      else if (i > partition) {
-         if (mbr->partitions[i].partition_type) {
-            end = mbr->partitions[i].start_lba - 1;
-            break;
-         }
+      else if (i > partition && mbr->partitions[i].partition_type) {
+         end = mbr->partitions[i].start_lba;
+         break;
       }
+   }
+
+   if (end <= start || end - start < NARF_MIN_FS_SECTORS) {
+      return false;
    }
 
    mbr->partitions[partition].partition_type = NARF_PART_TYPE;
    mbr->partitions[partition].start_lba = start;
    mbr->partitions[partition].partition_size = end - start;
 
-   narf_io_write(0, buffer);
-
-   return true;
+   return narf_io_write(0, buffer);
 }
 
 ///////////////////////////////////////////////////////
@@ -1470,7 +1470,9 @@ static bool narf_insert(NAF naf, const char *key) {
 bool narf_mkfs(NarfSector start, NarfSector size) {
    if (!narf_io_open()) return false;
 
-   if (size <= 0) return false;
+   if (size < NARF_MIN_FS_SECTORS) return false;
+   if (start > narf_io_sectors()) return false;
+   if (size > narf_io_sectors() - start) return false;
 
    memset(buffer, 0, NARF_SECTOR_SIZE);
 
@@ -2075,6 +2077,11 @@ bool narf_rename_key(const char *key, const char *newkey) {
 
    // allocate a new one with zero
    newnaf = narf_alloc(newkey, 0);
+
+   if (newnaf == END) {
+      narf_rollback();
+      return false;
+   }
 
    read_buffer(oldnaf);
    start = node->m_start;
