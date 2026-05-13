@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdlib.h>
+#include <limits.h>
 #include <unistd.h>
 #include <pthread.h>
 
@@ -375,6 +376,11 @@ static int my_rename(const char *oldpath, const char *newpath, unsigned int flag
    char *olddir = xformpath(oldpath);
    char *newdir = xformpath(newpath);
 
+   if (olddir == NULL || newdir == NULL) {
+      ret = -ENOMEM;
+      goto fini;
+   }
+
    bool oldfile = narf_find(oldpath + 1);
    bool newfile = narf_find(newpath + 1);
    bool olddirnaf = narf_find(olddir);
@@ -400,15 +406,31 @@ static int my_rename(const char *oldpath, const char *newpath, unsigned int flag
 
    // olddir is a directory.  this will be tricky.
    // this is only safe because i know what i'm doing...
-   int olen = strlen(olddir);
-   // TODO FIX remove this line. // int nlen = strlen(newdir);
+   size_t olen = strlen(olddir);
    const char *entry2;
    char prevkey[512];
    char buf[512];
    entry2 = narf_dirfirst(olddir, "/");
    while (entry2 != NULL) {
-      snprintf(prevkey, sizeof(prevkey), "%s", entry2);
-      snprintf(buf, sizeof(buf), "%s%s", newdir, prevkey + olen);
+      int n;
+
+      n = snprintf(prevkey, sizeof(prevkey), "%s", entry2);
+      if (n < 0 || (size_t) n >= sizeof(prevkey)) {
+         ret = -ENAMETOOLONG;
+         goto fini;
+      }
+
+      if (strlen(prevkey) < olen) {
+         ret = -EIO;
+         goto fini;
+      }
+
+      n = snprintf(buf, sizeof(buf), "%s%s", newdir, prevkey + olen);
+      if (n < 0 || (size_t) n >= sizeof(buf)) {
+         ret = -ENAMETOOLONG;
+         goto fini;
+      }
+
       if (!narf_rename_key(prevkey, buf)) {
          ret = -EIO;
          goto fini;
@@ -463,14 +485,27 @@ static int my_chown(const char *path, uid_t uid, gid_t gid, struct fuse_file_inf
 
 //! @brief FUSE truncate callback.
 static int my_truncate(const char *path, off_t size, struct fuse_file_info *fi) {
-   (void) path;
-   (void) size;
    (void) fi;
 
    if (!mounted) return -ENODEV;
+   if (size < 0) return -EINVAL;
+   if ((NarfByteSize) size != (uintmax_t) size) return -EFBIG;
+
+   LOCK;
 
    // Resize file
-   return -EROFS;
+   if (!narf_find(path + 1)) {
+      UNLOCK;
+      return -ENOENT;
+   }
+
+   if (!narf_realloc(path + 1, (NarfByteSize) size)) {
+      UNLOCK;
+      return -EIO;
+   }
+
+   UNLOCK;
+   return 0;
 }
 
 // --- File I/O ---
@@ -491,6 +526,7 @@ static int my_read(const char *path, char *buf, size_t size, off_t offset, struc
    (void) fi;
 
    if (!mounted) return -ENODEV;
+   if (offset < 0) return -EINVAL;
 
    LOCK;
 
@@ -503,20 +539,26 @@ static int my_read(const char *path, char *buf, size_t size, off_t offset, struc
 
    size_t len = narf_size(path + 1);
    NarfSector sector = narf_sector(path + 1);
+   size_t read_offset = (size_t) offset;
 
-   if (sector == INVALID_NAF || (size_t)offset >= len) {
+   if (sector == INVALID_NAF || read_offset >= len) {
       UNLOCK;
       return 0;
    }
 
-   if (offset + size > len) {
-      size = len - offset;
+   if (size > len - read_offset) {
+      size = len - read_offset;
+   }
+
+   if (size > INT_MAX) {
+      UNLOCK;
+      return -EFBIG;
    }
 
    // this would be so much easier if i cheated...
 
-   while (offset >= NARF_SECTOR_SIZE) {
-      offset -= NARF_SECTOR_SIZE;
+   while (read_offset >= NARF_SECTOR_SIZE) {
+      read_offset -= NARF_SECTOR_SIZE;
       sector++;
    }
 
@@ -528,22 +570,22 @@ static int my_read(const char *path, char *buf, size_t size, off_t offset, struc
          UNLOCK;
          return -EIO;
       }
-      if ((size_t)(NARF_SECTOR_SIZE - offset) >= remaining) {
-         memcpy(buf, data + offset, remaining);
+      if ((size_t)(NARF_SECTOR_SIZE - read_offset) >= remaining) {
+         memcpy(buf, data + read_offset, remaining);
          buf += remaining;
          remaining = 0;
       }
       else {
-         memcpy(buf, data + offset, NARF_SECTOR_SIZE - offset);
-         buf += (NARF_SECTOR_SIZE - offset);
-         remaining -= (NARF_SECTOR_SIZE - offset);
-         offset = 0;
+         memcpy(buf, data + read_offset, NARF_SECTOR_SIZE - read_offset);
+         buf += (NARF_SECTOR_SIZE - read_offset);
+         remaining -= (NARF_SECTOR_SIZE - read_offset);
+         read_offset = 0;
       }
       sector++;
    }
 
    UNLOCK;
-   return size;
+   return (int) size;
 }
 
 //! @brief FUSE write callback.
@@ -555,6 +597,7 @@ static int my_write(const char *path, const char *buf, size_t size, off_t offset
    if ((NarfByteSize) offset != (uintmax_t) offset) return -EFBIG;
    if ((NarfByteSize) size != size) return -EFBIG;
    if ((NarfByteSize) size > ((NarfByteSize) -1) - (NarfByteSize) offset) return -EFBIG;
+   if (size > INT_MAX) return -EFBIG;
 
    LOCK;
 
@@ -581,8 +624,26 @@ static int my_statfs(const char *path, struct statvfs *st) {
 
    if (!mounted) return -ENODEV;
 
+   LOCK;
+
    // Report filesystem stats
+   NarfStat stats;
+   if (!narf_stat(&stats)) {
+      UNLOCK;
+      return -EIO;
+   }
+
    memset(st, 0, sizeof(*st));
+   st->f_bsize = NARF_SECTOR_SIZE;
+   st->f_frsize = NARF_SECTOR_SIZE;
+   st->f_blocks = stats.total_sectors;
+   st->f_bfree = stats.free_sectors;
+   st->f_bavail = stats.free_sectors;
+   st->f_files = stats.file_count;
+   st->f_ffree = stats.free_sectors / 2;
+   st->f_namemax = stats.max_key_bytes;
+
+   UNLOCK;
    return 0;
 }
 

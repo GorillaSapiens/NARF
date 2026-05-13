@@ -1233,6 +1233,47 @@ bool narf_init(NarfSector start) {
    return false;
 }
 
+//! @brief Sum positive-length free extents in the free tree.
+static bool free_sector_count_rec(NarfRef ref, NarfSector *sectors) {
+   Node n;
+
+   if (sectors == NULL) return false;
+   if (ref_is_null(ref)) return true;
+   if (!read_node(ref, &n, NULL)) return false;
+
+   if (!free_sector_count_rec(n.m_left, sectors)) return false;
+
+   if (n.m_free.m_start != END && n.m_free.m_length != 0) {
+      if (*sectors > ((NarfSector) -1) - n.m_free.m_length) return false;
+      *sectors += n.m_free.m_length;
+   }
+
+   return free_sector_count_rec(n.m_right, sectors);
+}
+
+//! @brief Return basic filesystem capacity and key-count statistics.
+bool narf_stat(NarfStat *stats) {
+   NarfSector free_sectors;
+
+   if (stats == NULL) return false;
+   if (!verify()) return false;
+   if (root.m_bottom > root.m_top) return false;
+
+   memset(stats, 0, sizeof(*stats));
+
+   free_sectors = root.m_top - root.m_bottom;
+   if (!free_sector_count_rec(root.m_free_root, &free_sectors)) return false;
+   if (free_sectors > root.m_total_sectors) return false;
+
+   stats->total_sectors = root.m_total_sectors;
+   stats->free_sectors = free_sectors;
+   stats->used_sectors = root.m_total_sectors - free_sectors;
+   stats->file_count = root.m_count;
+   stats->max_key_bytes = KEYSIZE - 1;
+
+   return true;
+}
+
 //! @brief Return whether a key exists in the data tree.
 bool narf_find(const char *key) {
    return valid_key(key) && verify() && data_find_ref_rec(root.m_data_root, key, NULL, NULL);

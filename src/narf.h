@@ -9,6 +9,14 @@
 typedef NARF_SECTOR_ADDRESS_TYPE NarfSector;
 typedef NARF_SIZE_TYPE NarfByteSize;
 
+typedef struct {
+   NarfSector total_sectors;
+   NarfSector free_sectors;
+   NarfSector used_sectors;
+   NarfSector file_count;
+   NarfByteSize max_key_bytes;
+} NarfStat;
+
 #define INVALID_NAF ((NarfSector) -1)
 
 #ifdef NARF_MBR_UTILS
@@ -54,6 +62,12 @@ bool narf_mkfs(NarfSector start, NarfSector size);
 //! @param start Origin sector of the filesystem.
 //! @return true on success.
 bool narf_init(NarfSector start);
+
+//! @brief Return basic filesystem capacity and key-count statistics.
+//!
+//! @param stats Destination for statistics.
+//! @return true on success.
+bool narf_stat(NarfStat *stats);
 
 //! @brief Check whether a key exists.
 //!
