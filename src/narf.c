@@ -2755,7 +2755,7 @@ const char *narf_key(NAF naf) {
 NarfSector narf_sector(NAF naf) {
    if (!valid_naf(naf)) return END;
    read_buffer(naf);
-   return root.m_origin + node->m_start;
+   return (node->m_start == END) ? END : root.m_origin + node->m_start;
 }
 
 ///////////////////////////////////////////////////////
