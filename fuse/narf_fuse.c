@@ -9,6 +9,11 @@
 #include <limits.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <ctype.h>
+#include <inttypes.h>
+#include <time.h>
+#include <sys/xattr.h>
+#include <grp.h>
 
 #include "narf_conf.h"
 #include "narf_io.h"
@@ -24,6 +29,544 @@ static int fd;
 static off_t size;
 static int partition = -1;
 static bool mounted = false;
+static time_t mount_time;
+
+char *xformpath(const char *path);
+
+#define NARF_XATTR_PREFIX "user."
+#define NARF_META_VERSION "v1"
+
+// A compact, human-readable metadata string lives in each NARF node:
+//
+//    v1 uid=1000 gid=1000 mode=100644 mtime=1778706214 bs=4K
+//
+// FUSE parses the Unix-ish fields and exposes every other key=value token as
+// a user.<key> extended attribute.  Unknown tokens are preserved when known
+// fields are changed.  Tokens with whitespace cannot be represented here.
+typedef struct {
+   uid_t uid;
+   gid_t gid;
+   mode_t mode;
+   time_t mtime;
+} NarfFuseMeta;
+
+static time_t now_sec(void) {
+   time_t t = time(NULL);
+
+   if (t == (time_t) -1) {
+      return 0;
+   }
+
+   return t;
+}
+
+static time_t default_mtime(void) {
+   if (mount_time != 0) {
+      return mount_time;
+   }
+
+   return now_sec();
+}
+
+static void meta_defaults(NarfFuseMeta *meta, mode_t mode) {
+   meta->uid = getuid();
+   meta->gid = getgid();
+   meta->mode = mode;
+   meta->mtime = default_mtime();
+}
+
+static bool reserved_meta_key(const char *key) {
+   return !strcmp(key, "uid") || !strcmp(key, "gid") ||
+          !strcmp(key, "mode") || !strcmp(key, "mtime");
+}
+
+static bool custom_meta_key_ok(const char *key) {
+   const unsigned char *p = (const unsigned char *) key;
+
+   if (key == NULL || *key == 0) {
+      return false;
+   }
+
+   while (*p) {
+      if (!(isalnum(*p) || *p == '_' || *p == '-' || *p == '.')) {
+         return false;
+      }
+      p++;
+   }
+
+   return true;
+}
+
+static bool custom_meta_value_ok(const char *value) {
+   const unsigned char *p = (const unsigned char *) value;
+
+   if (value == NULL) {
+      return false;
+   }
+
+   while (*p) {
+      if (*p <= ' ' || *p == 0x7f) {
+         return false;
+      }
+      p++;
+   }
+
+   return true;
+}
+
+static bool parse_uintmax(const char *s, uintmax_t *out, int base) {
+   char *end = NULL;
+   uintmax_t v;
+
+   if (s == NULL || *s == 0 || out == NULL) {
+      return false;
+   }
+
+   errno = 0;
+   v = strtoumax(s, &end, base);
+
+   if (errno || end == s || *end != 0) {
+      return false;
+   }
+
+   *out = v;
+   return true;
+}
+
+static void parse_metadata_string(const char *metadata, NarfFuseMeta *meta) {
+   char tmp[NARF_METADATA_SIZE];
+   char *save = NULL;
+   char *token;
+
+   if (metadata == NULL || meta == NULL) {
+      return;
+   }
+
+   snprintf(tmp, sizeof(tmp), "%s", metadata);
+   token = strtok_r(tmp, " ", &save);
+
+   if (token == NULL || strcmp(token, NARF_META_VERSION)) {
+      return;
+   }
+
+   while ((token = strtok_r(NULL, " ", &save)) != NULL) {
+      char *eq = strchr(token, '=');
+      char *key;
+      char *value;
+      uintmax_t v;
+
+      if (eq == NULL) {
+         continue;
+      }
+
+      *eq = 0;
+      key = token;
+      value = eq + 1;
+
+      if (!strcmp(key, "uid")) {
+         if (parse_uintmax(value, &v, 10) && (uid_t) v == v) {
+            meta->uid = (uid_t) v;
+         }
+      }
+      else if (!strcmp(key, "gid")) {
+         if (parse_uintmax(value, &v, 10) && (gid_t) v == v) {
+            meta->gid = (gid_t) v;
+         }
+      }
+      else if (!strcmp(key, "mode")) {
+         if (parse_uintmax(value, &v, 8) && (mode_t) v == v) {
+            meta->mode = (mode_t) v;
+         }
+      }
+      else if (!strcmp(key, "mtime")) {
+         if (parse_uintmax(value, &v, 10)) {
+            meta->mtime = (time_t) v;
+         }
+      }
+   }
+}
+
+static int read_metadata(const char *key, mode_t default_mode,
+      NarfFuseMeta *meta, char metadata[NARF_METADATA_SIZE]) {
+   void *raw;
+
+   if (key == NULL || meta == NULL || metadata == NULL) {
+      return -EINVAL;
+   }
+
+   raw = narf_metadata(key);
+   if (raw == NULL) {
+      return -ENOENT;
+   }
+
+   memcpy(metadata, raw, NARF_METADATA_SIZE);
+   metadata[NARF_METADATA_SIZE - 1] = 0;
+
+   meta_defaults(meta, default_mode);
+   parse_metadata_string(metadata, meta);
+   return 0;
+}
+
+static int append_token(char out[NARF_METADATA_SIZE], const char *key, const char *value) {
+   size_t used = strlen(out);
+   int n;
+
+   if (used >= NARF_METADATA_SIZE) {
+      return -ENOSPC;
+   }
+
+   n = snprintf(out + used, NARF_METADATA_SIZE - used, " %s=%s", key, value);
+   if (n < 0 || (size_t) n >= NARF_METADATA_SIZE - used) {
+      return -ENOSPC;
+   }
+
+   return 0;
+}
+
+static int build_metadata(const char *old_metadata, const NarfFuseMeta *meta,
+      const char *set_key, const char *set_value, bool remove_key,
+      char out[NARF_METADATA_SIZE]) {
+   char tmp[NARF_METADATA_SIZE];
+   char *save = NULL;
+   char *token;
+   int n;
+
+   if (meta == NULL || out == NULL) {
+      return -EINVAL;
+   }
+
+   memset(out, 0, NARF_METADATA_SIZE);
+   n = snprintf(out, NARF_METADATA_SIZE,
+         "%s uid=%ju gid=%ju mode=%06jo mtime=%jd",
+         NARF_META_VERSION,
+         (uintmax_t) meta->uid,
+         (uintmax_t) meta->gid,
+         (uintmax_t) meta->mode,
+         (intmax_t) meta->mtime);
+
+   if (n < 0 || (size_t) n >= NARF_METADATA_SIZE) {
+      return -ENOSPC;
+   }
+
+   if (old_metadata != NULL) {
+      snprintf(tmp, sizeof(tmp), "%s", old_metadata);
+      token = strtok_r(tmp, " ", &save);
+
+      if (token != NULL && !strcmp(token, NARF_META_VERSION)) {
+         while ((token = strtok_r(NULL, " ", &save)) != NULL) {
+            char *eq = strchr(token, '=');
+            char *key;
+            char *value;
+            int ret;
+
+            if (eq == NULL) {
+               continue;
+            }
+
+            *eq = 0;
+            key = token;
+            value = eq + 1;
+
+            if (reserved_meta_key(key) || !custom_meta_key_ok(key) ||
+                  !custom_meta_value_ok(value)) {
+               continue;
+            }
+
+            if (set_key != NULL && !strcmp(key, set_key)) {
+               continue;
+            }
+
+            if (remove_key && set_key != NULL && !strcmp(key, set_key)) {
+               continue;
+            }
+
+            ret = append_token(out, key, value);
+            if (ret != 0) {
+               return ret;
+            }
+         }
+      }
+   }
+
+   if (set_key != NULL && !remove_key) {
+      return append_token(out, set_key, set_value != NULL ? set_value : "");
+   }
+
+   return 0;
+}
+
+static int write_metadata_string(const char *key, const char metadata[NARF_METADATA_SIZE]) {
+   uint8_t raw[NARF_METADATA_SIZE];
+
+   memset(raw, 0, sizeof(raw));
+   snprintf((char *) raw, sizeof(raw), "%s", metadata);
+
+   if (!narf_set_metadata(key, raw)) {
+      return -EIO;
+   }
+
+   return 0;
+}
+
+static int prepare_metadata_update(const char *key, mode_t default_mode,
+      void (*change)(NarfFuseMeta *meta, void *arg), void *arg,
+      char out[NARF_METADATA_SIZE]) {
+   char old_metadata[NARF_METADATA_SIZE];
+   NarfFuseMeta meta;
+   int ret;
+
+   ret = read_metadata(key, default_mode, &meta, old_metadata);
+   if (ret != 0) {
+      return ret;
+   }
+
+   if (change != NULL) {
+      change(&meta, arg);
+   }
+
+   return build_metadata(old_metadata, &meta, NULL, NULL, false, out);
+}
+
+static int commit_metadata_update(const char *key, mode_t default_mode,
+      void (*change)(NarfFuseMeta *meta, void *arg), void *arg) {
+   char metadata[NARF_METADATA_SIZE];
+   int ret;
+
+   ret = prepare_metadata_update(key, default_mode, change, arg, metadata);
+   if (ret != 0) {
+      return ret;
+   }
+
+   return write_metadata_string(key, metadata);
+}
+
+static void set_mtime_change(NarfFuseMeta *meta, void *arg) {
+   const time_t *mtime = (const time_t *) arg;
+
+   meta->mtime = *mtime;
+}
+
+static int init_metadata_for_key(const char *key, mode_t mode) {
+   NarfFuseMeta meta;
+   char metadata[NARF_METADATA_SIZE];
+   int ret;
+
+   meta_defaults(&meta, mode);
+   meta.mtime = now_sec();
+
+   ret = build_metadata(NULL, &meta, NULL, NULL, false, metadata);
+   if (ret != 0) {
+      return ret;
+   }
+
+   return write_metadata_string(key, metadata);
+}
+
+static int key_for_existing_path(const char *path, char key[NARF_SECTOR_SIZE],
+      bool *is_dir) {
+   int n;
+   char *dirkey;
+
+   if (path == NULL || key == NULL || is_dir == NULL) {
+      return -EINVAL;
+   }
+
+   if (!strcmp(path, "/")) {
+      return -EINVAL;
+   }
+
+   path++;
+   n = snprintf(key, NARF_SECTOR_SIZE, "%s", path);
+   if (n < 0 || (size_t) n >= NARF_SECTOR_SIZE) {
+      return -ENAMETOOLONG;
+   }
+
+   if (narf_find(key)) {
+      *is_dir = false;
+      return 0;
+   }
+
+   dirkey = xformpath(path - 1);
+   if (dirkey == NULL) {
+      return -ENOMEM;
+   }
+
+   n = snprintf(key, NARF_SECTOR_SIZE, "%s", dirkey);
+   free(dirkey);
+
+   if (n < 0 || (size_t) n >= NARF_SECTOR_SIZE) {
+      return -ENAMETOOLONG;
+   }
+
+   if (narf_find(key)) {
+      *is_dir = true;
+      return 0;
+   }
+
+   return -ENOENT;
+}
+
+static int metadata_for_path(const char *path, char key[NARF_SECTOR_SIZE],
+      bool *is_dir, NarfFuseMeta *meta, char metadata[NARF_METADATA_SIZE]) {
+   mode_t default_mode;
+   int ret;
+
+   ret = key_for_existing_path(path, key, is_dir);
+   if (ret != 0) {
+      return ret;
+   }
+
+   default_mode = *is_dir ? (S_IFDIR | 0755) : (S_IFREG | 0644);
+   return read_metadata(key, default_mode, meta, metadata);
+}
+
+static int split_user_xattr(const char *name, const char **key) {
+   size_t prefix_len = strlen(NARF_XATTR_PREFIX);
+
+   if (name == NULL || strncmp(name, NARF_XATTR_PREFIX, prefix_len)) {
+      return -ENOTSUP;
+   }
+
+   *key = name + prefix_len;
+
+   if (!custom_meta_key_ok(*key) || reserved_meta_key(*key)) {
+      return -ENOTSUP;
+   }
+
+   return 0;
+}
+
+static bool find_custom_value(const char *metadata, const char *wanted,
+      char value[NARF_METADATA_SIZE]) {
+   char tmp[NARF_METADATA_SIZE];
+   char *save = NULL;
+   char *token;
+
+   if (metadata == NULL || wanted == NULL || value == NULL) {
+      return false;
+   }
+
+   snprintf(tmp, sizeof(tmp), "%s", metadata);
+   token = strtok_r(tmp, " ", &save);
+
+   if (token == NULL || strcmp(token, NARF_META_VERSION)) {
+      return false;
+   }
+
+   while ((token = strtok_r(NULL, " ", &save)) != NULL) {
+      char *eq = strchr(token, '=');
+      char *key;
+      char *val;
+
+      if (eq == NULL) {
+         continue;
+      }
+
+      *eq = 0;
+      key = token;
+      val = eq + 1;
+
+      if (!strcmp(key, wanted) && !reserved_meta_key(key) &&
+            custom_meta_key_ok(key) && custom_meta_value_ok(val)) {
+         snprintf(value, NARF_METADATA_SIZE, "%s", val);
+         return true;
+      }
+   }
+
+   return false;
+}
+
+static int set_custom_value(const char *key, bool is_dir, const char *xkey,
+      const char *xvalue, bool remove_key) {
+   char old_metadata[NARF_METADATA_SIZE];
+   char metadata[NARF_METADATA_SIZE];
+   NarfFuseMeta meta;
+   mode_t default_mode = is_dir ? (S_IFDIR | 0755) : (S_IFREG | 0644);
+   int ret;
+
+   ret = read_metadata(key, default_mode, &meta, old_metadata);
+   if (ret != 0) {
+      return ret;
+   }
+
+   ret = build_metadata(old_metadata, &meta, xkey, xvalue, remove_key, metadata);
+   if (ret != 0) {
+      return ret;
+   }
+
+   return write_metadata_string(key, metadata);
+}
+
+static bool current_user_in_group(gid_t gid) {
+   int count;
+   gid_t *groups;
+   bool found = false;
+
+   if (gid == getgid()) {
+      return true;
+   }
+
+   count = getgroups(0, NULL);
+   if (count <= 0) {
+      return false;
+   }
+
+   groups = malloc((size_t) count * sizeof(*groups));
+   if (groups == NULL) {
+      return false;
+   }
+
+   if (getgroups(count, groups) == count) {
+      for (int i = 0; i < count; i++) {
+         if (groups[i] == gid) {
+            found = true;
+            break;
+         }
+      }
+   }
+
+   free(groups);
+   return found;
+}
+
+static int check_access_bits(const NarfFuseMeta *meta, int mask) {
+   mode_t bits;
+
+   if (mask == F_OK) {
+      return 0;
+   }
+
+   if (getuid() == 0) {
+      if ((mask & X_OK) && !(meta->mode & 0111)) {
+         return -EACCES;
+      }
+      return 0;
+   }
+
+   if (getuid() == meta->uid) {
+      bits = (meta->mode >> 6) & 7;
+   }
+   else if (current_user_in_group(meta->gid)) {
+      bits = (meta->mode >> 3) & 7;
+   }
+   else {
+      bits = meta->mode & 7;
+   }
+
+   if ((mask & R_OK) && !(bits & 4)) {
+      return -EACCES;
+   }
+
+   if ((mask & W_OK) && !(bits & 2)) {
+      return -EACCES;
+   }
+
+   if ((mask & X_OK) && !(bits & 1)) {
+      return -EACCES;
+   }
+
+   return 0;
+}
 
 // strips leading slash if present,
 // adds trailing slash if missing
@@ -168,33 +711,67 @@ static int my_getattr(const char *path, struct stat *st, struct fuse_file_info *
 
    LOCK;
 
-   // Fill in stat structure for a file or directory
    memset(st, 0, sizeof(*st));
 
-   // root always exists
+   // root always exists, but it does not have an on-disk NARF node.
    if (strcmp(path, "/") == 0) {
       st->st_mode = S_IFDIR | 0755;
       st->st_nlink = 2;
+      st->st_uid = getuid();
+      st->st_gid = getgid();
       st->st_size = 0;
+      st->st_atime = default_mtime();
+      st->st_ctime = default_mtime();
+      st->st_mtime = default_mtime();
       UNLOCK;
       return 0;
    }
 
    // see if it exists as a file
    if (narf_find(path + 1)) {
-      st->st_mode = S_IFREG | 0444;
+      char metadata[NARF_METADATA_SIZE];
+      NarfFuseMeta meta;
+
+      if (read_metadata(path + 1, S_IFREG | 0644, &meta, metadata) != 0) {
+         meta_defaults(&meta, S_IFREG | 0644);
+      }
+
+      st->st_mode = S_IFREG | (meta.mode & 07777);
       st->st_nlink = 1;
+      st->st_uid = meta.uid;
+      st->st_gid = meta.gid;
       st->st_size = narf_size(path + 1);
+      st->st_atime = meta.mtime;
+      st->st_ctime = meta.mtime;
+      st->st_mtime = meta.mtime;
+      st->st_blocks = (st->st_size + 511) / 512;
       UNLOCK;
       return 0;
    }
 
    // see if it exists as a directory
    char *p = xformpath(path);
+   if (p == NULL) {
+      UNLOCK;
+      return -ENOMEM;
+   }
+
    if (narf_find(p)) {
-      st->st_mode = S_IFDIR | 0755;
+      char metadata[NARF_METADATA_SIZE];
+      NarfFuseMeta meta;
+
+      if (read_metadata(p, S_IFDIR | 0755, &meta, metadata) != 0) {
+         meta_defaults(&meta, S_IFDIR | 0755);
+      }
+
+      st->st_mode = S_IFDIR | (meta.mode & 07777);
       st->st_nlink = 2;
+      st->st_uid = meta.uid;
+      st->st_gid = meta.gid;
       st->st_size = narf_size(p);
+      st->st_atime = meta.mtime;
+      st->st_ctime = meta.mtime;
+      st->st_mtime = meta.mtime;
       free(p);
       UNLOCK;
       return 0;
@@ -206,7 +783,12 @@ static int my_getattr(const char *path, struct stat *st, struct fuse_file_info *
    if (dirent0 != NULL) {
       st->st_mode = S_IFDIR | 0755;
       st->st_nlink = 2;
+      st->st_uid = getuid();
+      st->st_gid = getgid();
       st->st_size = 0;
+      st->st_atime = default_mtime();
+      st->st_ctime = default_mtime();
+      st->st_mtime = default_mtime();
       UNLOCK;
       return 0;
    }
@@ -217,14 +799,47 @@ static int my_getattr(const char *path, struct stat *st, struct fuse_file_info *
 
 //! @brief FUSE access callback.
 static int my_access(const char *path, int mask) {
-   (void) path;
-   (void) mask;
+   char key[NARF_SECTOR_SIZE];
+   char metadata[NARF_METADATA_SIZE];
+   NarfFuseMeta meta;
+   bool is_dir;
+   int ret;
 
    if (!mounted) return -ENODEV;
 
-   // Check file permissions
-   return 0; // everything allowed
-             // return -EACCES; // denied
+   if (!strcmp(path, "/")) {
+      meta_defaults(&meta, S_IFDIR | 0755);
+      return check_access_bits(&meta, mask);
+   }
+
+   LOCK;
+   ret = metadata_for_path(path, key, &is_dir, &meta, metadata);
+
+   if (ret == -ENOENT) {
+      char *p = xformpath(path);
+
+      if (p == NULL) {
+         UNLOCK;
+         return -ENOMEM;
+      }
+
+      if (narf_dirfirst(p, "/") != NULL) {
+         meta_defaults(&meta, S_IFDIR | 0755);
+         ret = 0;
+      }
+
+      free(p);
+   }
+
+   UNLOCK;
+
+   if (ret != 0) {
+      return ret;
+   }
+
+   (void) key;
+   (void) is_dir;
+   return check_access_bits(&meta, mask);
 }
 
 //! @brief FUSE readlink callback.
@@ -253,7 +868,7 @@ static int my_mknod(const char *path, mode_t mode, dev_t rdev) {
 
 //! @brief FUSE mkdir callback.
 static int my_mkdir(const char *path, mode_t mode) {
-   (void) mode;
+   int ret;
 
    if (!mounted) return -ENODEV;
 
@@ -268,21 +883,35 @@ static int my_mkdir(const char *path, mode_t mode) {
 
    char *p = xformpath(path);
 
+   if (p == NULL) {
+      UNLOCK;
+      return -ENOMEM;
+   }
+
    if (narf_find(p)) {
       // it already exists as a directory
       free(p);
       UNLOCK;
       return -EEXIST;
    }
-   else if (narf_alloc(p, 0)) {
-      // we had to create it
+
+   if (!narf_alloc(p, 0)) {
       free(p);
       UNLOCK;
-      return 0;
+      return -EIO;
    }
+
+   ret = init_metadata_for_key(p, S_IFDIR | (mode & 07777));
+   if (ret != 0) {
+      narf_free_key(p);
+      free(p);
       UNLOCK;
-   return -EIO;
-   // return -EROFS;
+      return ret;
+   }
+
+   free(p);
+   UNLOCK;
+   return 0;
 }
 
 //! @brief FUSE unlink callback.
@@ -458,33 +1087,91 @@ static int my_link(const char *from, const char *to) {
    return -EROFS;
 }
 
+typedef struct {
+   mode_t type;
+   mode_t mode;
+} ChmodArg;
+
+static void chmod_change(NarfFuseMeta *meta, void *arg) {
+   ChmodArg *ch = (ChmodArg *) arg;
+
+   meta->mode = ch->type | (ch->mode & 07777);
+}
+
 //! @brief FUSE chmod callback.
 static int my_chmod(const char *path, mode_t mode, struct fuse_file_info *fi) {
-   (void) path;
-   (void) mode;
+   char key[NARF_SECTOR_SIZE];
+   bool is_dir;
+   ChmodArg arg;
+   int ret;
+
    (void) fi;
 
    if (!mounted) return -ENODEV;
+   if (!strcmp(path, "/")) return -EPERM;
 
-   // Change permissions
-   return -EPERM;
+   LOCK;
+   ret = key_for_existing_path(path, key, &is_dir);
+   if (ret == 0) {
+      arg.type = is_dir ? S_IFDIR : S_IFREG;
+      arg.mode = mode;
+      ret = commit_metadata_update(key, arg.type | (is_dir ? 0755 : 0644),
+            chmod_change, &arg);
+   }
+   UNLOCK;
+
+   return ret;
+}
+
+typedef struct {
+   uid_t uid;
+   gid_t gid;
+} ChownArg;
+
+static void chown_change(NarfFuseMeta *meta, void *arg) {
+   ChownArg *ch = (ChownArg *) arg;
+
+   if (ch->uid != (uid_t) -1) {
+      meta->uid = ch->uid;
+   }
+
+   if (ch->gid != (gid_t) -1) {
+      meta->gid = ch->gid;
+   }
 }
 
 //! @brief FUSE chown callback.
 static int my_chown(const char *path, uid_t uid, gid_t gid, struct fuse_file_info *fi) {
-   (void) path;
-   (void) uid;
-   (void) gid;
+   char key[NARF_SECTOR_SIZE];
+   bool is_dir;
+   ChownArg arg;
+   mode_t default_mode;
+   int ret;
+
    (void) fi;
 
    if (!mounted) return -ENODEV;
+   if (!strcmp(path, "/")) return -EPERM;
 
-   // Change owner/group
-   return -EPERM;
+   LOCK;
+   ret = key_for_existing_path(path, key, &is_dir);
+   if (ret == 0) {
+      default_mode = is_dir ? (S_IFDIR | 0755) : (S_IFREG | 0644);
+      arg.uid = uid;
+      arg.gid = gid;
+      ret = commit_metadata_update(key, default_mode, chown_change, &arg);
+   }
+   UNLOCK;
+
+   return ret;
 }
 
 //! @brief FUSE truncate callback.
 static int my_truncate(const char *path, off_t size, struct fuse_file_info *fi) {
+   char metadata[NARF_METADATA_SIZE];
+   time_t mtime;
+   int ret;
+
    (void) fi;
 
    if (!mounted) return -ENODEV;
@@ -493,10 +1180,17 @@ static int my_truncate(const char *path, off_t size, struct fuse_file_info *fi) 
 
    LOCK;
 
-   // Resize file
    if (!narf_find(path + 1)) {
       UNLOCK;
       return -ENOENT;
+   }
+
+   mtime = now_sec();
+   ret = prepare_metadata_update(path + 1, S_IFREG | 0644,
+         set_mtime_change, &mtime, metadata);
+   if (ret != 0) {
+      UNLOCK;
+      return ret;
    }
 
    if (!narf_realloc(path + 1, (NarfByteSize) size)) {
@@ -504,8 +1198,9 @@ static int my_truncate(const char *path, off_t size, struct fuse_file_info *fi) 
       return -EIO;
    }
 
+   ret = write_metadata_string(path + 1, metadata);
    UNLOCK;
-   return 0;
+   return ret;
 }
 
 // --- File I/O ---
@@ -590,6 +1285,10 @@ static int my_read(const char *path, char *buf, size_t size, off_t offset, struc
 
 //! @brief FUSE write callback.
 static int my_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
+   char metadata[NARF_METADATA_SIZE];
+   time_t mtime;
+   int ret;
+
    (void) fi;
 
    if (!mounted) return -ENODEV;
@@ -609,12 +1308,26 @@ static int my_write(const char *path, const char *buf, size_t size, off_t offset
       return -ENOENT;
    }
 
+   mtime = now_sec();
+   ret = prepare_metadata_update(path + 1, S_IFREG | 0644,
+         set_mtime_change, &mtime, metadata);
+   if (ret != 0) {
+      UNLOCK;
+      return ret;
+   }
+
    if (!narf_write(path + 1, buf, (NarfByteSize) size, (NarfByteSize) offset)) {
       UNLOCK;
       return -EIO;
    }
 
+   ret = write_metadata_string(path + 1, metadata);
    UNLOCK;
+
+   if (ret != 0) {
+      return ret;
+   }
+
    return (int) size;
 }
 
@@ -795,7 +1508,8 @@ static int my_fsyncdir(const char *path, int isdatasync, struct fuse_file_info *
 // --- File creation ---
 //! @brief FUSE create callback.
 static int my_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
-   (void) mode;
+   int ret;
+
    (void) fi;
 
    if (!mounted) return -ENODEV;
@@ -803,31 +1517,61 @@ static int my_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
    LOCK;
 
    // Create and open a file
-   if (narf_find(path+1)) {
+   if (narf_find(path + 1)) {
       // it already exists
       UNLOCK;
       return 0;
    }
-   else if (narf_alloc(path+1, 0)) {
-      // we had to create it
+
+   if (!narf_alloc(path + 1, 0)) {
       UNLOCK;
-      return 0;
+      return -EROFS;
    }
+
+   ret = init_metadata_for_key(path + 1, S_IFREG | (mode & 07777));
+   if (ret != 0) {
+      narf_free_key(path + 1);
+      UNLOCK;
+      return ret;
+   }
+
    UNLOCK;
-   return -EROFS;
+   return 0;
 }
 
 // --- Time update ---
 //! @brief FUSE utimens callback.
 static int my_utimens(const char *path, const struct timespec tv[2], struct fuse_file_info *fi) {
-   (void) path;
-   (void) tv;
+   char key[NARF_SECTOR_SIZE];
+   bool is_dir;
+   mode_t default_mode;
+   time_t mtime;
+   int ret;
+
    (void) fi;
 
    if (!mounted) return -ENODEV;
+   if (!strcmp(path, "/")) return 0;
 
-   // Update file access/modification times
-   return 0;
+   if (tv == NULL || tv[1].tv_nsec == UTIME_NOW) {
+      mtime = now_sec();
+   }
+   else if (tv[1].tv_nsec == UTIME_OMIT) {
+      return 0;
+   }
+   else {
+      mtime = tv[1].tv_sec;
+   }
+
+   LOCK;
+   ret = key_for_existing_path(path, key, &is_dir);
+   if (ret == 0) {
+      default_mode = is_dir ? (S_IFDIR | 0755) : (S_IFREG | 0644);
+      ret = commit_metadata_update(key, default_mode, set_mtime_change, &mtime);
+   }
+   UNLOCK;
+
+   return ret;
 }
 
 // --- Block map (optional) ---
@@ -846,48 +1590,228 @@ static int my_bmap(const char *path, size_t blocksize, uint64_t *idx) {
 // --- Extended attributes (optional) ---
 //! @brief FUSE setxattr callback.
 static int my_setxattr(const char *path, const char *name, const char *value, size_t size, int flags) {
-   (void) path;
-   (void) name;
-   (void) value;
-   (void) size;
-   (void) flags;
+   char key[NARF_SECTOR_SIZE];
+   char old_metadata[NARF_METADATA_SIZE];
+   char existing[NARF_METADATA_SIZE];
+   char xvalue[NARF_METADATA_SIZE];
+   bool is_dir;
+   const char *xkey;
+   int ret;
 
    if (!mounted) return -ENODEV;
+   if (!strcmp(path, "/")) return -EPERM;
+   if ((flags & XATTR_CREATE) && (flags & XATTR_REPLACE)) return -EINVAL;
+   if (value == NULL && size != 0) return -EINVAL;
 
-   return -ENOTSUP;
+   ret = split_user_xattr(name, &xkey);
+   if (ret != 0) {
+      return ret;
+   }
+
+   if (size >= sizeof(xvalue)) {
+      return -ENOSPC;
+   }
+
+   memcpy(xvalue, value, size);
+   xvalue[size] = 0;
+
+   if (!custom_meta_value_ok(xvalue)) {
+      return -EINVAL;
+   }
+
+   LOCK;
+   ret = key_for_existing_path(path, key, &is_dir);
+   if (ret == 0) {
+      NarfFuseMeta meta;
+      mode_t default_mode = is_dir ? (S_IFDIR | 0755) : (S_IFREG | 0644);
+
+      ret = read_metadata(key, default_mode, &meta, old_metadata);
+      if (ret == 0) {
+         bool found = find_custom_value(old_metadata, xkey, existing);
+
+         if ((flags & XATTR_CREATE) && found) {
+            ret = -EEXIST;
+         }
+         else if ((flags & XATTR_REPLACE) && !found) {
+            ret = -ENODATA;
+         }
+         else {
+            ret = set_custom_value(key, is_dir, xkey, xvalue, false);
+         }
+      }
+   }
+   UNLOCK;
+
+   return ret;
 }
 
 //! @brief FUSE getxattr callback.
 static int my_getxattr(const char *path, const char *name, char *value, size_t size) {
-   (void) path;
-   (void) name;
-   (void) value;
-   (void) size;
+   char key[NARF_SECTOR_SIZE];
+   char metadata[NARF_METADATA_SIZE];
+   char xvalue[NARF_METADATA_SIZE];
+   bool is_dir;
+   NarfFuseMeta meta;
+   const char *xkey;
+   size_t len;
+   int ret;
 
    if (!mounted) return -ENODEV;
 
-   return -ENOTSUP;
+   ret = split_user_xattr(name, &xkey);
+   if (ret != 0) {
+      return ret;
+   }
+
+   if (!strcmp(path, "/")) {
+      return -ENODATA;
+   }
+
+   LOCK;
+   ret = metadata_for_path(path, key, &is_dir, &meta, metadata);
+   UNLOCK;
+
+   if (ret != 0) {
+      return ret;
+   }
+
+   (void) key;
+   (void) is_dir;
+   (void) meta;
+
+   if (!find_custom_value(metadata, xkey, xvalue)) {
+      return -ENODATA;
+   }
+
+   len = strlen(xvalue);
+
+   if (size == 0) {
+      return (int) len;
+   }
+
+   if (size < len) {
+      return -ERANGE;
+   }
+
+   memcpy(value, xvalue, len);
+   return (int) len;
+}
+
+static int list_append_xattr(char *list, size_t size, size_t *used,
+      const char *key) {
+   size_t name_len = strlen(NARF_XATTR_PREFIX) + strlen(key) + 1;
+
+   if (list != NULL && size < *used + name_len) {
+      return -ERANGE;
+   }
+
+   if (list != NULL) {
+      snprintf(list + *used, size - *used, "%s%s", NARF_XATTR_PREFIX, key);
+   }
+
+   *used += name_len;
+   return 0;
 }
 
 //! @brief FUSE listxattr callback.
 static int my_listxattr(const char *path, char *list, size_t size) {
-   (void) path;
-   (void) list;
-   (void) size;
+   char key[NARF_SECTOR_SIZE];
+   char metadata[NARF_METADATA_SIZE];
+   char tmp[NARF_METADATA_SIZE];
+   bool is_dir;
+   NarfFuseMeta meta;
+   char *save = NULL;
+   char *token;
+   size_t used = 0;
+   int ret;
 
    if (!mounted) return -ENODEV;
 
-   return -ENOTSUP;
+   if (size == 0) {
+      list = NULL;
+   }
+
+   if (!strcmp(path, "/")) {
+      return 0;
+   }
+
+   LOCK;
+   ret = metadata_for_path(path, key, &is_dir, &meta, metadata);
+   UNLOCK;
+
+   if (ret != 0) {
+      return ret;
+   }
+
+   (void) key;
+   (void) is_dir;
+   (void) meta;
+
+   snprintf(tmp, sizeof(tmp), "%s", metadata);
+   token = strtok_r(tmp, " ", &save);
+
+   if (token == NULL || strcmp(token, NARF_META_VERSION)) {
+      return 0;
+   }
+
+   while ((token = strtok_r(NULL, " ", &save)) != NULL) {
+      char *eq = strchr(token, '=');
+      char *xkey;
+      char *xvalue;
+
+      if (eq == NULL) {
+         continue;
+      }
+
+      *eq = 0;
+      xkey = token;
+      xvalue = eq + 1;
+
+      if (reserved_meta_key(xkey) || !custom_meta_key_ok(xkey) ||
+            !custom_meta_value_ok(xvalue)) {
+         continue;
+      }
+
+      ret = list_append_xattr(list, size, &used, xkey);
+      if (ret != 0) {
+         return ret;
+      }
+   }
+
+   return (int) used;
 }
 
 //! @brief FUSE removexattr callback.
 static int my_removexattr(const char *path, const char *name) {
-   (void) path;
-   (void) name;
+   char key[NARF_SECTOR_SIZE];
+   char metadata[NARF_METADATA_SIZE];
+   char value[NARF_METADATA_SIZE];
+   bool is_dir;
+   NarfFuseMeta meta;
+   const char *xkey;
+   int ret;
 
    if (!mounted) return -ENODEV;
+   if (!strcmp(path, "/")) return -ENODATA;
 
-   return -ENOTSUP;
+   ret = split_user_xattr(name, &xkey);
+   if (ret != 0) {
+      return ret;
+   }
+
+   LOCK;
+   ret = metadata_for_path(path, key, &is_dir, &meta, metadata);
+   if (ret == 0) {
+      if (!find_custom_value(metadata, xkey, value)) {
+         ret = -ENODATA;
+      }
+      else {
+         ret = set_custom_value(key, is_dir, xkey, NULL, true);
+      }
+   }
+   UNLOCK;
+
+   return ret;
 }
 
 // --- Filesystem lifecycle ---
@@ -896,6 +1820,7 @@ static void *my_init(struct fuse_conn_info *conn, struct fuse_config *cfg) {
    (void) cfg;
 
    // Called on mount
+   mount_time = now_sec();
    LOCK;
    if (partition == -1) {
       mounted = narf_init(0);

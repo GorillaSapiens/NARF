@@ -373,10 +373,15 @@ void process_cmd(char *buffer) {
    }
    else if (!strncmp(buffer, "tag ", 4)) {
       char key[256];
-      char data[32] = { 0 };
+      char data[NARF_METADATA_SIZE] = { 0 };
       bool result;
 
-      sscanf(buffer, "tag %s %s", key, data);
+      if (!parse_key_text(buffer, "tag", key, sizeof(key),
+               data, sizeof(data))) {
+         printf("tag: usage: tag <key> <metadata>\n");
+         return;
+      }
+
       printf("narf_set_metadata(%s,%s)=%s\n",
             key, data, tf[result ASSIGN narf_set_metadata(key, (uint8_t *)data)]);
    }

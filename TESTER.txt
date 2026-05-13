@@ -163,7 +163,14 @@ Print a hex/ASCII dump of a key's payload.
 
 ### `tag <key> <text>`
 
-Store a short metadata string in the key's metadata area.
+Store a metadata string in the key's metadata area.  Quote the text when it
+contains spaces.
+
+Example:
+
+```
+tag foo "v1 uid=1000 gid=1000 mode=100644 mtime=1778706214 bs=4K"
+```
 
 ### `scan <key>`
 

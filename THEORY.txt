@@ -222,9 +222,11 @@ This is convenience code, not a general-purpose partition manager.
 Limitations
 -----------
 
-NARF is intentionally small.  It is not thread-safe.  It has no permissions, no
-ownership, no timestamps, no journaling API exposed to callers, and no real
-directories.  It assumes the media layer handles bad blocks and wear leveling,
+NARF is intentionally small.  It is not thread-safe.  The core stores a 128-byte
+metadata area per data node but does not enforce permissions, ownership, or
+timestamps by itself; the FUSE front-end can interpret that area as compact
+Unix-ish metadata plus simple `user.*` xattrs.  The core has no journaling API
+exposed to callers and no real directories.  It assumes the media layer handles bad blocks and wear leveling,
 which is a reasonable assumption for many modern microSD cards but may not be
 true for raw flash.
 

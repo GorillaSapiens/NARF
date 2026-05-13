@@ -202,8 +202,64 @@ You can reopen the image with tester to inspect it:
    EOF
 
 
-9. Troubleshooting
-------------------
+9. Unix-ish metadata and user xattrs
+------------------------------------
+
+The FUSE layer stores compact, human-readable metadata in each NARF node's
+`m_metadata` area.  The canonical form is:
+
+   v1 uid=1000 gid=1000 mode=100644 mtime=1778706214 bs=4K
+
+The FUSE driver understands these reserved fields:
+
+   uid       owner user ID
+   gid       owner group ID
+   mode      full octal Unix mode, such as 100644 or 040755
+   mtime     Unix epoch modification time, in seconds
+
+NARF does not store atime.  FUSE reports atime and ctime as the same value as
+mtime because that is good enough for this tiny filesystem and avoids a write on
+every read.
+
+Any other `key=value` token is exposed as a Linux `user.<key>` extended
+attribute.  For example this internal metadata token:
+
+   bs=4K
+
+appears on Linux as:
+
+   user.bs = 4K
+
+Example:
+
+   setfattr -n user.bs -v 4K mnt-narf/hello.txt
+   getfattr -d mnt-narf/hello.txt
+
+The FUSE driver does not expose the whole `m_metadata` string as an xattr.  It
+only exposes non-reserved custom tokens.  Unknown valid `key=value` tokens are
+ignored by stat/chmod/chown/utimens logic but preserved when those known fields
+are rewritten.
+
+If a new or changed `user.*` xattr would make the metadata string exceed
+`NARF_METADATA_SIZE` bytes including the terminating NUL, `setxattr` fails with
+`ENOSPC` and the old metadata is left unchanged.
+
+Only simple whitespace-free values can be represented in the current text form.
+This works well for values such as `4K`, `sha256.deadbeef`, or `tile-17`; it is
+not an arbitrary binary xattr store.  That is a feature, not a bug wearing a
+fake mustache.
+
+Rename preserves custom xattrs automatically because the same NARF node is
+renamed.  Copy preserves them only if the userspace copy tool asks for xattrs,
+for example:
+
+   cp -a source dest
+   cp --preserve=xattr source dest
+   rsync -X source dest
+
+
+10. Troubleshooting
+-------------------
 
 `pkg-config fuse3 --cflags --libs` fails during build:
 

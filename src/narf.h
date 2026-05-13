@@ -9,6 +9,8 @@
 typedef NARF_SECTOR_ADDRESS_TYPE NarfSector;
 typedef NARF_SIZE_TYPE NarfByteSize;
 
+#define NARF_METADATA_SIZE 128
+
 typedef struct {
    NarfSector total_sectors;
    NarfSector free_sectors;

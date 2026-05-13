@@ -104,7 +104,7 @@ typedef struct PACKED {
    NarfSector   m_start;
    NarfSector   m_length;
    NarfByteSize m_bytes;
-   uint8_t      m_metadata[128];
+   uint8_t      m_metadata[NARF_METADATA_SIZE];
 } DataPayload;
 
 typedef struct PACKED {
@@ -1627,7 +1627,7 @@ NarfByteSize narf_size(const char *key) {
 }
 
 void *narf_metadata(const char *key) {
-   static uint8_t metadata[128];
+   static uint8_t metadata[NARF_METADATA_SIZE];
    Node n;
    if (!verify()) return NULL;
    if (!valid_key(key)) return NULL;
