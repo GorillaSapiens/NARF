@@ -2282,6 +2282,45 @@ static uint64_t tree_right_pattern(uint64_t pattern, int indent) {
    return (pattern ^ (((uint64_t) 3) << indent)) & ~((uint64_t) 1);
 }
 
+//! @brief Return the visible length of a fixed-size metadata byte buffer.
+static size_t metadata_debug_len(const uint8_t metadata[NARF_METADATA_SIZE]) {
+   size_t len;
+
+   for (len = 0; len < NARF_METADATA_SIZE; len++) {
+      if (metadata[len] == 0) {
+         break;
+      }
+   }
+
+   return len;
+}
+
+//! @brief Print a fixed-size metadata byte buffer as an escaped string.
+static void print_debug_metadata(const uint8_t metadata[NARF_METADATA_SIZE]) {
+   size_t len = metadata_debug_len(metadata);
+   size_t i;
+
+   if (len == 0) {
+      return;
+   }
+
+   printf(" metadata=\"");
+   for (i = 0; i < len; i++) {
+      uint8_t c = metadata[i];
+
+      if (c == '\\' || c == '"') {
+         printf("\\%c", c);
+      }
+      else if (c >= 32 && c <= 126) {
+         putchar(c);
+      }
+      else {
+         printf("\\x%02x", c);
+      }
+   }
+   printf("\"");
+}
+
 //! @brief Print one formatted debug-tree node.
 static void print_tree_node(NarfRef ref, const Node *n, const char *label) {
    if (label[0] == 'I') {
@@ -2301,6 +2340,7 @@ static void print_tree_node(NarfRef ref, const Node *n, const char *label) {
       printf("'%s' [%08x:%08x] %s-> start:len=(%08x:%u) bytes=%u h=%u",
              n->m_key, ref.m_sector, ref.m_version, label,
              n->m_data.m_start, (unsigned)n->m_data.m_length, (unsigned)n->m_data.m_bytes, n->m_height);
+      print_debug_metadata(n->m_data.m_metadata);
    }
 }
 
