@@ -1652,16 +1652,31 @@ bool narf_write(const char *key, const void *data, NarfByteSize size, NarfByteSi
    }
 
    for (i = 0; i < new_length; i++) {
-      NarfByteSize base = (NarfByteSize) i * NARF_SECTOR_SIZE;
-      NarfByteSize sector_end = base + NARF_SECTOR_SIZE;
+      NarfByteSize base;
+      NarfByteSize sector_bytes = NARF_SECTOR_SIZE;
+      NarfByteSize sector_end;
+
+      if (i > ((NarfByteSize) -1) / NARF_SECTOR_SIZE) {
+         root = saved;
+         dirty_clear();
+         return false;
+      }
+
+      base = (NarfByteSize) i * NARF_SECTOR_SIZE;
+
+      if (((NarfByteSize) -1) - base < sector_bytes) {
+         sector_bytes = ((NarfByteSize) -1) - base;
+      }
+
+      sector_end = base + sector_bytes;
 
       memset(temp, 0, sizeof(temp));
 
       if (base < n.m_data.m_bytes && n.m_data.m_start != END && i < n.m_data.m_length) {
-         NarfByteSize old_n = NARF_SECTOR_SIZE;
+         NarfByteSize old_n = n.m_data.m_bytes - base;
 
-         if (sector_end > n.m_data.m_bytes) {
-            old_n = n.m_data.m_bytes - base;
+         if (old_n > sector_bytes) {
+            old_n = sector_bytes;
          }
 
          if (!narf_io_read(root.m_origin + n.m_data.m_start + i, oldbuf)) {
