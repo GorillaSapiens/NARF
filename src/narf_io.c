@@ -172,23 +172,37 @@ static bool sector_is_valid(uint32_t sector) {
 
 //! @see narf_io.h
 bool narf_io_write(uint32_t sector, void *data) {
-   if (!sector_is_valid(sector) || data == NULL) {
+   size_t offset;
+
+   if (data == NULL) {
       return false;
    }
-   if (NULL == memcpy(image + sector * SECTOR_SIZE, data, SECTOR_SIZE)) {
+
+   if (!sector_is_valid(sector)) {
       return false;
    }
+
+   offset = (size_t) sector * SECTOR_SIZE;
+
+   memcpy(image + offset, data, SECTOR_SIZE);
    return true;
 }
 
 //! @see narf_io.h
 bool narf_io_read(uint32_t sector, void *data) {
-   if (!sector_is_valid(sector) || data == NULL) {
+   size_t offset;
+
+   if (data == NULL) {
       return false;
    }
-   if (NULL == memcpy(data, image + sector * SECTOR_SIZE, SECTOR_SIZE)) {
+
+   if (!sector_is_valid(sector)) {
       return false;
    }
+
+   offset = (size_t) sector * SECTOR_SIZE;
+
+   memcpy(data, image + offset, SECTOR_SIZE);
    return true;
 }
 

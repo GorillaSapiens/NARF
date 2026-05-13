@@ -60,10 +60,29 @@ uint32_t narf_io_sectors(void) {
 //! @param data Pointer to 512 bytes of data to write
 //! @return true on success
 bool narf_io_write(uint32_t sector, void *data) {
-   off_t off = lseek(fd, sector * NARF_SECTOR_SIZE, SEEK_SET);
-   if (off == -1) { return false; }
-   ssize_t size = write(fd, data, NARF_SECTOR_SIZE);
-   if (size != NARF_SECTOR_SIZE) { return false; }
+   off_t offset;
+   ssize_t written;
+
+   if (data == NULL) {
+      return false;
+   }
+
+   if (sector >= narf_io_sectors()) {
+      return false;
+   }
+
+   offset = (off_t) sector * NARF_SECTOR_SIZE;
+
+   if (lseek(fd, offset, SEEK_SET) == (off_t) -1) {
+      return false;
+   }
+
+   written = write(fd, data, NARF_SECTOR_SIZE);
+
+   if (written != NARF_SECTOR_SIZE) {
+      return false;
+   }
+
    fsync(fd);
    return true;
 }
@@ -77,11 +96,29 @@ bool narf_io_write(uint32_t sector, void *data) {
 //! @param data Pointer to 512 bytes read buffer
 //! @return true on success
 bool narf_io_read(uint32_t sector, void *data) {
-   off_t off = lseek(fd, sector * NARF_SECTOR_SIZE, SEEK_SET);
-   if (off == -1) { return false; }
-   ssize_t size = read(fd, data, NARF_SECTOR_SIZE);
-   if (size != NARF_SECTOR_SIZE) { return false; }
-   fsync(fd);
+   off_t offset;
+   ssize_t bytes;
+
+   if (data == NULL) {
+      return false;
+   }
+
+   if (sector >= narf_io_sectors()) {
+      return false;
+   }
+
+   offset = (off_t) sector * NARF_SECTOR_SIZE;
+
+   if (lseek(fd, offset, SEEK_SET) == (off_t) -1) {
+      return false;
+   }
+
+   bytes = read(fd, data, NARF_SECTOR_SIZE);
+
+   if (bytes != NARF_SECTOR_SIZE) {
+      return false;
+   }
+
    return true;
 }
 
@@ -106,6 +143,8 @@ off_t parsesize(const char *arg) {
 }
 
 int create_open_file(void){
+   struct stat st;
+
    if (size >= 0) {
       // File must not exist
       if (access(target, F_OK) == 0) {
@@ -134,6 +173,20 @@ int create_open_file(void){
          perror("open existing");
          return 1;
       }
+
+      if (fstat(fd, &st) != 0) {
+         perror("fstat");
+         close(fd);
+         return 1;
+      }
+
+      if (st.st_size <= 0) {
+         fprintf(stderr, "Error: file '%s' has invalid size\n", target);
+         close(fd);
+         return 1;
+      }
+
+      size = st.st_size;
 
       printf("Opened existing '%s'\n", target);
    }
@@ -201,23 +254,29 @@ int main(int argc, char *argv[]) {
    printf("Format   : %s\n", format ? "yes" : "no");
    printf("Partition: %d\n", partition_number);
 
-   if (!create_open_file()) {
-      if (write_mbr) {
-         if (!narf_mbr(NULL)) fail("narf_mbr() fail");
+   if (create_open_file()) {
+      return 1;
+   }
+
+   if (write_mbr) {
+      if (!narf_mbr(NULL)) fail("narf_mbr() fail");
+   }
+
+   if (partition_number != -1) {
+      if (!narf_partition(partition_number)) fail("narf_partition() fail");
+
+      if (format) {
+         if (!narf_format(partition_number)) fail("narf_format() fail");
       }
-      if (partition_number != -1) {
-         if (!narf_partition(partition_number))   fail("narf_partition() fail");
-         if (format) {
-            if (!narf_format(partition_number))   fail("narf_format() fail");
-         }
-         if (!narf_mount(partition_number))   fail("narf_mount() fail");
+
+      if (!narf_mount(partition_number)) fail("narf_mount() fail");
+   }
+   else {
+      if (format) {
+         if (!narf_mkfs(0, size / NARF_SECTOR_SIZE)) fail("narf_mkfs() fail");
       }
-      else {
-         if (format) {
-            if (!narf_mkfs(0, size / NARF_SECTOR_SIZE))   fail("narf_mkfs() fail");
-         }
-         if (!narf_init(0))   fail("narf_init() fail");
-      }
+
+      if (!narf_init(0)) fail("narf_init() fail");
    }
 
    return 0;

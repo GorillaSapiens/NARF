@@ -80,10 +80,29 @@ uint32_t narf_io_sectors(void) {
 //! @param data Pointer to 512 bytes of data to write
 //! @return true on success
 bool narf_io_write(uint32_t sector, void *data) {
-   off_t off = lseek(fd, sector * NARF_SECTOR_SIZE, SEEK_SET);
-   if (off == -1) { return false; }
-   ssize_t size = write(fd, data, NARF_SECTOR_SIZE);
-   if (size != NARF_SECTOR_SIZE) { return false; }
+   off_t offset;
+   ssize_t written;
+
+   if (data == NULL) {
+      return false;
+   }
+
+   if (sector >= narf_io_sectors()) {
+      return false;
+   }
+
+   offset = (off_t) sector * NARF_SECTOR_SIZE;
+
+   if (lseek(fd, offset, SEEK_SET) == (off_t) -1) {
+      return false;
+   }
+
+   written = write(fd, data, NARF_SECTOR_SIZE);
+
+   if (written != NARF_SECTOR_SIZE) {
+      return false;
+   }
+
    fsync(fd);
    return true;
 }
@@ -97,13 +116,32 @@ bool narf_io_write(uint32_t sector, void *data) {
 //! @param data Pointer to 512 bytes read buffer
 //! @return true on success
 bool narf_io_read(uint32_t sector, void *data) {
-   off_t off = lseek(fd, sector * NARF_SECTOR_SIZE, SEEK_SET);
-   if (off == -1) { return false; }
-   ssize_t size = read(fd, data, NARF_SECTOR_SIZE);
-   if (size != NARF_SECTOR_SIZE) { return false; }
-   fsync(fd);
+   off_t offset;
+   ssize_t bytes;
+
+   if (data == NULL) {
+      return false;
+   }
+
+   if (sector >= narf_io_sectors()) {
+      return false;
+   }
+
+   offset = (off_t) sector * NARF_SECTOR_SIZE;
+
+   if (lseek(fd, offset, SEEK_SET) == (off_t) -1) {
+      return false;
+   }
+
+   bytes = read(fd, data, NARF_SECTOR_SIZE);
+
+   if (bytes != NARF_SECTOR_SIZE) {
+      return false;
+   }
+
    return true;
 }
+
 
 // --- File & directory metadata ---
 static int my_getattr(const char *path, struct stat *st, struct fuse_file_info *fi) {
