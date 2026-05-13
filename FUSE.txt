@@ -52,11 +52,15 @@ You can also build pieces directly:
 This creates a 16 MiB image named `narf.img`, formats the whole image as NARF,
 mounts it inside tester, creates a few sample keys, lists the root, and exits.
 
+Tester commands use NARF keys directly.  Do not put a leading `/` on those keys;
+`dir/readme.txt` is the stored key.  The FUSE mount still presents normal Unix
+paths such as `/dir/readme.txt` to applications.
+
    ./src/tester =16M,narf.img <<'EOF'
    mkfs
    init
-   create /hello.txt "hello from NARF\n"
-   create /dir/readme.txt "this file is inside a pseudo-directory\n"
+   create hello.txt "hello from NARF\n"
+   create dir/readme.txt "this file is inside a pseudo-directory\n"
    ls /
    ls /dir/
    quit
@@ -131,7 +135,7 @@ mounts partition 1 inside tester, and creates one file.
    partition 1
    format 1
    mount 1
-   create /hello.txt "hello from NARF partition 1\n"
+   create hello.txt "hello from NARF partition 1\n"
    ls /
    quit
    EOF
@@ -193,7 +197,7 @@ You can reopen the image with tester to inspect it:
    init
    ls /
    ls /newdir/
-   cat /newdir/renamed.txt
+   cat newdir/renamed.txt
    quit
    EOF
 

@@ -712,10 +712,26 @@ static int my_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
    if (!strcmp(path, "/")) {
       const char *entry = narf_dirfirst("", "/");
       while (entry != NULL) {
-         const char *slash = strchr(entry, '/');
-         if (slash == NULL) {
-            filler(buf, entry, NULL, 0, 0);
+         if (*entry) {
+            size_t entry_len = strlen(entry);
+
+            if (entry[entry_len - 1] == '/') {
+               char *dirname = strdup(entry);
+
+               if (dirname == NULL) {
+                  UNLOCK;
+                  return -ENOMEM;
+               }
+
+               dirname[entry_len - 1] = 0;
+               filler(buf, dirname, NULL, 0, 0);
+               free(dirname);
+            }
+            else {
+               filler(buf, entry, NULL, 0, 0);
+            }
          }
+
          entry = narf_dirnext("", "/", entry);
       }
    }
@@ -725,9 +741,18 @@ static int my_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
       while (entry != NULL) {
          const char *q = entry + strlen(p);
          if (*q) {
-            if (q[strlen(q) - 1] == '/') {
+            size_t q_len = strlen(q);
+
+            if (q[q_len - 1] == '/') {
                char *dirname = strdup(q);
-               dirname[strlen(dirname) - 1] = 0;
+
+               if (dirname == NULL) {
+                  free(p);
+                  UNLOCK;
+                  return -ENOMEM;
+               }
+
+               dirname[q_len - 1] = 0;
                filler(buf, dirname, NULL, 0, 0);
                free(dirname);
             }

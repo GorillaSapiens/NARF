@@ -30,16 +30,17 @@ The public API is key-based.  A caller does not hold raw filesystem node
 addresses.  Operations identify entries by string key:
 
 ```
-narf_alloc("/foo", 0);
-narf_append("/foo", data, size);
-narf_size("/foo");
-narf_free("/foo");
+narf_alloc("foo", 0);
+narf_append("foo", data, size);
+narf_size("foo");
+narf_free("foo");
 ```
 
 A key is a NUL-terminated C string.  NUL is not allowed inside the key.  The
 maximum key length is determined by the current on-disk node layout and is
 intentionally large, roughly hundreds of bytes.  Keys are ordered with
-`strcmp()`.
+`strcmp()`.  Path-like keys normally do not start with `/`; saving that byte in
+every key is more useful than pretending NARF has a real root directory.
 
 NARF does not have real directories.  It has keys.  Convenience functions such
 as `narf_dirfirst()` and `narf_dirnext()` interpret keys as path-like strings by
@@ -185,21 +186,25 @@ separator below that level.
 Example keys:
 
 ```
-/bar
-/biz
-/foo
-/groink/
-/groink/elephant
-/groink/zebra
-/zebra
+bar
+biz
+foo
+groink/
+groink/elephant
+groink/zebra
+zebra
 ```
 
-`narf_dirfirst("/", "/")` yields entries directly under `/`, such as `/bar`,
-`/biz`, `/foo`, `/groink/`, and `/zebra`.  It does not yield
-`/groink/elephant` or `/groink/zebra` at that level.
+`narf_dirfirst("", "/")` yields entries directly under the root, such as
+`bar`, `biz`, `foo`, `groink/`, and `zebra`.  `narf_dirfirst("/", "/")` is
+also accepted as a root-directory spelling, but the stored keys do not need a
+leading separator.  Neither spelling yields `groink/elephant` or
+`groink/zebra` at that level.
 
-`narf_dirfirst("/groink/", "/")` yields `/groink/`, `/groink/elephant`, and
-`/groink/zebra`.
+`narf_dirfirst("groink/", "/")` yields `groink/`, `groink/elephant`, and
+`groink/zebra`.  `narf_dirfirst("/groink/", "/")` is accepted as the same
+directory-prefix request without requiring the keys themselves to start with
+`/`.
 
 MBR support
 -----------

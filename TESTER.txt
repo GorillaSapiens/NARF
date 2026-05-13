@@ -103,7 +103,7 @@ zero-filled.
 Example:
 
 ```
-alloc /empty.bin 1024
+alloc empty.bin 1024
 ```
 
 ### `create <key> <string>`
@@ -115,8 +115,8 @@ accepted.  Inside quotes, the tester understands `\n`, `\r`, `\t`, `\\`, and
 Examples:
 
 ```
-create /hello.txt "hello from NARF"
-create /lines.txt "one\ntwo\n"
+create hello.txt "hello from NARF"
+create lines.txt "one\ntwo\n"
 ```
 
 ### `append <key> <string>`
@@ -127,7 +127,7 @@ escapes used by `create` are accepted.
 Example:
 
 ```
-append /hello.txt " plus more"
+append hello.txt " plus more"
 ```
 
 ### `realloc <key> <bytes>`
@@ -148,6 +148,7 @@ Delete a key and return its storage to the filesystem.
 
 List keys that appear directly under `dirname` using `/` as the separator.
 NARF has no real directories; this is prefix/separator traversal.
+Keys normally do not start with `/`; root can be listed as `/` as a convenience.
 
 Examples:
 
@@ -216,9 +217,9 @@ mbr
 partition 1
 format 1
 mount 1
-create /hello.txt "hello from NARF"
-append /hello.txt "\nmore text"
-cat /hello.txt
+create hello.txt "hello from NARF"
+append hello.txt "\nmore text"
+cat hello.txt
 ls /
 gremlins 1234 50
 debug

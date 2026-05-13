@@ -1279,13 +1279,24 @@ bool narf_find(const char *key) {
    return valid_key(key) && verify() && data_find_ref_rec(root.m_data_root, key, NULL, NULL);
 }
 
+static const char *dir_prefix(const char *dirname, const char *sep) {
+   size_t sep_len = strlen(sep);
+
+   if (sep_len != 0 && !strncmp(dirname, sep, sep_len)) {
+      return dirname + sep_len;
+   }
+
+   return dirname;
+}
+
 static bool dir_match(const char *key, const char *dirname, const char *sep) {
-   size_t dirname_len = strlen(dirname);
+   const char *prefix = dir_prefix(dirname, sep);
+   size_t prefix_len = strlen(prefix);
    size_t sep_len = strlen(sep);
    const char *p;
 
-   if (strncmp(dirname, key, dirname_len)) return false;
-   p = strstr(key + dirname_len, sep);
+   if (strncmp(prefix, key, prefix_len)) return false;
+   p = strstr(key + prefix_len, sep);
    return p == NULL || p[sep_len] == 0;
 }
 
