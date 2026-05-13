@@ -122,6 +122,7 @@ bool narf_io_open(void) {
    image = mmap(NULL, total_bytes, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
    if (image == MAP_FAILED) {
       perror("mmap");
+      close(fd);
       return false;
    }
 

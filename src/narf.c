@@ -492,7 +492,7 @@ bool narf_mount(int partition) {
 
    if (!narf_io_open()) return false;
 
-   if (!partition) return false;
+   if (partition <= 0 || partition > 4) return false;
 
    mbr = (MBR *) buffer;
    narf_io_read(0, buffer);
