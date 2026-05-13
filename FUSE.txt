@@ -169,6 +169,26 @@ Common options:
    -f      run in foreground
    -d      enable FUSE debug output; also implies foreground mode
    -s      single-threaded operation
+   -o allow_root
+           allow root to access this user-mounted FUSE filesystem
+   -o allow_other
+           allow all users to access this user-mounted FUSE filesystem
+
+A normal user-mounted FUSE filesystem is visible only to the mounting user.
+That means `sudo chown root:root mnt-narf/foo` can fail with `Permission
+denied` before the NARF driver ever receives the chown request.  Mount with
+`-o allow_root` when testing root-owned files:
+
+   ./fuse/narf_fuse narf.img mnt-narf -o allow_root
+
+Some distributions require this line in `/etc/fuse.conf` before non-root users
+may use `allow_root` or `allow_other`:
+
+   user_allow_other
+
+After mounting with `allow_root`, this should work:
+
+   sudo chown root:root mnt-narf/foo
 
 The driver already serializes access with a mutex because the NARF core is not
 thread-safe.  `-s` can still make debugging simpler.

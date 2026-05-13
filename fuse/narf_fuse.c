@@ -13,7 +13,6 @@
 #include <inttypes.h>
 #include <time.h>
 #include <sys/xattr.h>
-#include <grp.h>
 
 #include "narf_conf.h"
 #include "narf_io.h"
@@ -71,6 +70,25 @@ static time_t default_mtime(void) {
 static void meta_defaults(NarfFuseMeta *meta, mode_t mode) {
    meta->uid = getuid();
    meta->gid = getgid();
+   meta->mode = mode;
+   meta->mtime = default_mtime();
+}
+
+static void request_owner(uid_t *uid, gid_t *gid) {
+   struct fuse_context *ctx = fuse_get_context();
+
+   if (ctx != NULL) {
+      *uid = ctx->uid;
+      *gid = ctx->gid;
+      return;
+   }
+
+   *uid = getuid();
+   *gid = getgid();
+}
+
+static void meta_defaults_for_request(NarfFuseMeta *meta, mode_t mode) {
+   request_owner(&meta->uid, &meta->gid);
    meta->mode = mode;
    meta->mtime = default_mtime();
 }
@@ -351,7 +369,7 @@ static int init_metadata_for_key(const char *key, mode_t mode) {
    char metadata[NARF_METADATA_SIZE];
    int ret;
 
-   meta_defaults(&meta, mode);
+   meta_defaults_for_request(&meta, mode);
    meta.mtime = now_sec();
 
    ret = build_metadata(NULL, &meta, NULL, NULL, false, metadata);
@@ -497,56 +515,28 @@ static int set_custom_value(const char *key, bool is_dir, const char *xkey,
    return write_metadata_string(key, metadata);
 }
 
-static bool current_user_in_group(gid_t gid) {
-   int count;
-   gid_t *groups;
-   bool found = false;
-
-   if (gid == getgid()) {
-      return true;
-   }
-
-   count = getgroups(0, NULL);
-   if (count <= 0) {
-      return false;
-   }
-
-   groups = malloc((size_t) count * sizeof(*groups));
-   if (groups == NULL) {
-      return false;
-   }
-
-   if (getgroups(count, groups) == count) {
-      for (int i = 0; i < count; i++) {
-         if (groups[i] == gid) {
-            found = true;
-            break;
-         }
-      }
-   }
-
-   free(groups);
-   return found;
-}
-
 static int check_access_bits(const NarfFuseMeta *meta, int mask) {
+   uid_t uid;
+   gid_t gid;
    mode_t bits;
 
    if (mask == F_OK) {
       return 0;
    }
 
-   if (getuid() == 0) {
+   request_owner(&uid, &gid);
+
+   if (uid == 0) {
       if ((mask & X_OK) && !(meta->mode & 0111)) {
          return -EACCES;
       }
       return 0;
    }
 
-   if (getuid() == meta->uid) {
+   if (uid == meta->uid) {
       bits = (meta->mode >> 6) & 7;
    }
-   else if (current_user_in_group(meta->gid)) {
+   else if (gid == meta->gid) {
       bits = (meta->mode >> 3) & 7;
    }
    else {
