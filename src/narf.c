@@ -547,6 +547,46 @@ static bool verify(void) {
    return true;
 }
 
+///////////////////////////////////////////////////////
+//! @brief Verify we're working with a valid NAF
+//!
+//! @return true on success
+static bool valid_naf(NAF naf) {
+   if (!verify()) {
+      return false;
+   }
+
+   if (naf == END) {
+      return false;
+   }
+
+   if (root.m_total_sectors < 2) {
+      return false;
+   }
+
+   if (naf < root.m_top) {
+      return false;
+   }
+
+   /*
+    * read_buffer(naf) reads naf and naf + 1,
+    * so naf must not be the final sector.
+    */
+   if (naf > root.m_total_sectors - 2) {
+      return false;
+   }
+
+   /*
+    * NAF nodes are allocated in 2-sector pairs from the top.
+    * This catches sector addresses that land in the middle of a pair.
+    */
+   if ((naf & 1) != (root.m_total_sectors & 1)) {
+      return false;
+   }
+
+   return true;
+}
+
 #ifdef NARF_DEBUG
 
 #ifdef USE_UTF8_LINE_DRAWING
@@ -2022,7 +2062,7 @@ NAF narf_realloc(NAF naf, NarfByteSize bytes) {
    NarfSector new_length;
    NarfSector naf_length;
 
-   if (!verify() || naf == END || naf < root.m_top) return END;
+   if (!valid_naf(naf)) return END;
 
    narf_begin();
 
@@ -2134,11 +2174,7 @@ bool narf_free(NAF naf) {
    NAF prev, next;
    NAF repl;
 
-   if (!verify()) return false;
-
-   if (naf == END) {
-      return false;
-   }
+   if (!valid_naf(naf)) return false;
 
    narf_begin();
 
@@ -2682,7 +2718,7 @@ bool narf_defrag(void) {
 ///////////////////////////////////////////////////////
 //! @see narf.h
 const char *narf_key(NAF naf) {
-   if (!verify() || naf == END) return NULL;
+   if (!valid_naf(naf)) return NULL;
    read_buffer(naf);
    return node->m_key;
 }
@@ -2690,7 +2726,7 @@ const char *narf_key(NAF naf) {
 ///////////////////////////////////////////////////////
 //! @see narf.h
 NarfSector narf_sector(NAF naf) {
-   if (!verify() || naf == END) return END;
+   if (!valid_naf(naf)) return END;
    read_buffer(naf);
    return root.m_origin + node->m_start;
 }
@@ -2698,7 +2734,7 @@ NarfSector narf_sector(NAF naf) {
 ///////////////////////////////////////////////////////
 //! @see narf.h
 NarfByteSize narf_size(NAF naf) {
-   if (!verify() || naf == END) return 0;
+   if (!valid_naf(naf)) return 0;
    read_buffer(naf);
    return node->m_bytes;
 }
@@ -2713,7 +2749,7 @@ NAF narf_first(void) {
 ///////////////////////////////////////////////////////
 //! @see narf.h
 NAF narf_next(NAF naf) {
-   if (!verify() || naf == END) return END;
+   if (!valid_naf(naf)) return END;
    read_buffer(naf);
    return node->m_next;
 }
@@ -2728,7 +2764,7 @@ NAF narf_last(void) {
 ///////////////////////////////////////////////////////
 //! @see narf.h
 NAF narf_previous(NAF naf) {
-   if (!verify() || naf == END) return END;
+   if (!valid_naf(naf)) return END;
    read_buffer(naf);
    return node->m_prev;
 }
@@ -2736,7 +2772,7 @@ NAF narf_previous(NAF naf) {
 ///////////////////////////////////////////////////////
 //! @see narf.h
 void *narf_metadata(NAF naf) {
-   if (!verify() || naf == END) return NULL;
+   if (!valid_naf(naf)) return NULL;
    read_buffer(naf);
    return node->m_metadata;
 }
@@ -2744,7 +2780,7 @@ void *narf_metadata(NAF naf) {
 ///////////////////////////////////////////////////////
 //! @see narf.h
 bool narf_set_metadata(NAF naf, void *data) {
-   if (!verify() || naf == END) return false;
+   if (!valid_naf(naf)) return false;
 
    narf_begin();
 
@@ -2766,12 +2802,14 @@ bool narf_append(NAF naf, const void *data, NarfByteSize size) {
    NarfSector start;
    NarfSector current;
 
-   if (naf == END || naf < root.m_top) {
-      return false;
-   }
+   if (!valid_naf(naf)) return false;
 
    read_buffer(naf);
    og_bytes = node->m_bytes;
+
+   if (size > ((NarfByteSize) -1) - og_bytes) {
+      return false;
+   }
 
    naf = narf_realloc(naf, og_bytes + size);
 
