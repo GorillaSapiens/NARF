@@ -1725,9 +1725,440 @@ bool narf_append_key(const char *key, const void *data, NarfByteSize size) {
 }
 
 #ifdef NARF_USE_DEFRAG
+//! @brief Find the lowest-addressed real free payload extent.
+static bool defrag_lowest_free_rec(NarfRef ref, NarfRef *bestref, Node *bestnode) {
+   Node n;
+   bool found = false;
+
+   if (bestref == NULL || bestnode == NULL) return false;
+
+   if (ref_is_null(ref)) {
+      return false;
+   }
+
+   if (!read_node(ref, &n, NULL)) return false;
+
+   if (defrag_lowest_free_rec(n.m_left, bestref, bestnode)) {
+      found = true;
+   }
+
+   if (n.m_start != END && n.m_length != 0) {
+      if (!found || n.m_start < bestnode->m_start) {
+         *bestref = ref;
+         *bestnode = n;
+         found = true;
+      }
+   }
+
+   if (defrag_lowest_free_rec(n.m_right, bestref, bestnode)) {
+      found = true;
+   }
+
+   return found;
+}
+
+//! @brief Find a real free payload extent by starting sector.
+static bool defrag_find_free_start_rec(NarfRef ref, NarfSector start, NarfRef *found, Node *outnode) {
+   Node n;
+
+   if (ref_is_null(ref)) return false;
+   if (!read_node(ref, &n, NULL)) return false;
+
+   if (n.m_start == start && n.m_length != 0) {
+      if (found) *found = ref;
+      if (outnode) *outnode = n;
+      return true;
+   }
+
+   if (defrag_find_free_start_rec(n.m_left, start, found, outnode)) return true;
+   return defrag_find_free_start_rec(n.m_right, start, found, outnode);
+}
+
+//! @brief Find a data-tree entry by payload starting sector.
+static bool defrag_find_data_start_rec(NarfRef ref, NarfSector start, NarfRef *found, Node *outnode) {
+   Node n;
+
+   if (ref_is_null(ref)) return false;
+   if (!read_node(ref, &n, NULL)) return false;
+
+   if (n.m_start == start && n.m_length != 0) {
+      if (found) *found = ref;
+      if (outnode) *outnode = n;
+      return true;
+   }
+
+   if (defrag_find_data_start_rec(n.m_left, start, found, outnode)) return true;
+   return defrag_find_data_start_rec(n.m_right, start, found, outnode);
+}
+
+//! @brief Copy payload sectors from one extent to another.
+static bool defrag_copy_extent(NarfSector src, NarfSector dst, NarfSector length) {
+   uint8_t tmp[NARF_SECTOR_SIZE];
+   NarfSector i;
+
+   if (length == 0 || src == dst) return true;
+   if (src == END || dst == END) return false;
+   if (src > root.m_total_sectors || length > root.m_total_sectors - src) return false;
+   if (dst > root.m_total_sectors || length > root.m_total_sectors - dst) return false;
+
+   for (i = 0; i < length; i++) {
+      if (!narf_io_read(root.m_origin + src + i, tmp)) return false;
+      if (!narf_io_write(root.m_origin + dst + i, tmp)) return false;
+   }
+
+   return true;
+}
+
+//! @brief Update one data node after its payload extent has moved.
+static bool defrag_update_data_start(const char *key, NarfSector start) {
+   NarfRef newroot;
+   Node n;
+
+   if (!data_find_ref_rec(root.m_data_root, key, NULL, &n)) return false;
+   n.m_start = start;
+
+   if (!data_update_rec(root.m_data_root, key, &n, &newroot)) return false;
+   root.m_data_root = newroot;
+   return true;
+}
+
+//! @brief Carve unused tail sectors from overlong payload extents.
+static bool defrag_carve_rec(NarfRef ref, bool *changed) {
+   Root saved;
+   Node n;
+   NarfSector needed;
+   NarfSector free_start;
+   NarfSector free_length;
+   NarfRef newroot;
+
+   if (ref_is_null(ref)) return true;
+   if (changed == NULL) return false;
+   if (!read_node(ref, &n, NULL)) return false;
+
+   if (!defrag_carve_rec(n.m_left, changed)) return false;
+   if (*changed) return true;
+
+   needed = BYTES2SECTORS(n.m_bytes);
+   if (needed < n.m_length) {
+      saved = root;
+      dirty_clear();
+
+      if (needed == 0) {
+         free_start = n.m_start;
+         free_length = n.m_length;
+         n.m_start = END;
+         n.m_length = 0;
+      }
+      else {
+         free_start = n.m_start + needed;
+         free_length = n.m_length - needed;
+         n.m_length = needed;
+      }
+
+      if (free_length != 0 && !insert_free_extent(free_start, free_length)) {
+         root = saved;
+         dirty_clear();
+         return false;
+      }
+
+      if (!data_update_rec(root.m_data_root, n.m_key, &n, &newroot)) {
+         root = saved;
+         dirty_clear();
+         return false;
+      }
+      root.m_data_root = newroot;
+
+      if (!rebuild_indexes()) {
+         root = saved;
+         dirty_clear();
+         return false;
+      }
+
+      if (!commit_root()) {
+         root = saved;
+         dirty_clear();
+         return false;
+      }
+
+      *changed = true;
+      return true;
+   }
+
+   return defrag_carve_rec(n.m_right, changed);
+}
+
+//! @brief Run one carve pass over the data tree.
+static bool defrag_carve_once(bool *changed) {
+   if (changed == NULL) return false;
+   *changed = false;
+   return defrag_carve_rec(root.m_data_root, changed);
+}
+
+//! @brief Merge two adjacent free payload extents.
+static bool defrag_merge_free(NarfRef leftref, const Node *left, NarfRef rightref, const Node *right) {
+   Root saved = root;
+   NarfRef newroot;
+   NarfRef removed_ref;
+   Node removed;
+   NarfSector new_length;
+
+   if (left == NULL || right == NULL) return false;
+   if (left->m_start == END || right->m_start == END) return false;
+   if (left->m_start + left->m_length != right->m_start) return false;
+   if (right->m_length > ((NarfSector) -1) - left->m_length) return false;
+
+   dirty_clear();
+   new_length = left->m_length + right->m_length;
+
+   if (!free_delete_rec(root.m_free_root, left->m_length, left->m_start,
+                        leftref.m_sector, &newroot, &removed_ref, &removed)) {
+      root = saved;
+      dirty_clear();
+      return false;
+   }
+   root.m_free_root = newroot;
+
+   if (!free_delete_rec(root.m_free_root, right->m_length, right->m_start,
+                        rightref.m_sector, &newroot, &rightref, &removed)) {
+      root = saved;
+      dirty_clear();
+      return false;
+   }
+   root.m_free_root = newroot;
+
+   if (!insert_free_extent_with_ref(removed_ref, left->m_start, new_length)) {
+      root = saved;
+      dirty_clear();
+      return false;
+   }
+
+   if (!insert_free_extent_with_ref(rightref, END, 0)) {
+      root = saved;
+      dirty_clear();
+      return false;
+   }
+
+   if (!commit_root()) {
+      root = saved;
+      dirty_clear();
+      return false;
+   }
+
+   return true;
+}
+
+//! @brief Move an adjacent data extent into or beyond a free extent.
+static bool defrag_move_data_after_free(NarfRef freeref, const Node *free_node, NarfRef dataref, const Node *data_node) {
+   Root saved;
+   NarfRef newroot;
+   NarfRef removed_ref;
+   Node removed;
+   NarfSector old_start;
+   NarfSector old_length;
+   NarfSector new_start;
+   NarfSector new_free_start;
+   NarfSector new_free_length;
+
+   (void) dataref;
+
+   if (free_node == NULL || data_node == NULL) return false;
+   if (free_node->m_start == END || data_node->m_start == END) return false;
+   if (free_node->m_start + free_node->m_length != data_node->m_start) return false;
+
+   old_start = data_node->m_start;
+   old_length = data_node->m_length;
+
+   if (free_node->m_length >= old_length) {
+      new_start = free_node->m_start;
+      new_free_start = free_node->m_start + old_length;
+      new_free_length = free_node->m_length;
+   }
+   else {
+      if (root.m_bottom > root.m_top) return false;
+      if (old_length > root.m_top - root.m_bottom) return false;
+      new_start = root.m_bottom;
+      new_free_start = free_node->m_start;
+      new_free_length = free_node->m_length + old_length;
+      if (new_free_length < free_node->m_length) return false;
+   }
+
+   if (!defrag_copy_extent(old_start, new_start, old_length)) {
+      return false;
+   }
+
+   saved = root;
+   dirty_clear();
+
+   if (!free_delete_rec(root.m_free_root, free_node->m_length, free_node->m_start,
+                        freeref.m_sector, &newroot, &removed_ref, &removed)) {
+      root = saved;
+      dirty_clear();
+      return false;
+   }
+   root.m_free_root = newroot;
+
+   if (free_node->m_length < old_length) {
+      root.m_bottom += old_length;
+   }
+
+   if (!defrag_update_data_start(data_node->m_key, new_start)) {
+      root = saved;
+      dirty_clear();
+      return false;
+   }
+
+   if (!insert_free_extent_with_ref(removed_ref, new_free_start, new_free_length)) {
+      root = saved;
+      dirty_clear();
+      return false;
+   }
+
+   if (!rebuild_indexes()) {
+      root = saved;
+      dirty_clear();
+      return false;
+   }
+
+   if (!commit_root()) {
+      root = saved;
+      dirty_clear();
+      return false;
+   }
+
+   return true;
+}
+
+//! @brief Reclaim a free payload extent that sits at the current data high-water mark.
+static bool defrag_lower_bottom(NarfRef freeref, const Node *free_node) {
+   Root saved = root;
+   NarfRef newroot;
+   NarfRef removed_ref;
+   Node removed;
+
+   if (free_node == NULL) return false;
+   if (free_node->m_start == END) return false;
+   if (free_node->m_start + free_node->m_length != root.m_bottom) return false;
+
+   dirty_clear();
+
+   if (!free_delete_rec(root.m_free_root, free_node->m_length, free_node->m_start,
+                        freeref.m_sector, &newroot, &removed_ref, &removed)) {
+      root = saved;
+      dirty_clear();
+      return false;
+   }
+
+   root.m_free_root = newroot;
+   root.m_bottom = free_node->m_start;
+
+   if (!insert_free_extent_with_ref(removed_ref, END, 0)) {
+      root = saved;
+      dirty_clear();
+      return false;
+   }
+
+   if (!commit_root()) {
+      root = saved;
+      dirty_clear();
+      return false;
+   }
+
+   return true;
+}
+
+//! @brief Perform one power-loss-safe payload squish step.
+static bool defrag_squish_once(bool *changed) {
+   NarfRef freeref;
+   NarfRef adjref;
+   Node free_node;
+   Node adj;
+   NarfSector successor;
+
+   if (changed == NULL) return false;
+   *changed = false;
+
+   if (!defrag_lowest_free_rec(root.m_free_root, &freeref, &free_node)) {
+      return true;
+   }
+
+   successor = free_node.m_start + free_node.m_length;
+
+   if (defrag_find_free_start_rec(root.m_free_root, successor, &adjref, &adj)) {
+      if (!defrag_merge_free(freeref, &free_node, adjref, &adj)) return false;
+      *changed = true;
+      return true;
+   }
+
+   if (defrag_find_data_start_rec(root.m_data_root, successor, &adjref, &adj)) {
+      if (!defrag_move_data_after_free(freeref, &free_node, adjref, &adj)) return false;
+      *changed = true;
+      return true;
+   }
+
+   if (successor == root.m_bottom) {
+      if (!defrag_lower_bottom(freeref, &free_node)) return false;
+      *changed = true;
+      return true;
+   }
+
+   return false;
+}
+
+//! @brief Reclaim one zero-length metadata node from the top of the metadata area.
+static bool defrag_tidy_once(bool *changed) {
+   Root saved = root;
+   NarfRef newroot;
+   NarfRef removed_ref;
+   Node removed;
+
+   if (changed == NULL) return false;
+   *changed = false;
+
+   if (!valid_sector_pair(root.m_top)) {
+      return true;
+   }
+
+   dirty_clear();
+
+   if (!free_delete_rec(root.m_free_root, 0, END, root.m_top,
+                        &newroot, &removed_ref, &removed)) {
+      root = saved;
+      dirty_clear();
+      return true;
+   }
+
+   root.m_free_root = newroot;
+   root.m_top += 2;
+
+   if (!commit_root()) {
+      root = saved;
+      dirty_clear();
+      return false;
+   }
+
+   *changed = true;
+   return true;
+}
+
 //! @brief Defragment the filesystem when defrag support is enabled.
 bool narf_defrag(void) {
-   return verify();
+   bool changed;
+
+   if (!verify()) return false;
+
+   do {
+      if (!defrag_carve_once(&changed)) return false;
+   } while (changed);
+
+   do {
+      if (!defrag_squish_once(&changed)) return false;
+   } while (changed);
+
+   do {
+      if (!defrag_tidy_once(&changed)) return false;
+   } while (changed);
+
+   return true;
 }
 #endif
 

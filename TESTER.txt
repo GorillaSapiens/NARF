@@ -186,8 +186,11 @@ bytes.  This is mostly a stress-test helper.
 
 ### `defrag`
 
-Call `narf_defrag()`.  In current builds this may be a safe no-op depending on
-configuration.
+Call `narf_defrag()`.  When `NARF_USE_DEFRAG` is enabled, this compacts payload
+extents by moving data into lower free holes using small copy-on-write metadata
+commits.  It also merges adjacent free extents, lowers the data frontier when
+the highest payload extent becomes free, and reclaims zero-length metadata-free
+nodes from the top of the metadata area.
 
 ### `debug`
 

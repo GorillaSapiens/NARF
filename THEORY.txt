@@ -165,6 +165,22 @@ Metadata nodes are allocated from the high end of the filesystem in two-sector
 pairs.  File payload data grows upward from the low end.  The root tracks the
 current bottom/top frontier values.
 
+Defragmentation
+---------------
+
+`narf_defrag()` is optional behind `NARF_USE_DEFRAG`.  It works in small
+power-loss-safe steps rather than doing one giant in-place rewrite.  A step may
+merge adjacent free payload extents, move a file payload into a lower free hole,
+or temporarily move a payload to the current data frontier when the lower hole
+is too small.  Each step writes payload data before committing metadata.  The
+old committed root therefore remains usable if power is lost before the step's
+new root is written.
+
+When a free payload extent reaches the current data frontier, defrag lowers
+`root.m_bottom`, turning that space back into the implicit free area between
+payload data and metadata.  Defrag also reclaims zero-length metadata-free nodes
+that sit at `root.m_top`, raising the metadata frontier when possible.
+
 Directory-style traversal
 -------------------------
 
