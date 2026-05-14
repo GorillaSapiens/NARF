@@ -978,6 +978,55 @@ static bool free_delete_rec(NarfRef rootref, NarfSector length, NarfSector start
    return rebalance(rootref, out);
 }
 
+
+//! @brief Find a free-tree node whose payload starts at a specific sector.
+static bool free_find_start_rec(NarfRef ref, NarfSector start, NarfRef *found, FreePayload *outfree) {
+   NarfRef left;
+   NarfRef right;
+   FreePayload fp;
+
+   if (ref_is_null(ref)) return false;
+   if (!read_node(ref, &node_work0, NULL)) return false;
+
+   left = node_work0.m_left;
+   right = node_work0.m_right;
+   fp = node_work0.m_free;
+
+   if (fp.m_start == start) {
+      if (found) *found = ref;
+      if (outfree) *outfree = fp;
+      return true;
+   }
+
+   if (free_find_start_rec(left, start, found, outfree)) return true;
+   return free_find_start_rec(right, start, found, outfree);
+}
+
+//! @brief Find a free-tree node whose payload ends exactly at a specific sector.
+static bool free_find_end_rec(NarfRef ref, NarfSector end, NarfRef *found, FreePayload *outfree) {
+   NarfRef left;
+   NarfRef right;
+   FreePayload fp;
+
+   if (ref_is_null(ref)) return false;
+   if (!read_node(ref, &node_work0, NULL)) return false;
+
+   left = node_work0.m_left;
+   right = node_work0.m_right;
+   fp = node_work0.m_free;
+
+   if (fp.m_start != END && fp.m_length != 0 &&
+       fp.m_length <= ((NarfSector) -1) - fp.m_start &&
+       fp.m_start + fp.m_length == end) {
+      if (found) *found = ref;
+      if (outfree) *outfree = fp;
+      return true;
+   }
+
+   if (free_find_end_rec(left, end, found, outfree)) return true;
+   return free_find_end_rec(right, end, found, outfree);
+}
+
 //! @brief Find the smallest free extent that can satisfy an allocation.
 static bool free_best_rec(NarfRef ref, NarfSector need, NarfRef *bestref, Node *bestnode) {
    bool found = false;
@@ -1059,14 +1108,57 @@ static bool alloc_node_sector(NarfRef *ref) {
    return false;
 }
 
-//! @brief Insert an extent into the free tree, using a fresh node when needed.
+//! @brief Insert an extent into the free tree, coalescing adjacent free extents.
 static bool insert_free_extent_with_ref(NarfRef ref, NarfSector start, NarfSector length) {
    NarfRef seed = NULL_REF;
    NarfRef written;
    NarfRef newroot;
+   bool changed;
 
    if (length == 0) return true;
    if (start == END) return false;
+   if (length > ((NarfSector) -1) - start) return false;
+
+   /*
+    * The free tree is ordered by length for best-fit allocation, not by
+    * address.  That makes adjacency lookup a linear tree walk, but free-space
+    * insertion is already a metadata transaction and MCU RAM stays tiny.  This
+    * coalescing is what keeps append-style COW writes from turning old payloads
+    * into hundreds of adjacent-but-unusable fragments.
+    */
+   do {
+      NarfRef adjref;
+      NarfRef removed_ref;
+      FreePayload adj;
+
+      changed = false;
+
+      if (length <= ((NarfSector) -1) - start &&
+          free_find_start_rec(root.m_free_root, start + length, &adjref, &adj)) {
+         if (!free_delete_rec(root.m_free_root, adj.m_length, adj.m_start,
+                              adjref.m_sector, &newroot, &removed_ref, NULL)) {
+            return false;
+         }
+         root.m_free_root = newroot;
+         if (adj.m_length > ((NarfSector) -1) - length) return false;
+         length += adj.m_length;
+         (void) removed_ref;
+         changed = true;
+      }
+
+      if (free_find_end_rec(root.m_free_root, start, &adjref, &adj)) {
+         if (!free_delete_rec(root.m_free_root, adj.m_length, adj.m_start,
+                              adjref.m_sector, &newroot, &removed_ref, NULL)) {
+            return false;
+         }
+         root.m_free_root = newroot;
+         if (length > ((NarfSector) -1) - adj.m_length) return false;
+         start = adj.m_start;
+         length += adj.m_length;
+         (void) removed_ref;
+         changed = true;
+      }
+   } while (changed);
 
    if (ref.m_sector != END && ref.m_version == 0) {
       seed = ref;
@@ -1155,6 +1247,127 @@ static bool allocate_data_extent(NarfSector length, NarfSector *start) {
 
    *start = root.m_bottom;
    root.m_bottom += length;
+   return true;
+}
+
+
+//! @brief Allocate sectors immediately following an existing payload extent.
+static bool allocate_tail_extent(NarfSector start, NarfSector length) {
+   NarfRef freeref;
+   NarfRef newroot;
+   NarfRef removed_ref;
+   FreePayload free_node;
+
+   if (length == 0) return true;
+   if (start == END) return false;
+   if (length > ((NarfSector) -1) - start) return false;
+
+   if (start == root.m_bottom) {
+      if (length > root.m_top - root.m_bottom) return false;
+      if (!transaction_may_use_reserve &&
+          root.m_top - root.m_bottom - length < metadata_reserve()) return false;
+      root.m_bottom += length;
+      return true;
+   }
+
+   if (!free_find_start_rec(root.m_free_root, start, &freeref, &free_node)) {
+      return false;
+   }
+
+   if (free_node.m_length < length) return false;
+
+   if (!free_delete_rec(root.m_free_root, free_node.m_length, free_node.m_start,
+                        freeref.m_sector, &newroot, &removed_ref, NULL)) {
+      return false;
+   }
+
+   root.m_free_root = newroot;
+   (void) removed_ref;
+
+   if (free_node.m_length > length) {
+      if (!insert_free_extent(start + length, free_node.m_length - length)) {
+         return false;
+      }
+   }
+
+   return true;
+}
+
+//! @brief Try the safe append-at-EOF fast path without copying old payload sectors.
+static bool write_append_fast(const char *key, const uint8_t *src,
+                              NarfByteSize size, NarfByteSize old_bytes,
+                              NarfSector old_start, NarfSector old_length,
+                              NarfByteSize new_bytes) {
+   NarfSector new_length;
+   NarfSector extra;
+   NarfSector write_start;
+   NarfSector i;
+   NarfRef newroot;
+
+   if (old_bytes % NARF_SECTOR_SIZE != 0) return false;
+
+   new_length = BYTES2SECTORS(new_bytes);
+   if (new_length < old_length) return false;
+   extra = new_length - old_length;
+   if (extra == 0) return false;
+
+   if (old_length == 0) {
+      if (!allocate_data_extent(new_length, &write_start)) return false;
+      extra = new_length;
+   }
+   else {
+      if (old_start == END) return false;
+      if (old_length > ((NarfSector) -1) - old_start) return false;
+      write_start = old_start + old_length;
+      if (!allocate_tail_extent(write_start, extra)) return false;
+   }
+
+   for (i = 0; i < extra; i++) {
+      NarfByteSize base;
+      NarfByteSize copied = 0;
+
+      if (i > ((NarfByteSize) -1) / NARF_SECTOR_SIZE) {
+         return false;
+      }
+
+      base = ((NarfByteSize) i) * NARF_SECTOR_SIZE;
+      memset(buffer, 0, sizeof(buffer));
+
+      if (base < size) {
+         copied = size - base;
+         if (copied > sizeof(buffer)) copied = sizeof(buffer);
+         if (src != NULL) {
+            memcpy(buffer, src + base, copied);
+         }
+      }
+
+      if (src == NULL && copied != 0) {
+         memset(buffer, 0, copied);
+      }
+
+      if (!narf_io_write(root.m_origin + write_start + i, buffer)) {
+         return false;
+      }
+   }
+
+   if (!data_find_ref_rec(root.m_data_root, key, NULL, &node_work1)) {
+      return false;
+   }
+
+   if (old_length == 0) {
+      node_work1.m_data.m_start = new_length ? write_start : END;
+   }
+   else {
+      node_work1.m_data.m_start = old_start;
+   }
+   node_work1.m_data.m_length = new_length;
+   node_work1.m_data.m_bytes = new_bytes;
+
+   if (!data_update_rec(root.m_data_root, key, &node_work1, &newroot)) {
+      return false;
+   }
+
+   root.m_data_root = newroot;
    return true;
 }
 
@@ -2304,6 +2517,20 @@ bool narf_write(const char *key, const void *data, NarfByteSize size, NarfByteSi
    }
 
    transaction_begin();
+
+   if (offset == old_bytes && new_bytes > old_bytes) {
+      if (write_append_fast(key, src, size, old_bytes, old_start, old_length, new_bytes)) {
+         if (!commit_user_transaction()) {
+            transaction_rollback();
+            return false;
+         }
+         return true;
+      }
+
+      transaction_rollback();
+      transaction_begin();
+   }
+
    new_length = BYTES2SECTORS(new_bytes);
 
    if (!allocate_data_extent(new_length, &new_start)) {

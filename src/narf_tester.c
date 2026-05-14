@@ -4,6 +4,9 @@
 
 #include <sys/types.h>
 #include <dirent.h>
+#include <errno.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include <linux/limits.h>
 
@@ -72,6 +75,11 @@ static void cmd_slurp(int argc, char **argv);
 static void cmd_tag(int argc, char **argv);
 
 static void do_pack(const char *dirname);
+static bool path_join(char *out, size_t out_size,
+      const char *left, const char *right);
+static bool narf_dir_key(char *out, size_t out_size, const char *parent,
+      const char *name);
+static bool pack_file(const char *host_path, const char *narf_key);
 static const TesterCommand *find_command(const char *name);
 static void print_help(void);
 static void print_usage(const char *name);
@@ -393,54 +401,165 @@ static int parse_size_arg(const char *text, NarfByteSize *value) {
    return 1;
 }
 
+//! @brief Join two host path components with exactly one slash.
+static bool path_join(char *out, size_t out_size,
+      const char *left, const char *right) {
+   size_t left_len;
+   const char *sep;
+   int len;
+
+   if (out == NULL || out_size == 0 || left == NULL || right == NULL) {
+      return false;
+   }
+
+   left_len = strlen(left);
+   sep = (left_len != 0 && left[left_len - 1] == '/') ? "" : "/";
+   len = snprintf(out, out_size, "%s%s%s", left, sep, right);
+
+   return len >= 0 && (size_t) len < out_size;
+}
+
+//! @brief Build a NARF directory key ending in one slash.
+static bool narf_dir_key(char *out, size_t out_size, const char *parent,
+      const char *name) {
+   int len;
+
+   if (out == NULL || out_size == 0 || parent == NULL || name == NULL) {
+      return false;
+   }
+
+   len = snprintf(out, out_size, "%s%s/", parent, name);
+   return len >= 0 && (size_t) len < out_size;
+}
+
+//! @brief Copy one host file into the mounted NARF image.
+static bool pack_file(const char *host_path, const char *narf_key) {
+   FILE *f;
+   char data[512];
+   size_t nread;
+   bool ok = true;
+
+   f = fopen(host_path, "rb");
+   if (f == NULL) {
+      fprintf(stderr, "pack: could not open '%s': %s\n",
+            host_path, strerror(errno));
+      return false;
+   }
+
+   if (narf_find(narf_key) && !narf_free(narf_key)) {
+      fprintf(stderr, "pack: could not replace existing '%s'\n", narf_key);
+      fclose(f);
+      return false;
+   }
+
+   if (!narf_alloc(narf_key, 0)) {
+      fprintf(stderr, "pack: could not create '%s'\n", narf_key);
+      fclose(f);
+      return false;
+   }
+
+   while ((nread = fread(data, 1, sizeof(data), f)) != 0) {
+      if (!narf_append(narf_key, data, (NarfByteSize) nread)) {
+         fprintf(stderr, "pack: append failed for '%s'\n", narf_key);
+         ok = false;
+         break;
+      }
+   }
+
+   if (ferror(f)) {
+      fprintf(stderr, "pack: read failed for '%s': %s\n",
+            host_path, strerror(errno));
+      ok = false;
+   }
+
+   fclose(f);
+   return ok;
+}
+
 //! @brief Recursively pack a host directory into the mounted NARF image.
-void do_pack_dive(const char *realpath, const char *path, DIR *dir) {
-   struct dirent *entry = readdir(dir);
+static bool do_pack_dive(const char *host_dir, const char *narf_dir, DIR *dir) {
+   struct dirent *entry;
+   bool ok = true;
 
-   printf("%s -> %s\n", realpath, path);
+   printf("%s -> %s\n", host_dir, narf_dir);
 
-   while(entry) {
-      if (entry->d_type == DT_DIR) {
-         if (strcmp(entry->d_name, ".") && strcmp(entry->d_name, "..")) {
-            char rbuf[PATH_MAX];
-            snprintf(rbuf, sizeof(rbuf), "%s%s/", realpath, entry->d_name);
-            char buf[PATH_MAX];
-            snprintf(buf, sizeof(buf), "%s%s/", path, entry->d_name);
-            narf_alloc(buf, 0);
-            DIR *dir2 = opendir(rbuf);
-            if (dir2) {
-               do_pack_dive(rbuf, buf, dir2);
-               closedir(dir2);
-            }
+   while ((entry = readdir(dir)) != NULL) {
+      char host_path[PATH_MAX];
+      char narf_key[PATH_MAX];
+      struct stat st;
+
+      if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) {
+         continue;
+      }
+
+      if (!path_join(host_path, sizeof(host_path), host_dir, entry->d_name)) {
+         fprintf(stderr, "pack: host path too long under '%s'\n", host_dir);
+         ok = false;
+         continue;
+      }
+
+      if (lstat(host_path, &st) != 0) {
+         fprintf(stderr, "pack: could not stat '%s': %s\n",
+               host_path, strerror(errno));
+         ok = false;
+         continue;
+      }
+
+      if (S_ISDIR(st.st_mode)) {
+         DIR *child;
+
+         if (!narf_dir_key(narf_key, sizeof(narf_key), narf_dir, entry->d_name)) {
+            fprintf(stderr, "pack: NARF path too long under '%s'\n", narf_dir);
+            ok = false;
+            continue;
+         }
+
+         if (!narf_find(narf_key) && !narf_alloc(narf_key, 0)) {
+            fprintf(stderr, "pack: could not create directory key '%s'\n", narf_key);
+            ok = false;
+            continue;
+         }
+
+         child = opendir(host_path);
+         if (child == NULL) {
+            fprintf(stderr, "pack: could not open directory '%s': %s\n",
+                  host_path, strerror(errno));
+            ok = false;
+            continue;
+         }
+
+         if (!do_pack_dive(host_path, narf_key, child)) {
+            ok = false;
+         }
+         closedir(child);
+      }
+      else if (S_ISREG(st.st_mode)) {
+         int len = snprintf(narf_key, sizeof(narf_key), "%s%s",
+               narf_dir, entry->d_name);
+
+         if (len < 0 || (size_t) len >= sizeof(narf_key)) {
+            fprintf(stderr, "pack: NARF path too long under '%s'\n", narf_dir);
+            ok = false;
+            continue;
+         }
+
+         if (!pack_file(host_path, narf_key)) {
+            ok = false;
          }
       }
       else {
-         char data[512];
-         char buf[PATH_MAX];
-         char rbuf[PATH_MAX];
-         size_t nread;
-         snprintf(buf, sizeof(buf), "%s%s", path, entry->d_name);
-         snprintf(rbuf, sizeof(rbuf), "%s%s", realpath, entry->d_name);
-         FILE *f = fopen(rbuf, "rb");
-         bool ok = narf_alloc(buf, 0);
-         if (ok && f) {
-            while ((nread = fread(data, 1, sizeof(data), f)) != 0) {
-               if (!narf_append(buf, data, (NarfByteSize) nread)) {
-                  break;
-               }
-            }
-         }
-         if (f) fclose(f);
+         fprintf(stderr, "pack: skipping non-regular '%s'\n", host_path);
       }
-      entry = readdir(dir);
    }
+
+   return ok;
 }
 
 //! @brief Pack a host directory into the mounted NARF image.
 static void do_pack(const char *dirname) {
    DIR *dir = opendir(dirname);
    if (dir) {
-      do_pack_dive(dirname, "", dir);
+      (void) do_pack_dive(dirname, "", dir);
       closedir(dir);
    }
    else {
