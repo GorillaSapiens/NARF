@@ -2,7 +2,7 @@ CC     := gcc
 ERR    := -Wall -Wextra -Wpedantic -Werror
 CFLAGS := -MMD -MP -MF $(ERR) -g
 
-TSRC := tester.c narf_io.c narf.c
+TSRC := narf_tester.c narf_io.c narf.c
 TOBJ := $(TSRC:.c=.o)
 TDEP := $(TOBJ:.o=.d)
 
@@ -25,11 +25,12 @@ narf_fuse: $(FOBJ)
 narf_mkfs: $(MOBJ)
 	$(CC) $(MOBJ) -o $@
 
+# see comment in narf.c about bootloader.bin
 bootloader.bin: bootloader.asm
 	nasm -f bin bootloader.asm -o bootloader.bin
 
 clean:
-	rm -rf tester
+	rm -rf narf_tester narf_fuse narf_mkfs *.o *.d
 
 %.o: %.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@

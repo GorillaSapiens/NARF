@@ -1214,6 +1214,12 @@ static bool allocate_storage(NarfSector length, NarfRef *metaref, NarfSector *st
 }
 
 #ifdef NARF_MBR_UTILS
+// this comes from bootloader.bin, and includes
+// everything up to the string to print.
+// we didn't include tools to autogenerate it
+// because it's not really core NARF stuff, and
+// not everyone has "nasm" installed.
+// refer to the Makefile for building it.
 static const uint8_t boot_code_stub[] = {
    0xeb, 0x00, 0xb8, 0xc0, 0x07, 0x8e, 0xd8, 0x8e,
    0xc0, 0xbe, 0x21, 0x7c, 0xe8, 0x02, 0x00, 0xeb,
