@@ -17,7 +17,7 @@
 #endif
 
 #define SIGNATURE 0x4652414E
-#define VERSION 0x00000003
+#define VERSION 0x00000004
 #define END INVALID_NAF
 #define NARF_MIN_FS_SECTORS 4
 
@@ -108,7 +108,7 @@ typedef struct PACKED {
    NarfSector m_length;
 } FreePayload;
 
-#define NODE_USED (2 * sizeof(NarfRef) + 1 + sizeof(DataPayload) + 4 + 4)
+#define NODE_USED (2 * sizeof(NarfRef) + 1 + sizeof(DataPayload) + 4 + 4 + 4)
 
 typedef struct PACKED {
    NarfRef      m_left;
@@ -120,6 +120,7 @@ typedef struct PACKED {
       IndexRefs   m_index;
    };
    char         m_key[NARF_SECTOR_SIZE - NODE_USED];
+   uint32_t     m_root_version;
    uint32_t     m_node_version;
    uint32_t     m_checksum;
 } Node;
@@ -136,17 +137,7 @@ static int root_copy = 0;
 static char dir_key[KEYSIZE];
 static uint32_t lfsr_state = 1;
 
-typedef struct {
-   bool used;
-   NarfSector sector;
-   uint32_t version;
-   int copy;
-} DirtyNode;
-
-#define DIRTY_MAX 4096
-static DirtyNode dirty_nodes[DIRTY_MAX];
-static int dirty_count = 0;
-
+static uint32_t transaction_root_version(void);
 static void dirty_clear(void);
 
 //! @brief Compute a CRC-32, should ve zlib compatible
@@ -176,6 +167,17 @@ static bool read_node_copy_any(NarfSector sector, int which, Node *out);
 static bool version_after(uint32_t a, uint32_t b) {
    uint32_t diff = a - b;
    return diff != 0 && diff < 0x80000000u;
+}
+
+//! @brief Return the root version assigned to writes in the open transaction.
+static uint32_t transaction_root_version(void) {
+   uint32_t v = root.m_root_version + 1;
+
+   if (v == 0) {
+      v = 1;
+   }
+
+   return v;
 }
 
 //! @brief Advance the persisted 32-bit LFSR and return the next token.
@@ -296,7 +298,7 @@ static bool read_root_copy(NarfSector origin, int which, Root *out) {
 //! @brief Commit the current in-memory root as the newest root copy.
 static bool commit_root(void) {
    int dest = 1 - root_copy;
-   root.m_root_version = root.m_root_version + 1;
+   root.m_root_version = transaction_root_version();
    root.m_lfsr_seed = lfsr_next();
    root.m_checksum = 0;
    root.m_checksum = crc32(0, &root, NARF_SECTOR_SIZE - sizeof(uint32_t));
@@ -390,63 +392,59 @@ static bool read_node(NarfRef ref, Node *out, int *which) {
    return false;
 }
 
-//! @brief Find a node slot already dirtied by the current transaction.
-static int dirty_find(NarfSector sector) {
+//! @brief Read the transaction-dirty physical copy of a node sector.
+static bool read_dirty_node_copy(NarfSector sector, uint32_t txver, Node *out, int *which) {
    int i;
-   for (i = 0; i < dirty_count; i++) {
-      if (dirty_nodes[i].used && dirty_nodes[i].sector == sector) return i;
+   Node n;
+
+   if (out == NULL) return false;
+
+   for (i = 0; i < 2; i++) {
+      if (read_node_copy_any(sector, i, &n) && n.m_root_version == txver) {
+         *out = n;
+         if (which) *which = i;
+         return true;
+      }
    }
-   return -1;
+
+   return false;
 }
 
-//! @brief Record which node copy/version is dirty in the current transaction.
-static bool dirty_remember(NarfSector sector, uint32_t version, int copy) {
-   int i = dirty_find(sector);
-   if (i >= 0) {
-      dirty_nodes[i].version = version;
-      dirty_nodes[i].copy = copy;
-      return true;
-   }
-   if (dirty_count >= DIRTY_MAX) return false;
-   dirty_nodes[dirty_count].used = true;
-   dirty_nodes[dirty_count].sector = sector;
-   dirty_nodes[dirty_count].version = version;
-   dirty_nodes[dirty_count].copy = copy;
-   dirty_count++;
-   return true;
-}
-
-//! @brief Clear transaction-local dirty-node tracking.
+//! @brief Start a fresh transaction-local dirty state.
+//!
+//! Dirty nodes are self-identifying on disk: a node whose m_root_version equals
+//! transaction_root_version() is the dirty copy for the open transaction.  No
+//! RAM table is needed, but keeping this function preserves the existing
+//! transaction-boundary call sites.
 static void dirty_clear(void) {
-   dirty_count = 0;
 }
 
 static bool write_node(NarfRef oldref, Node *n, NarfRef *newref) {
    int oldcopy = 1;
    int dest;
+   uint32_t txver;
    uint32_t oldver = oldref.m_version;
    NarfSector sector = oldref.m_sector;
    Node tmp;
-   int dirty;
 
+   if (n == NULL || newref == NULL) return false;
    if (sector == END) return false;
 
-   dirty = dirty_find(sector);
-   if (dirty >= 0) {
-      dest = dirty_nodes[dirty].copy;
-      n->m_node_version = dirty_nodes[dirty].version;
+   txver = transaction_root_version();
+
+   if (read_dirty_node_copy(sector, txver, &tmp, &dest)) {
+      n->m_node_version = tmp.m_node_version;
+   }
+   else if (oldref.m_version != 0 && read_node(oldref, &tmp, &oldcopy)) {
+      dest = 1 - oldcopy;
+      n->m_node_version = new_node_version(oldver, sector);
    }
    else {
-      if (oldref.m_version != 0 && read_node(oldref, &tmp, &oldcopy)) {
-         dest = 1 - oldcopy;
-      }
-      else {
-         dest = 0;
-      }
-      n->m_node_version = new_node_version(oldver, sector);
-      if (!dirty_remember(sector, n->m_node_version, dest)) return false;
+      dest = 0;
+      n->m_node_version = new_node_version(0, sector);
    }
 
+   n->m_root_version = txver;
    n->m_checksum = 0;
    n->m_checksum = crc32(0, n, NARF_SECTOR_SIZE - sizeof(uint32_t));
 
