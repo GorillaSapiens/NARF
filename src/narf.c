@@ -16,7 +16,7 @@
    #define PACKED
 #endif
 
-#define SIGNATURE 0x4652414E
+#define SIGNATURE 0x4652414E // little endian 'NARF'
 #define VERSION 0x00000004
 #define END INVALID_NAF
 #define NARF_MIN_FS_SECTORS 4
@@ -46,6 +46,9 @@ typedef struct PACKED {
 } MBRPartitionEntry;
 static_assert(sizeof(MBRPartitionEntry) == 16, "MBRPartitionEntry wrong size");
 
+// See https://aeb.win.tue.nl/partitions/partition_types-1.html
+// there is no assigned numbers authority for MBR partition types
+// this one seemed to have the least claim, so we're squatting.
 #define NARF_PART_TYPE 0x6E
 
 typedef struct PACKED {
@@ -177,7 +180,6 @@ static char key_work[KEYSIZE];
 static uint32_t lfsr_state = 1;
 
 static uint32_t transaction_root_version(void);
-static void dirty_clear(void);
 static void transaction_begin(void);
 static void transaction_rollback(void);
 
@@ -388,7 +390,6 @@ static bool commit_root(void) {
    root_tmp.m_checksum = crc32(0, &root_tmp, NARF_SECTOR_SIZE - sizeof(uint32_t));
    if (!narf_io_write(root.m_origin + (NarfSector) dest, &root_tmp)) return false;
    root_copy = dest;
-   dirty_clear();
    return true;
 }
 
@@ -486,27 +487,16 @@ static bool read_dirty_node_copy(NarfSector sector, uint32_t txver, Node *out, i
    return false;
 }
 
-//! @brief Start a fresh transaction-local dirty state.
-//!
-//! Dirty nodes are self-identifying on disk: a node whose m_root_version equals
-//! transaction_root_version() is the dirty copy for the open transaction.  No
-//! RAM table is needed, but keeping this function preserves the existing
-//! transaction-boundary call sites.
-static void dirty_clear(void) {
-}
-
 //! @brief Save the current mutable root state before starting a public transaction.
 static void transaction_begin(void) {
    saved_root.m_root = root;
    saved_root.m_lfsr_state = lfsr_state;
-   dirty_clear();
 }
 
 //! @brief Restore the root state saved by transaction_begin().
 static void transaction_rollback(void) {
    root = saved_root.m_root;
    lfsr_state = saved_root.m_lfsr_state;
-   dirty_clear();
 }
 
 static bool write_node(NarfRef oldref, Node *n, NarfRef *newref) {
