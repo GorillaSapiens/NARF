@@ -19,6 +19,17 @@ typedef struct {
    NarfByteSize max_key_bytes;
 } NarfStat;
 
+typedef struct {
+   NarfSector errors;
+   NarfSector data_nodes;
+   NarfSector free_nodes;
+   NarfSector meta_free_nodes;
+   NarfSector file_count;
+   NarfSector free_extents;
+   NarfSector payload_sectors;
+   NarfSector free_sectors;
+} NarfFsckReport;
+
 #define INVALID_NAF ((NarfSector) -1)
 
 #ifdef NARF_MBR_UTILS
@@ -70,6 +81,12 @@ bool narf_init(NarfSector start);
 //! @param stats Destination for statistics.
 //! @return true on success.
 bool narf_stat(NarfStat *stats);
+
+//! @brief Validate the mounted filesystem and return a small consistency report.
+//!
+//! @param report Optional destination for counters.
+//! @return true when no structural errors are found.
+bool narf_fsck(NarfFsckReport *report);
 
 //! @brief Check whether a key exists.
 //!

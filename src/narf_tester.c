@@ -54,6 +54,7 @@ static void cmd_exit(int argc, char **argv);
 static void cmd_findpart(int argc, char **argv);
 static void cmd_format(int argc, char **argv);
 static void cmd_free(int argc, char **argv);
+static void cmd_fsck(int argc, char **argv);
 static void cmd_gremlins(int argc, char **argv);
 static void cmd_help(int argc, char **argv);
 static void cmd_init(int argc, char **argv);
@@ -111,6 +112,9 @@ static const TesterCommand commands[] = {
    { "free", cmd_free,
       "free <key>\n"
       "Delete a key and return its storage to the filesystem." },
+   { "fsck", cmd_fsck,
+      "fsck\n"
+      "Validate NARF tree structure, counters, extents, and metadata-free accounting." },
    { "gremlins", cmd_gremlins,
       "gremlins <seed> <count>\n"
       "Run randomized tester operations. The seed makes a run reproducible." },
@@ -609,6 +613,29 @@ static void cmd_free(int argc, char **argv) {
 
    printf("narf_free_key(%s)=%s\n",
          argv[1], tf[result ASSIGN narf_free_key(argv[1])]);
+}
+
+
+static void cmd_fsck(int argc, char **argv) {
+   NarfFsckReport report;
+   bool result;
+   (void) argv;
+
+   if (argc != 1) {
+      print_usage("fsck");
+      return;
+   }
+
+   result = narf_fsck(&report);
+   printf("narf_fsck()=%s\n", tf[result]);
+   printf("  errors          = %u\n", (unsigned) report.errors);
+   printf("  files           = %u\n", (unsigned) report.file_count);
+   printf("  data_nodes      = %u\n", (unsigned) report.data_nodes);
+   printf("  free_nodes      = %u\n", (unsigned) report.free_nodes);
+   printf("  meta_free_nodes = %u\n", (unsigned) report.meta_free_nodes);
+   printf("  free_extents    = %u\n", (unsigned) report.free_extents);
+   printf("  payload_sectors = %u\n", (unsigned) report.payload_sectors);
+   printf("  free_sectors    = %u\n", (unsigned) report.free_sectors);
 }
 
 static void cmd_gremlins(int argc, char **argv) {

@@ -23,6 +23,7 @@
 #define NARF_MAX_AVL_DEPTH 96
 #define META_FREE_SIGNATURE 0x46524D4E /* little endian 'NMRF' */
 #define META_RETIRED_MAX (NARF_MAX_AVL_DEPTH * 4)
+#define META_FREE_INLINE_MAX 64
 
 // Uncomment for unicode line drawing characters in debug functions
 #define USE_UTF8_LINE_DRAWING
@@ -67,6 +68,8 @@ typedef struct {
    NarfRef      m_data_root;
    NarfRef      m_free_root;
    NarfSector   m_meta_free_head;
+   NarfSector   m_meta_free_count;
+   NarfSector   m_meta_free_inline[META_FREE_INLINE_MAX];
    NarfSector   m_count;
    NarfSector   m_bottom;
    NarfSector   m_top;
@@ -77,7 +80,7 @@ typedef struct {
 
 // Bytes occupied by Root fields other than m_reserved. Keep this next to Root.
 #define ROOT_PREFIX_BYTES (4 + 4 + sizeof(NarfByteSize) + sizeof(NarfSector) + \
-                           2 * sizeof(NarfRef) + 5 * sizeof(NarfSector) + \
+                           2 * sizeof(NarfRef) + (5 + 1 + META_FREE_INLINE_MAX) * sizeof(NarfSector) + \
                            4 + 4)
 #define ROOT_RESERVED_BYTES (NARF_SECTOR_SIZE - ROOT_PREFIX_BYTES - sizeof(uint32_t))
 
@@ -92,6 +95,8 @@ typedef struct PACKED {
    NarfRef      m_data_root;
    NarfRef      m_free_root;
    NarfSector   m_meta_free_head;
+   NarfSector   m_meta_free_count;
+   NarfSector   m_meta_free_inline[META_FREE_INLINE_MAX];
    NarfSector   m_count;
    NarfSector   m_bottom;
    NarfSector   m_top;
@@ -323,6 +328,8 @@ static void root_to_disk(Root *out) {
    out->m_data_root = root.m_data_root;
    out->m_free_root = root.m_free_root;
    out->m_meta_free_head = root.m_meta_free_head;
+   out->m_meta_free_count = root.m_meta_free_count;
+   memcpy(out->m_meta_free_inline, root.m_meta_free_inline, sizeof(out->m_meta_free_inline));
    out->m_count = root.m_count;
    out->m_bottom = root.m_bottom;
    out->m_top = root.m_top;
@@ -340,6 +347,11 @@ static void root_from_disk(const Root *in) {
    root.m_data_root = in->m_data_root;
    root.m_free_root = in->m_free_root;
    root.m_meta_free_head = in->m_meta_free_head;
+   root.m_meta_free_count = in->m_meta_free_count;
+   if (root.m_meta_free_count > META_FREE_INLINE_MAX) {
+      root.m_meta_free_count = 0;
+   }
+   memcpy(root.m_meta_free_inline, in->m_meta_free_inline, sizeof(root.m_meta_free_inline));
    root.m_count = in->m_count;
    root.m_bottom = in->m_bottom;
    root.m_top = in->m_top;
@@ -391,6 +403,10 @@ static bool init_root(NarfSector origin, NarfSector size) {
    root.m_data_root = NULL_REF;
    root.m_free_root = NULL_REF;
    root.m_meta_free_head = END;
+   root.m_meta_free_count = 0;
+   for (unsigned i = 0; i < META_FREE_INLINE_MAX; i++) {
+      root.m_meta_free_inline[i] = END;
+   }
    root.m_count = 0;
    root.m_bottom = 2;
    root.m_top = size;
@@ -424,28 +440,6 @@ static uint32_t node_checksum(Node *n) {
    return ck;
 }
 
-//! @brief Compute the checksum for a metadata-free stack record.
-static uint32_t meta_free_checksum(MetaFree *m) {
-   uint32_t old = m->m_checksum;
-   uint32_t ck;
-
-   m->m_checksum = 0;
-   ck = crc32(0, m, NARF_SECTOR_SIZE - sizeof(uint32_t));
-   m->m_checksum = old;
-   return ck;
-}
-
-//! @brief Read one metadata-free stack record.
-static bool read_meta_free(NarfSector sector, MetaFree *out) {
-   if (out == NULL) return false;
-   if (!valid_node_sector(sector)) return false;
-   if (!narf_io_read(root.m_origin + sector, out)) return false;
-   if (out->m_signature != META_FREE_SIGNATURE) return false;
-   if (out->m_checksum != meta_free_checksum(out)) return false;
-   if (out->m_next != END && !valid_node_sector(out->m_next)) return false;
-   return true;
-}
-
 //! @brief Remember that a committed metadata node can be recycled after commit.
 static void retire_node_later(NarfRef ref) {
    if (!transaction_open) return;
@@ -464,44 +458,43 @@ static void retire_node_later(NarfRef ref) {
    }
 }
 
-//! @brief Pop one sector from the persistent metadata-free stack.
+//! @brief Pop one sector from the rollback-safe root-resident metadata-free stack.
 static bool pop_meta_free_sector(NarfRef *ref) {
-   NarfSector sector;
-
    if (ref == NULL) return false;
-   if (root.m_meta_free_head == END) return false;
 
-   sector = root.m_meta_free_head;
+   while (root.m_meta_free_count > 0) {
+      NarfSector sector = root.m_meta_free_inline[--root.m_meta_free_count];
+      root.m_meta_free_inline[root.m_meta_free_count] = END;
 
-   if (!read_meta_free(sector, &meta_free_tmp)) {
-      /*
-       * The stack is accounting, not truth.  If a power loss left the head
-       * unreadable, drop the stack instead of risking reuse of nonsense.
-       */
-      root.m_meta_free_head = END;
-      return false;
+      if (!valid_node_sector(sector)) {
+         continue;
+      }
+
+      ref->m_sector = sector;
+      ref->m_version = 0;
+      return true;
    }
 
-   root.m_meta_free_head = meta_free_tmp.m_next;
-   ref->m_sector = sector;
-   ref->m_version = 0;
-   return true;
+   root.m_meta_free_head = END;
+   return false;
 }
 
-//! @brief Write one sector as a metadata-free stack record.
+//! @brief Remember one retired metadata sector in the root-resident free stack.
 static bool push_meta_free_sector(NarfSector sector) {
-   if (!valid_node_sector(sector)) return false;
+   if (!valid_node_sector(sector)) return true;
 
-   memset(&meta_free_tmp, 0, sizeof(meta_free_tmp));
-   meta_free_tmp.m_signature = META_FREE_SIGNATURE;
-   meta_free_tmp.m_next = root.m_meta_free_head;
-   meta_free_tmp.m_root_version = root.m_root_version;
-   meta_free_tmp.m_checksum = 0;
-   meta_free_tmp.m_checksum = meta_free_checksum(&meta_free_tmp);
+   for (NarfSector i = 0; i < root.m_meta_free_count && i < META_FREE_INLINE_MAX; i++) {
+      if (root.m_meta_free_inline[i] == sector) {
+         return true;
+      }
+   }
 
-   if (!narf_io_write(root.m_origin + sector, &meta_free_tmp)) return false;
+   if (root.m_meta_free_count >= META_FREE_INLINE_MAX) {
+      return true;
+   }
 
-   root.m_meta_free_head = sector;
+   root.m_meta_free_inline[root.m_meta_free_count++] = sector;
+   root.m_meta_free_head = END;
    return true;
 }
 
@@ -1456,6 +1449,424 @@ bool narf_stat(NarfStat *stats) {
    stats->max_key_bytes = KEYSIZE - 1;
 
    return true;
+}
+
+
+typedef struct {
+   NarfFsckReport m_report;
+   char m_prev_key[KEYSIZE];
+   bool m_have_prev_key;
+   FreePayload m_prev_free;
+   NarfSector m_prev_free_sector;
+   bool m_have_prev_free;
+} FsckContext;
+
+static FsckContext fsck_ctx;
+
+//! @brief Record one fsck error without aborting the whole scan.
+static void fsck_error(void) {
+   if (fsck_ctx.m_report.errors != (NarfSector) -1) {
+      fsck_ctx.m_report.errors++;
+   }
+}
+
+//! @brief Return true when two non-empty extents overlap.
+static bool extents_overlap(NarfSector a_start, NarfSector a_len,
+                            NarfSector b_start, NarfSector b_len) {
+   NarfSector a_end;
+   NarfSector b_end;
+
+   if (a_len == 0 || b_len == 0) return false;
+   if (a_start == END || b_start == END) return false;
+   if (a_len > ((NarfSector) -1) - a_start) return true;
+   if (b_len > ((NarfSector) -1) - b_start) return true;
+
+   a_end = a_start + a_len;
+   b_end = b_start + b_len;
+   return a_start < b_end && b_start < a_end;
+}
+
+//! @brief Validate AVL shape, stored heights, and balance factors.
+static int fsck_tree_shape_rec(NarfRef ref, bool free_tree, unsigned depth) {
+   NarfRef left;
+   NarfRef right;
+   int lh;
+   int rh;
+   int expected;
+   uint8_t stored_height;
+
+   if (ref_is_null(ref)) return 0;
+
+   if (depth > NARF_MAX_AVL_DEPTH) {
+      fsck_error();
+      return 0;
+   }
+
+   if (!read_node(ref, &node_work0, NULL)) {
+      fsck_error();
+      return 0;
+   }
+
+   left = node_work0.m_left;
+   right = node_work0.m_right;
+   stored_height = node_work0.m_height;
+
+   if (free_tree) {
+      fsck_ctx.m_report.free_nodes++;
+   }
+   else {
+      fsck_ctx.m_report.data_nodes++;
+   }
+
+   lh = fsck_tree_shape_rec(left, free_tree, depth + 1);
+   rh = fsck_tree_shape_rec(right, free_tree, depth + 1);
+   expected = (lh > rh ? lh : rh) + 1;
+
+   if (stored_height != (uint8_t) expected) {
+      fsck_error();
+   }
+
+   if (lh - rh > 1 || rh - lh > 1) {
+      fsck_error();
+   }
+
+   return expected;
+}
+
+//! @brief Validate data-tree lexical order by in-order traversal.
+static void fsck_data_order_rec(NarfRef ref) {
+   NarfRef left;
+   NarfRef right;
+
+   if (ref_is_null(ref)) return;
+   if (!read_node(ref, &node_work0, NULL)) {
+      fsck_error();
+      return;
+   }
+
+   left = node_work0.m_left;
+   right = node_work0.m_right;
+
+   fsck_data_order_rec(left);
+
+   if (!read_node(ref, &node_work0, NULL)) {
+      fsck_error();
+      return;
+   }
+
+   if (fsck_ctx.m_have_prev_key && strcmp(fsck_ctx.m_prev_key, node_work0.m_key) >= 0) {
+      fsck_error();
+   }
+
+   strncpy(fsck_ctx.m_prev_key, node_work0.m_key, sizeof(fsck_ctx.m_prev_key));
+   fsck_ctx.m_prev_key[sizeof(fsck_ctx.m_prev_key) - 1] = 0;
+   fsck_ctx.m_have_prev_key = true;
+
+   fsck_data_order_rec(right);
+}
+
+//! @brief Validate free-tree ordering by in-order traversal.
+static void fsck_free_order_rec(NarfRef ref) {
+   NarfRef left;
+   NarfRef right;
+   FreePayload cur;
+
+   if (ref_is_null(ref)) return;
+   if (!read_node(ref, &node_work0, NULL)) {
+      fsck_error();
+      return;
+   }
+
+   left = node_work0.m_left;
+   right = node_work0.m_right;
+
+   fsck_free_order_rec(left);
+
+   if (!read_node(ref, &node_work0, NULL)) {
+      fsck_error();
+      return;
+   }
+
+   cur = node_work0.m_free;
+
+   if (cur.m_length == 0 || cur.m_start == END) {
+      fsck_error();
+   }
+   else {
+      fsck_ctx.m_report.free_extents++;
+      if (fsck_ctx.m_report.free_sectors <= ((NarfSector) -1) - cur.m_length) {
+         fsck_ctx.m_report.free_sectors += cur.m_length;
+      }
+      else {
+         fsck_error();
+      }
+   }
+
+   if (fsck_ctx.m_have_prev_free) {
+      int cmp = free_cmp_values(fsck_ctx.m_prev_free.m_length,
+                                fsck_ctx.m_prev_free.m_start,
+                                fsck_ctx.m_prev_free_sector,
+                                &node_work0, ref.m_sector);
+      if (cmp >= 0) {
+         fsck_error();
+      }
+   }
+
+   fsck_ctx.m_prev_free = cur;
+   fsck_ctx.m_prev_free_sector = ref.m_sector;
+   fsck_ctx.m_have_prev_free = true;
+
+   fsck_free_order_rec(right);
+}
+
+//! @brief Count matching metadata node sectors in a tree.
+static NarfSector fsck_count_node_sector_rec(NarfRef ref, NarfSector sector) {
+   NarfRef left;
+   NarfRef right;
+   NarfSector count = 0;
+
+   if (ref_is_null(ref)) return 0;
+   if (!read_node(ref, &node_work0, NULL)) {
+      fsck_error();
+      return 0;
+   }
+
+   left = node_work0.m_left;
+   right = node_work0.m_right;
+
+   if (ref.m_sector == sector) count++;
+   count += fsck_count_node_sector_rec(left, sector);
+   count += fsck_count_node_sector_rec(right, sector);
+   return count;
+}
+
+//! @brief Check whether one free extent overlaps a given payload extent.
+static void fsck_scan_free_overlap_rec(NarfRef ref, NarfSector start, NarfSector length) {
+   NarfRef left;
+   NarfRef right;
+   FreePayload fp;
+
+   if (ref_is_null(ref)) return;
+   if (!read_node(ref, &node_work0, NULL)) {
+      fsck_error();
+      return;
+   }
+
+   left = node_work0.m_left;
+   right = node_work0.m_right;
+   fp = node_work0.m_free;
+
+   if (extents_overlap(start, length, fp.m_start, fp.m_length)) {
+      fsck_error();
+   }
+
+   fsck_scan_free_overlap_rec(left, start, length);
+   fsck_scan_free_overlap_rec(right, start, length);
+}
+
+//! @brief Check whether one data extent overlaps another data extent.
+static void fsck_scan_data_overlap_rec(NarfRef ref, NarfRef self,
+                                       NarfSector start, NarfSector length) {
+   NarfRef left;
+   NarfRef right;
+   DataPayload dp;
+
+   if (ref_is_null(ref)) return;
+   if (!read_node(ref, &node_work0, NULL)) {
+      fsck_error();
+      return;
+   }
+
+   left = node_work0.m_left;
+   right = node_work0.m_right;
+   dp = node_work0.m_data;
+
+   if (ref.m_sector != self.m_sector &&
+       extents_overlap(start, length, dp.m_start, dp.m_length)) {
+      fsck_error();
+   }
+
+   fsck_scan_data_overlap_rec(left, self, start, length);
+   fsck_scan_data_overlap_rec(right, self, start, length);
+}
+
+//! @brief Check whether one free extent overlaps another free extent.
+static void fsck_scan_free_free_overlap_rec(NarfRef ref, NarfRef self,
+                                            NarfSector start, NarfSector length) {
+   NarfRef left;
+   NarfRef right;
+   FreePayload fp;
+
+   if (ref_is_null(ref)) return;
+   if (!read_node(ref, &node_work0, NULL)) {
+      fsck_error();
+      return;
+   }
+
+   left = node_work0.m_left;
+   right = node_work0.m_right;
+   fp = node_work0.m_free;
+
+   if (ref.m_sector != self.m_sector &&
+       extents_overlap(start, length, fp.m_start, fp.m_length)) {
+      fsck_error();
+   }
+
+   fsck_scan_free_free_overlap_rec(left, self, start, length);
+   fsck_scan_free_free_overlap_rec(right, self, start, length);
+}
+
+//! @brief Validate data payload ranges and cross-tree extent overlaps.
+static void fsck_data_extents_rec(NarfRef ref) {
+   NarfRef left;
+   NarfRef right;
+   DataPayload dp;
+   NarfSector needed;
+
+   if (ref_is_null(ref)) return;
+   if (!read_node(ref, &node_work0, NULL)) {
+      fsck_error();
+      return;
+   }
+
+   left = node_work0.m_left;
+   right = node_work0.m_right;
+   dp = node_work0.m_data;
+
+   if (dp.m_length == 0) {
+      if (dp.m_start != END || dp.m_bytes != 0) {
+         fsck_error();
+      }
+   }
+   else {
+      needed = BYTES2SECTORS(dp.m_bytes);
+      if (dp.m_start == END || dp.m_start < 2 || dp.m_start >= root.m_bottom ||
+          dp.m_length > root.m_bottom - dp.m_start || needed != dp.m_length) {
+         fsck_error();
+      }
+      else {
+         if (fsck_ctx.m_report.payload_sectors <= ((NarfSector) -1) - dp.m_length) {
+            fsck_ctx.m_report.payload_sectors += dp.m_length;
+         }
+         else {
+            fsck_error();
+         }
+         fsck_scan_free_overlap_rec(root.m_free_root, dp.m_start, dp.m_length);
+         fsck_scan_data_overlap_rec(root.m_data_root, ref, dp.m_start, dp.m_length);
+      }
+   }
+
+   fsck_data_extents_rec(left);
+   fsck_data_extents_rec(right);
+}
+
+//! @brief Validate free extent ranges and free-free overlaps.
+static void fsck_free_extents_rec(NarfRef ref) {
+   NarfRef left;
+   NarfRef right;
+   FreePayload fp;
+
+   if (ref_is_null(ref)) return;
+   if (!read_node(ref, &node_work0, NULL)) {
+      fsck_error();
+      return;
+   }
+
+   left = node_work0.m_left;
+   right = node_work0.m_right;
+   fp = node_work0.m_free;
+
+   if (fp.m_length == 0 || fp.m_start == END || fp.m_start < 2 ||
+       fp.m_start >= root.m_bottom || fp.m_length > root.m_bottom - fp.m_start) {
+      fsck_error();
+   }
+   else {
+      fsck_scan_free_free_overlap_rec(root.m_free_root, ref, fp.m_start, fp.m_length);
+   }
+
+   fsck_free_extents_rec(left);
+   fsck_free_extents_rec(right);
+}
+
+//! @brief Validate root-resident metadata-free stack entries.
+static void fsck_meta_free_stack(void) {
+   if (root.m_meta_free_count > META_FREE_INLINE_MAX) {
+      fsck_error();
+      return;
+   }
+
+   for (NarfSector i = 0; i < root.m_meta_free_count; i++) {
+      NarfSector sector = root.m_meta_free_inline[i];
+
+      fsck_ctx.m_report.meta_free_nodes++;
+
+      if (!valid_node_sector(sector)) {
+         fsck_error();
+         continue;
+      }
+
+      if (sector < root.m_top || sector >= root.m_total_sectors) {
+         fsck_error();
+      }
+
+      for (NarfSector j = i + 1; j < root.m_meta_free_count; j++) {
+         if (root.m_meta_free_inline[j] == sector) {
+            fsck_error();
+         }
+      }
+
+      if (fsck_count_node_sector_rec(root.m_data_root, sector) != 0 ||
+          fsck_count_node_sector_rec(root.m_free_root, sector) != 0) {
+         fsck_error();
+      }
+   }
+}
+
+//! @brief Validate the mounted filesystem and return a small consistency report.
+bool narf_fsck(NarfFsckReport *report) {
+   memset(&fsck_ctx, 0, sizeof(fsck_ctx));
+
+   if (!verify()) {
+      fsck_error();
+   }
+   else {
+      if (root.m_total_sectors < NARF_MIN_FS_SECTORS) fsck_error();
+      if (root.m_bottom < 2) fsck_error();
+      if (root.m_top > root.m_total_sectors) fsck_error();
+      if (root.m_bottom > root.m_top) fsck_error();
+      if (root.m_meta_free_head != END) fsck_error();
+      if (root.m_bottom <= root.m_top) {
+         fsck_ctx.m_report.free_sectors = root.m_top - root.m_bottom;
+      }
+
+      NarfSector shape_errors = fsck_ctx.m_report.errors;
+
+      (void) fsck_tree_shape_rec(root.m_data_root, false, 0);
+      (void) fsck_tree_shape_rec(root.m_free_root, true, 0);
+
+      if (fsck_ctx.m_report.errors == shape_errors) {
+         fsck_ctx.m_have_prev_key = false;
+         fsck_data_order_rec(root.m_data_root);
+
+         fsck_ctx.m_have_prev_free = false;
+         fsck_free_order_rec(root.m_free_root);
+
+         fsck_data_extents_rec(root.m_data_root);
+         fsck_free_extents_rec(root.m_free_root);
+         fsck_meta_free_stack();
+      }
+
+      fsck_ctx.m_report.file_count = root.m_count;
+      if (root.m_count != fsck_ctx.m_report.data_nodes) {
+         fsck_error();
+      }
+   }
+
+   if (report != NULL) {
+      *report = fsck_ctx.m_report;
+   }
+
+   return fsck_ctx.m_report.errors == 0;
 }
 
 //! @brief Return whether a key exists in the data tree.
@@ -2631,7 +3042,7 @@ void narf_debug(void) {
    printf("root.m_total_sectors = %08x\n", root.m_total_sectors);
    printf("root.m_data_root     = [%08x:%08x]\n", root.m_data_root.m_sector, root.m_data_root.m_version);
    printf("root.m_free_root     = [%08x:%08x]\n", root.m_free_root.m_sector, root.m_free_root.m_version);
-   printf("root.m_meta_free_head= %08x\n", root.m_meta_free_head);
+   printf("root.m_meta_free_head= %08x count=%u\n", root.m_meta_free_head, (unsigned)root.m_meta_free_count);
    printf("root.m_lfsr_seed     = %08x\n", root.m_lfsr_seed);
    printf("root.m_count         = %08x\n", root.m_count);
    printf("root.m_bottom        = %08x\n", root.m_bottom);
