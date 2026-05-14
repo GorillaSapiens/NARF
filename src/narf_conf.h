@@ -15,6 +15,14 @@
 // buffer in memory.
 #define NARF_SECTOR_SIZE 512
 
+// Minimum virgin metadata sectors kept aside for COW deletes/GC.
+// Normal allocations may not consume this reserve; recovery-style
+// transactions such as free/defrag may.  This prevents a full medium from
+// becoming unable to delete keys.
+#ifndef NARF_METADATA_RESERVE_SECTORS
+#define NARF_METADATA_RESERVE_SECTORS 32
+#endif
+
 // Type used to store sector addresses
 // should be one of uint8_t, uint16_t, uint32_t, or uint64_t
 #define NARF_SECTOR_ADDRESS_TYPE uint32_t

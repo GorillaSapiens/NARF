@@ -95,7 +95,7 @@ static const TesterCommand commands[] = {
       "Create a new key and initialize it with string data. Quote strings that contain spaces." },
    { "debug", cmd_debug,
       "debug\n"
-      "Print internal root/data-tree/free-tree/index-tree information." },
+      "Print internal root/data-tree/free-tree information." },
    { "defrag", cmd_defrag,
       "defrag\n"
       "Call narf_defrag() when defrag support is linked into the tester." },
