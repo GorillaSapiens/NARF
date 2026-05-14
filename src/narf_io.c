@@ -7,6 +7,7 @@
 #include <errno.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <ctype.h>
 
 #include "narf_io.h"
 
@@ -34,30 +35,35 @@ const char *strichr(const char *s, int c) {
 //!
 //! Used by outside
 void narf_io_configure(const char *file) {
-   char *p;
+   const char *p;
 
    filename = file;
    if (*file == '=') {
       p = strchr(file, ',');
       if (p) {
-         *p = 0;
          filename = p + 1;
+         p--;
+      }
+      else {
+         fprintf(stderr, "bad format for '=' filename: %s\n", file);
+         exit(-1);
       }
 
       total_bytes = atoi(file + 1);
-      printf("total_bytes = %ld\n", total_bytes);
 
-      if (strichr(file, 'k')) {
-         total_bytes <<= 10;
+      if (p) {
+         if (tolower(*p) == 'k') {
+            total_bytes <<= 10;
+         }
+         else if (tolower(*p) == 'm') {
+            total_bytes <<= 20;
+         }
+         else if (tolower(*p) == 'g') {
+            total_bytes <<= 30;
+         }
       }
-      else if (strichr(file, 'm')) {
-         total_bytes <<= 20;
-      }
-      else if (strichr(file, 'g')) {
-         total_bytes <<= 30;
-      }
-      printf("total_bytes = %ld\n", total_bytes);
 
+      printf("total_bytes = %ld\n", total_bytes);
    }
 }
 
