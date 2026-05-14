@@ -30,39 +30,16 @@
    #define static_assert(x,y)
 #endif
 
-///////////////////////////////////////////////////////
-//! @brief Classic MBR Partition Entry (16 bytes)
-typedef struct PACKED {
-   uint8_t  boot_indicator;
-   uint8_t  start_head;
-   uint8_t  start_sector;
-   uint8_t  start_cylinder;
-   uint8_t  partition_type;
-   uint8_t  end_head;
-   uint8_t  end_sector;
-   uint8_t  end_cylinder;
-   uint32_t start_lba;
-   uint32_t partition_size;
-} MBRPartitionEntry;
-static_assert(sizeof(MBRPartitionEntry) == 16, "MBRPartitionEntry wrong size");
-
-// See https://aeb.win.tue.nl/partitions/partition_types-1.html
-// there is no assigned numbers authority for MBR partition types
-// this one seemed to have the least claim, so we're squatting.
-#define NARF_PART_TYPE 0x6E
-
-typedef struct PACKED {
-   uint8_t boot_code[446];
-   MBRPartitionEntry partitions[4];
-   uint16_t signature;
-} MBR;
-static_assert(sizeof(MBR) == 512, "MBR wrong size");
-#define MBR_SIGNATURE 0xAA55
+#ifdef NARF_MBR_UTILS
+#include "narf_mbr.h"
+#endif
 
 typedef struct PACKED {
    NarfSector m_sector;
    uint32_t   m_version;
 } NarfRef;
+
+#define NULL_REF ((NarfRef){ END, 0 })
 
 typedef struct PACKED {
    NarfRef m_parent;
@@ -70,34 +47,17 @@ typedef struct PACKED {
    NarfRef m_next;
 } IndexRefs;
 
-#define NULL_REF ((NarfRef){ END, 0 })
-
-#define REF_BYTES (sizeof(NarfRef))
-#define ROOT_USED (4 + 4 + sizeof(NarfByteSize) + sizeof(NarfSector) + \
-                   3 * sizeof(NarfRef) + 4 * sizeof(NarfSector) + \
-                   4 + 4 + 4)
+typedef struct PACKED {
+   NarfSector   m_start;
+   NarfSector   m_length;
+   NarfByteSize m_bytes;
+   uint8_t      m_metadata[NARF_METADATA_SIZE];
+} DataPayload;
 
 typedef struct PACKED {
-   union {
-      uint32_t m_signature;
-      uint8_t  m_sigbytes[4];
-   };
-   uint32_t m_version;
-   NarfByteSize m_sector_size;
-   NarfSector   m_total_sectors;
-   NarfRef      m_data_root;
-   NarfRef      m_free_root;
-   NarfRef      m_index_root;
-   NarfSector   m_count;
-   NarfSector   m_bottom;
-   NarfSector   m_top;
-   NarfSector   m_origin;
-   uint32_t     m_root_version;
-   uint32_t     m_lfsr_seed;
-   uint8_t      m_reserved[NARF_SECTOR_SIZE - ROOT_USED];
-   uint32_t     m_checksum;
-} Root;
-static_assert(sizeof(Root) == NARF_SECTOR_SIZE, "Root wrong size");
+   NarfSector m_start;
+   NarfSector m_length;
+} FreePayload;
 
 typedef struct {
    union {
@@ -118,19 +78,37 @@ typedef struct {
    uint32_t     m_lfsr_seed;
 } RootState;
 
-typedef struct PACKED {
-   NarfSector   m_start;
-   NarfSector   m_length;
-   NarfByteSize m_bytes;
-   uint8_t      m_metadata[NARF_METADATA_SIZE];
-} DataPayload;
+// Bytes occupied by Root fields other than m_reserved. Keep this next to Root.
+#define ROOT_PREFIX_BYTES (4 + 4 + sizeof(NarfByteSize) + sizeof(NarfSector) + \
+                           3 * sizeof(NarfRef) + 4 * sizeof(NarfSector) + \
+                           4 + 4)
+#define ROOT_RESERVED_BYTES (NARF_SECTOR_SIZE - ROOT_PREFIX_BYTES - sizeof(uint32_t))
 
 typedef struct PACKED {
-   NarfSector m_start;
-   NarfSector m_length;
-} FreePayload;
+   union {
+      uint32_t m_signature;
+      uint8_t  m_sigbytes[4];
+   };
+   uint32_t     m_version;
+   NarfByteSize m_sector_size;
+   NarfSector   m_total_sectors;
+   NarfRef      m_data_root;
+   NarfRef      m_free_root;
+   NarfRef      m_index_root;
+   NarfSector   m_count;
+   NarfSector   m_bottom;
+   NarfSector   m_top;
+   NarfSector   m_origin;
+   uint32_t     m_root_version;
+   uint32_t     m_lfsr_seed;
+   uint8_t      m_reserved[ROOT_RESERVED_BYTES];
+   uint32_t     m_checksum;
+} Root;
+static_assert(sizeof(Root) == NARF_SECTOR_SIZE, "Root wrong size");
 
-#define NODE_USED (2 * sizeof(NarfRef) + 1 + sizeof(DataPayload) + 4 + 4 + 4)
+// Bytes occupied by Node fields other than m_key. Keep this next to Node.
+#define NODE_BYTES_EXCEPT_KEY (2 * sizeof(NarfRef) + 1 + sizeof(DataPayload) + \
+                               3 * sizeof(uint32_t))
 
 typedef struct PACKED {
    NarfRef      m_left;
@@ -141,7 +119,7 @@ typedef struct PACKED {
       FreePayload m_free;
       IndexRefs   m_index;
    };
-   char         m_key[NARF_SECTOR_SIZE - NODE_USED];
+   char         m_key[NARF_SECTOR_SIZE - NODE_BYTES_EXCEPT_KEY];
    uint32_t     m_root_version;
    uint32_t     m_node_version;
    uint32_t     m_checksum;
@@ -155,7 +133,6 @@ static_assert(sizeof(Node) == NARF_SECTOR_SIZE, "Node wrong size");
 
 typedef union {
    uint8_t bytes[NARF_SECTOR_SIZE];
-   MBR     mbr;
    Root    root;
    Node    node;
 } SectorScratch;
@@ -179,10 +156,6 @@ static char dir_key[KEYSIZE];
 static char key_work[KEYSIZE];
 static uint32_t lfsr_state = 1;
 
-static uint32_t transaction_root_version(void);
-static void transaction_begin(void);
-static void transaction_rollback(void);
-
 //! @brief Compute a CRC-32, should ve zlib compatible
 uint32_t crc32(uint32_t crc, const void *data, size_t length) {
    const uint8_t *p = data;
@@ -203,8 +176,6 @@ static bool ref_is_null(NarfRef ref) {
    return ref.m_sector == END || ref.m_version == 0;
 }
 
-static bool valid_sector_pair(NarfSector sector);
-static bool read_node_copy_any(NarfSector sector, int which, Node *out);
 
 //! @brief Compare 32-bit root versions using wraparound ordering.
 static bool version_after(uint32_t a, uint32_t b) {
@@ -221,6 +192,18 @@ static uint32_t transaction_root_version(void) {
    }
 
    return v;
+}
+
+//! @brief Save the current mutable root state before starting a public transaction.
+static void transaction_begin(void) {
+   saved_root.m_root = root;
+   saved_root.m_lfsr_state = lfsr_state;
+}
+
+//! @brief Restore the root state saved by transaction_begin().
+static void transaction_rollback(void) {
+   root = saved_root.m_root;
+   lfsr_state = saved_root.m_lfsr_state;
 }
 
 //! @brief Advance the persisted 32-bit LFSR and return the next token.
@@ -261,24 +244,6 @@ static uint32_t mkfs_lfsr_seed(NarfSector origin, NarfSector size) {
    }
 
    return seed;
-}
-
-//! @brief Choose a new node-copy version that does not collide with visible copies.
-static uint32_t new_node_version(uint32_t old, NarfSector sector) {
-   uint32_t v;
-   uint32_t c0 = 0;
-   uint32_t c1 = 0;
-
-   if (valid_sector_pair(sector)) {
-      if (read_node_copy_any(sector, 0, &node_tmp)) c0 = node_tmp.m_node_version;
-      if (read_node_copy_any(sector, 1, &node_tmp)) c1 = node_tmp.m_node_version;
-   }
-
-   do {
-      v = lfsr_next();
-   } while (v == 0 || v == old || v == c0 || v == c1);
-
-   return v;
 }
 
 //! @brief Validate that the mounted root looks like a current NARF root.
@@ -487,16 +452,22 @@ static bool read_dirty_node_copy(NarfSector sector, uint32_t txver, Node *out, i
    return false;
 }
 
-//! @brief Save the current mutable root state before starting a public transaction.
-static void transaction_begin(void) {
-   saved_root.m_root = root;
-   saved_root.m_lfsr_state = lfsr_state;
-}
+//! @brief Choose a new node-copy version that does not collide with visible copies.
+static uint32_t new_node_version(uint32_t old, NarfSector sector) {
+   uint32_t v;
+   uint32_t c0 = 0;
+   uint32_t c1 = 0;
 
-//! @brief Restore the root state saved by transaction_begin().
-static void transaction_rollback(void) {
-   root = saved_root.m_root;
-   lfsr_state = saved_root.m_lfsr_state;
+   if (valid_sector_pair(sector)) {
+      if (read_node_copy_any(sector, 0, &node_tmp)) c0 = node_tmp.m_node_version;
+      if (read_node_copy_any(sector, 1, &node_tmp)) c1 = node_tmp.m_node_version;
+   }
+
+   do {
+      v = lfsr_next();
+   } while (v == 0 || v == old || v == c0 || v == c1);
+
+   return v;
 }
 
 static bool write_node(NarfRef oldref, Node *n, NarfRef *newref) {
@@ -956,6 +927,32 @@ static bool free_best_rec(NarfRef ref, NarfSector need, NarfRef *bestref, Node *
    return found;
 }
 
+//! @brief Sum positive-length free extents in the free tree.
+static bool free_sector_count_rec(NarfRef ref, NarfSector *sectors) {
+   NarfRef left;
+   NarfRef right;
+   NarfSector free_start;
+   NarfSector free_length;
+
+   if (sectors == NULL) return false;
+   if (ref_is_null(ref)) return true;
+   if (!read_node(ref, &node_work0, NULL)) return false;
+
+   left = node_work0.m_left;
+   right = node_work0.m_right;
+   free_start = node_work0.m_free.m_start;
+   free_length = node_work0.m_free.m_length;
+
+   if (!free_sector_count_rec(left, sectors)) return false;
+
+   if (free_start != END && free_length != 0) {
+      if (*sectors > ((NarfSector) -1) - free_length) return false;
+      *sectors += free_length;
+   }
+
+   return free_sector_count_rec(right, sectors);
+}
+
 //! @brief Allocate a two-sector record node slot.
 static bool alloc_node_sector(NarfRef *ref) {
    NarfRef freeref;
@@ -1366,32 +1363,6 @@ bool narf_init(NarfSector start) {
    }
 
    return false;
-}
-
-//! @brief Sum positive-length free extents in the free tree.
-static bool free_sector_count_rec(NarfRef ref, NarfSector *sectors) {
-   NarfRef left;
-   NarfRef right;
-   NarfSector free_start;
-   NarfSector free_length;
-
-   if (sectors == NULL) return false;
-   if (ref_is_null(ref)) return true;
-   if (!read_node(ref, &node_work0, NULL)) return false;
-
-   left = node_work0.m_left;
-   right = node_work0.m_right;
-   free_start = node_work0.m_free.m_start;
-   free_length = node_work0.m_free.m_length;
-
-   if (!free_sector_count_rec(left, sectors)) return false;
-
-   if (free_start != END && free_length != 0) {
-      if (*sectors > ((NarfSector) -1) - free_length) return false;
-      *sectors += free_length;
-   }
-
-   return free_sector_count_rec(right, sectors);
 }
 
 //! @brief Return basic filesystem capacity and key-count statistics.
@@ -2230,7 +2201,7 @@ static bool defrag_merge_free(NarfRef leftref, const FreePayload *left, NarfRef 
 }
 
 //! @brief Move an adjacent data extent into or beyond a free extent.
-static bool defrag_move_data_after_free(NarfRef freeref, const FreePayload *free_node, NarfRef dataref, const DataPayload *data_node, const char *data_key) {
+static bool defrag_move_data_after_free(NarfRef freeref, const FreePayload *free_node, const DataPayload *data_node, const char *data_key) {
    NarfRef newroot;
    NarfRef removed_ref;
    NarfSector free_start;
@@ -2240,8 +2211,6 @@ static bool defrag_move_data_after_free(NarfRef freeref, const FreePayload *free
    NarfSector new_start;
    NarfSector new_free_start;
    NarfSector new_free_length;
-
-   (void) dataref;
 
    if (free_node == NULL || data_node == NULL || data_key == NULL) return false;
 
@@ -2370,7 +2339,7 @@ static bool defrag_squish_once(bool *changed) {
    }
 
    if (defrag_find_data_start_rec(root.m_data_root, successor, &adjref, &adj_data, key_work)) {
-      if (!defrag_move_data_after_free(freeref, &free_node, adjref, &adj_data, key_work)) return false;
+      if (!defrag_move_data_after_free(freeref, &free_node, &adj_data, key_work)) return false;
       *changed = true;
       return true;
    }
