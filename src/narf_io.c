@@ -123,6 +123,8 @@ bool narf_io_open(void) {
    if (image == MAP_FAILED) {
       perror("mmap");
       close(fd);
+      fd = -1;
+      image = NULL;
       return false;
    }
 
@@ -159,7 +161,7 @@ uint32_t narf_io_sectors(void) {
 
 //! sanity checking
 static bool sector_is_valid(uint32_t sector) {
-   if (image == NULL || image == MAP_FAILED) {
+   if (image == NULL) {
       return false;
    }
 
