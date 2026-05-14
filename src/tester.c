@@ -5,6 +5,8 @@
 #include <sys/types.h>
 #include <dirent.h>
 
+#include <linux/limits.h>
+
 #include "narf.h"
 #include "narf_io.h"
 
@@ -396,23 +398,25 @@ void do_pack_dive(const char *realpath, const char *path, DIR *dir) {
    while(entry) {
       if (entry->d_type == DT_DIR) {
          if (strcmp(entry->d_name, ".") && strcmp(entry->d_name, "..")) {
-            char rbuf[1024];
-            sprintf(rbuf, "%s%s/", realpath, entry->d_name);
-            char buf[1024];
-            sprintf(buf, "%s%s/", path, entry->d_name);
+            char rbuf[PATH_MAX];
+            snprintf(rbuf, sizeof(rbuf), "%s%s/", realpath, entry->d_name);
+            char buf[PATH_MAX];
+            snprintf(buf, sizeof(buf), "%s%s/", path, entry->d_name);
             narf_alloc(buf, 0);
             DIR *dir2 = opendir(rbuf);
-            do_pack_dive(rbuf, buf, dir2);
-            closedir(dir2);
+            if (dir2) {
+               do_pack_dive(rbuf, buf, dir2);
+               closedir(dir2);
+            }
          }
       }
       else {
          char data[512];
-         char buf[1024];
-         char rbuf[1024];
+         char buf[PATH_MAX];
+         char rbuf[PATH_MAX];
          size_t nread;
-         sprintf(buf, "%s%s", path, entry->d_name);
-         sprintf(rbuf, "%s%s", realpath, entry->d_name);
+         snprintf(buf, sizeof(buf), "%s%s", path, entry->d_name);
+         snprintf(rbuf, sizeof(rbuf), "%s%s", realpath, entry->d_name);
          FILE *f = fopen(rbuf, "rb");
          bool ok = narf_alloc(buf, 0);
          if (ok && f) {
