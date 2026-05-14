@@ -1,3 +1,5 @@
-tester
+narf_tester
+narf_fuse
+narf_mkfs
 *.o
 *.d
