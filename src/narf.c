@@ -1675,6 +1675,7 @@ typedef struct {
 } FsckContext;
 
 static FsckContext fsck_ctx;
+static bool fsck_deep_checks = false;
 
 //! @brief Record one fsck error without aborting the whole scan.
 static void fsck_error(void) {
@@ -1964,8 +1965,10 @@ static void fsck_data_extents_rec(NarfRef ref) {
          else {
             fsck_error();
          }
-         fsck_scan_free_overlap_rec(root.m_free_root, dp.m_start, dp.m_length);
-         fsck_scan_data_overlap_rec(root.m_data_root, ref, dp.m_start, dp.m_length);
+         if (fsck_deep_checks) {
+            fsck_scan_free_overlap_rec(root.m_free_root, dp.m_start, dp.m_length);
+            fsck_scan_data_overlap_rec(root.m_data_root, ref, dp.m_start, dp.m_length);
+         }
       }
    }
 
@@ -1994,7 +1997,9 @@ static void fsck_free_extents_rec(NarfRef ref) {
       fsck_error();
    }
    else {
-      fsck_scan_free_free_overlap_rec(root.m_free_root, ref, fp.m_start, fp.m_length);
+      if (fsck_deep_checks) {
+         fsck_scan_free_free_overlap_rec(root.m_free_root, ref, fp.m_start, fp.m_length);
+      }
    }
 
    fsck_free_extents_rec(left);
@@ -2036,8 +2041,9 @@ static void fsck_meta_free_stack(void) {
 }
 
 //! @brief Validate the mounted filesystem and return a small consistency report.
-bool narf_fsck(NarfFsckReport *report) {
+static bool narf_fsck_impl(NarfFsckReport *report, bool deep_checks) {
    memset(&fsck_ctx, 0, sizeof(fsck_ctx));
+   fsck_deep_checks = deep_checks;
 
    if (!verify()) {
       fsck_error();
@@ -2079,7 +2085,18 @@ bool narf_fsck(NarfFsckReport *report) {
       *report = fsck_ctx.m_report;
    }
 
+   fsck_deep_checks = false;
    return fsck_ctx.m_report.errors == 0;
+}
+
+//! @brief Validate the mounted filesystem without quadratic overlap scans.
+bool narf_fsck(NarfFsckReport *report) {
+   return narf_fsck_impl(report, false);
+}
+
+//! @brief Validate the mounted filesystem with full overlap scans.
+bool narf_fsck_deep(NarfFsckReport *report) {
+   return narf_fsck_impl(report, true);
 }
 
 //! @brief Return whether a key exists in the data tree.

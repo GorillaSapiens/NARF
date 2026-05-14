@@ -88,6 +88,12 @@ bool narf_stat(NarfStat *stats);
 //! @return true when no structural errors are found.
 bool narf_fsck(NarfFsckReport *report);
 
+//! @brief Validate the mounted filesystem with slow full overlap checks.
+//!
+//! @param report Optional destination for counters.
+//! @return true when no structural errors are found.
+bool narf_fsck_deep(NarfFsckReport *report);
+
 //! @brief Check whether a key exists.
 //!
 //! @param key NUL-terminated key string.

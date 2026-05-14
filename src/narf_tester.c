@@ -121,8 +121,8 @@ static const TesterCommand commands[] = {
       "free <key>\n"
       "Delete a key and return its storage to the filesystem." },
    { "fsck", cmd_fsck,
-      "fsck\n"
-      "Validate NARF tree structure, counters, extents, and metadata-free accounting." },
+      "fsck [deep]\n"
+      "Validate NARF structure. Default is fast; 'deep' also runs slow overlap scans." },
    { "gremlins", cmd_gremlins,
       "gremlins <seed> <count>\n"
       "Run randomized tester operations. The seed makes a run reproducible." },
@@ -738,15 +738,18 @@ static void cmd_free(int argc, char **argv) {
 static void cmd_fsck(int argc, char **argv) {
    NarfFsckReport report;
    bool result;
-   (void) argv;
+   bool deep = false;
 
-   if (argc != 1) {
+   if (argc == 2 && strcmp(argv[1], "deep") == 0) {
+      deep = true;
+   }
+   else if (argc != 1) {
       print_usage("fsck");
       return;
    }
 
-   result = narf_fsck(&report);
-   printf("narf_fsck()=%s\n", tf[result]);
+   result = deep ? narf_fsck_deep(&report) : narf_fsck(&report);
+   printf("%s()=%s\n", deep ? "narf_fsck_deep" : "narf_fsck", tf[result]);
    printf("  errors          = %u\n", (unsigned) report.errors);
    printf("  files           = %u\n", (unsigned) report.file_count);
    printf("  data_nodes      = %u\n", (unsigned) report.data_nodes);
