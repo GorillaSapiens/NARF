@@ -721,7 +721,7 @@ static bool data_insert_rec(NarfRef rootref, NarfRef itemref, const char *key, N
 }
 
 //! @brief Delete and return the smallest key in a data AVL subtree.
-static bool data_delete_min_rec(NarfRef rootref, NarfRef *out, NarfRef *minref, Node *minnode) {
+static bool data_delete_min_rec(NarfRef rootref, NarfRef *out, NarfRef *minref) {
    NarfRef left;
    NarfRef right;
    NarfRef child;
@@ -734,12 +734,11 @@ static bool data_delete_min_rec(NarfRef rootref, NarfRef *out, NarfRef *minref, 
 
    if (ref_is_null(left)) {
       if (minref) *minref = rootref;
-      if (minnode) *minnode = node_work0;
       *out = right;
       return true;
    }
 
-   if (!data_delete_min_rec(left, &child, minref, minnode)) return false;
+   if (!data_delete_min_rec(left, &child, minref)) return false;
    if (!read_node(rootref, &node_work0, NULL)) return false;
    node_work0.m_left = child;
    update_height(&node_work0);
@@ -786,10 +785,11 @@ static bool data_delete_rec(NarfRef rootref, const char *key, NarfRef *out, Narf
          *out = left;
          return true;
       }
-      if (!data_delete_min_rec(right, &child, &succref, &node_work1)) return false;
+      if (!data_delete_min_rec(right, &child, &succref)) return false;
       if (!read_node(rootref, &node_work0, NULL)) return false;
       *removed_ref = rootref;
       if (removed_data) *removed_data = node_work0.m_data;
+      if (!read_node(succref, &node_work1, NULL)) return false;
       node_work1.m_left = left;
       node_work1.m_right = child;
       update_height(&node_work1);
@@ -865,7 +865,7 @@ static bool free_insert_rec(NarfRef rootref, NarfRef itemref, NarfSector length,
 }
 
 //! @brief Delete and return the smallest node in a free AVL subtree.
-static bool free_delete_min_rec(NarfRef rootref, NarfRef *out, NarfRef *minref, Node *minnode) {
+static bool free_delete_min_rec(NarfRef rootref, NarfRef *out, NarfRef *minref) {
    NarfRef left;
    NarfRef right;
    NarfRef child;
@@ -878,12 +878,11 @@ static bool free_delete_min_rec(NarfRef rootref, NarfRef *out, NarfRef *minref, 
 
    if (ref_is_null(left)) {
       if (minref) *minref = rootref;
-      if (minnode) *minnode = node_work0;
       *out = right;
       return true;
    }
 
-   if (!free_delete_min_rec(left, &child, minref, minnode)) return false;
+   if (!free_delete_min_rec(left, &child, minref)) return false;
    if (!read_node(rootref, &node_work0, NULL)) return false;
    node_work0.m_left = child;
    update_height(&node_work0);
@@ -930,10 +929,11 @@ static bool free_delete_rec(NarfRef rootref, NarfSector length, NarfSector start
          *out = left;
          return true;
       }
-      if (!free_delete_min_rec(right, &child, &succref, &node_work1)) return false;
+      if (!free_delete_min_rec(right, &child, &succref)) return false;
       if (!read_node(rootref, &node_work0, NULL)) return false;
       *removed_ref = rootref;
       if (removed_free) *removed_free = node_work0.m_free;
+      if (!read_node(succref, &node_work1, NULL)) return false;
       node_work1.m_left = left;
       node_work1.m_right = child;
       update_height(&node_work1);
