@@ -63,8 +63,6 @@ void narf_io_configure(const char *file) {
 
 //! @see narf_io.h
 bool narf_io_open(void) {
-   char cmd[1024];
-
    // if we're already open, just return true
    if (fd != -1) {
       return true;
@@ -78,18 +76,19 @@ bool narf_io_open(void) {
          return false;
       }
 
-      // we use dd to create an empty file from /dev/zero
-      sprintf(cmd, "dd if=/dev/zero of=%s bs=%ld count=1",
-         filename, total_bytes);
-      printf("%s\n", cmd);
-      if (system(cmd)) {
-         if (errno) {
-            fprintf(stderr, "system %s\n", cmd);
-            perror("system:");
-         }
-         fprintf(stderr, "could not create '%s'\n", filename);
+      int tmpfd = open(filename, O_CREAT | O_EXCL | O_RDWR, 0644);
+      if (tmpfd < 0) {
+         perror("open");
          return false;
       }
+
+      if (ftruncate(tmpfd, total_bytes) != 0) {
+         perror("ftruncate");
+         close(tmpfd);
+         return false;
+      }
+
+      close(tmpfd);
    }
 
    errno = 0;
