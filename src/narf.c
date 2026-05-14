@@ -140,7 +140,7 @@ typedef struct PACKED {
 static_assert(sizeof(Node) == NARF_SECTOR_SIZE, "Node wrong size");
 
 #define BYTES2SECTORS(x) \
-   (((x) + NARF_SECTOR_SIZE - 1) / NARF_SECTOR_SIZE)
+   (((x) / NARF_SECTOR_SIZE) + (((x) % NARF_SECTOR_SIZE) != 0))
 #define KEYSIZE (sizeof(((Node *) 0)->m_key))
 
 typedef union {
