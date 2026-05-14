@@ -1,7 +1,7 @@
-NARF tester
+narf_tester
 ===========
 
-The tester is a small interactive command-line program for exercising NARF disk
+The `narf_tester` program is a small interactive command-line program for exercising NARF disk
 images.
 
 Building
@@ -13,26 +13,26 @@ From the `src` directory:
 make
 ```
 
-This builds `tester` or `tester.exe`, depending on the host environment and
+This builds `narf_tester` or `narf_tester.exe`, depending on the host environment and
 Makefile target naming.
 
 Invoking
 --------
 
 ```
-./tester <image>
-./tester =<size>,<image>
+./narf_tester <image>
+./narf_tester =<size>,<image>
 ```
 
 Examples:
 
 ```
-./tester test.img
-./tester =16M,test.img
-./tester =512K,tiny.img
+./narf_tester test.img
+./narf_tester =16M,test.img
+./narf_tester =512K,tiny.img
 ```
 
-If the argument starts with `=`, the tester's mmap I/O layer creates the image
+If the argument starts with `=`, the `narf_tester` mmap I/O layer creates the image
 when it does not already exist.  Size suffixes `K`, `M`, and `G` are accepted by
 the example I/O layer.
 
@@ -70,7 +70,7 @@ init
 Command parser notes
 --------------------
 
-Tester commands are registered in a table containing the command name, an
+`narf_tester` commands are registered in a table containing the command name, an
 `argc`/`argv` style handler function, and the help text used by `help` and
 `help <command>`.  Command names must match exactly; accidental prefix matches
 such as `debugger` no longer dispatch to `debug`.
@@ -91,7 +91,7 @@ Commands
 
 ### `help [command]`
 
-With no argument, print a compact command summary generated from the tester's
+With no argument, print a compact command summary generated from the `narf_tester`
 command table.  It uses the first line of each command's help text, wrapped
 across several `|`-separated entries per line.  With a command name, print that
 command's detailed help string.
@@ -104,7 +104,7 @@ help tag
 help gremlins
 ```
 
-Entering an empty line at the tester prompt is treated as an empty command:
+Entering an empty line at the `narf_tester` prompt is treated as an empty command:
 it prints `huh? Empty command.` followed by the compact help summary, then
 returns to the prompt.
 
@@ -151,7 +151,7 @@ alloc empty.bin 1024
 ### `create <key> <string>`
 
 Create a new key and initialize it with string data.  Quoted strings are
-accepted.  Inside quotes, the tester understands `\n`, `\r`, `\t`, `\\`, and
+accepted.  Inside quotes, `narf_tester` understands `\n`, `\r`, `\t`, `\\`, and
 `\"`.
 
 Examples:
@@ -249,7 +249,7 @@ be enabled in the build.
 
 ### `gremlins <seed> <count>`
 
-Run randomized tester operations.  The seed makes a run reproducible.  The count
+Run randomized `narf_tester` operations.  The seed makes a run reproducible.  The count
 controls how many random operations are executed.
 
 Example:

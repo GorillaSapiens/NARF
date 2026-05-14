@@ -2,7 +2,7 @@ NARF FUSE quick start
 =====================
 
 This document shows how to create a NARF filesystem image with the interactive
-`tester` program, mount it with the FUSE driver, and unmount it cleanly.
+`narf_tester` program, mount it with the FUSE driver, and unmount it cleanly.
 
 The commands below assume you are in the top-level NARF source directory.
 
@@ -24,7 +24,7 @@ Linux desktop this is already handled.  In containers, FUSE may not be available
 or mounting may be blocked by container policy.
 
 
-2. Build tester and the FUSE tools
+2. Build narf_tester and the FUSE tools
 ----------------------------------
 
 From the top-level source directory:
@@ -33,30 +33,28 @@ From the top-level source directory:
 
 Expected outputs:
 
-   src/tester
-   fuse/narf_fuse
-   fuse/narf_mkfs
+   src/narf_tester
+   src/narf_fuse
+   src/narf_mkfs
 
 You can also build pieces directly:
 
    cd src
    make
-   cd ../fuse
-   make
    cd ..
 
 
-3. Create a whole-image NARF filesystem with tester
+3. Create a whole-image NARF filesystem with narf_tester
 ---------------------------------------------------
 
 This creates a 16 MiB image named `narf.img`, formats the whole image as NARF,
-mounts it inside tester, creates a few sample keys, lists the root, and exits.
+mounts it inside narf_tester, creates a few sample keys, lists the root, and exits.
 
-Tester commands use NARF keys directly.  Do not put a leading `/` on those keys;
+`narf_tester` commands use NARF keys directly.  Do not put a leading `/` on those keys;
 `dir/readme.txt` is the stored key.  The FUSE mount still presents normal Unix
 paths such as `/dir/readme.txt` to applications.
 
-   ./src/tester =16M,narf.img <<'EOF'
+   ./src/narf_tester =16M,narf.img <<'EOF'
    mkfs
    init
    create hello.txt "hello from NARF\n"
@@ -66,13 +64,13 @@ paths such as `/dir/readme.txt` to applications.
    quit
    EOF
 
-The important tester commands for a whole-image filesystem are:
+The important narf_tester commands for a whole-image filesystem are:
 
    mkfs      format the whole image starting at sector 0
-   init      mount/initialize the whole-image filesystem inside tester
-   quit      close tester before using the image with FUSE
+   init      mount/initialize the whole-image filesystem inside narf_tester
+   quit      close narf_tester before using the image with FUSE
 
-Do not leave tester running while mounting the same image through FUSE.  NARF is
+Do not leave narf_tester running while mounting the same image through FUSE.  NARF is
 not designed for two independent writers at the same time.
 
 
@@ -85,7 +83,7 @@ Create a host mount point:
 
 Mount the image:
 
-   ./fuse/narf_fuse narf.img mnt-narf
+   ./src/narf_fuse narf.img mnt-narf
 
 Now use ordinary shell commands against the mounted tree:
 
@@ -95,7 +93,7 @@ Now use ordinary shell commands against the mounted tree:
 
 To keep the FUSE process in the foreground, add `-f` after the mount point:
 
-   ./fuse/narf_fuse narf.img mnt-narf -f
+   ./src/narf_fuse narf.img mnt-narf -f
 
 That is useful for debugging.  Open another terminal to inspect or unmount it.
 
@@ -123,14 +121,14 @@ The `-z` option is lazy unmount.  Use it only for cleanup, not as the normal
 happy path.
 
 
-6. Optional: create an MBR-partitioned image with tester
+6. Optional: create an MBR-partitioned image with narf_tester
 -------------------------------------------------------
 
 The FUSE driver can also mount a NARF partition from an image with an MBR.
 This creates a 16 MiB image, writes an MBR, creates partition 1, formats it,
-mounts partition 1 inside tester, and creates one file.
+mounts partition 1 inside narf_tester, and creates one file.
 
-   ./src/tester =16M,narf-part.img <<'EOF'
+   ./src/narf_tester =16M,narf-part.img <<'EOF'
    mbr
    partition 1
    format 1
@@ -143,12 +141,12 @@ mounts partition 1 inside tester, and creates one file.
 Mount partition 1 explicitly:
 
    mkdir -p mnt-narf
-   ./fuse/narf_fuse narf-part.img:1 mnt-narf
+   ./src/narf_fuse narf-part.img:1 mnt-narf
 
 Or ask the FUSE driver to auto-detect the first NARF partition by using a colon
 with no number:
 
-   ./fuse/narf_fuse narf-part.img: mnt-narf
+   ./src/narf_fuse narf-part.img: mnt-narf
 
 Unmount the same way:
 
@@ -160,9 +158,9 @@ Unmount the same way:
 
 Pass normal FUSE options after the mount point:
 
-   ./fuse/narf_fuse narf.img mnt-narf -f
-   ./fuse/narf_fuse narf.img mnt-narf -d
-   ./fuse/narf_fuse narf.img mnt-narf -f -d
+   ./src/narf_fuse narf.img mnt-narf -f
+   ./src/narf_fuse narf.img mnt-narf -d
+   ./src/narf_fuse narf.img mnt-narf -f -d
 
 Common options:
 
@@ -179,7 +177,7 @@ That means `sudo chown root:root mnt-narf/foo` can fail with `Permission
 denied` before the NARF driver ever receives the chown request.  Mount with
 `-o allow_root` when testing root-owned files:
 
-   ./fuse/narf_fuse narf.img mnt-narf -o allow_root
+   ./src/narf_fuse narf.img mnt-narf -o allow_root
 
 Some distributions require this line in `/etc/fuse.conf` before non-root users
 may use `allow_root` or `allow_other`:
@@ -211,9 +209,9 @@ Then unmount:
 
    fusermount3 -u mnt-narf
 
-You can reopen the image with tester to inspect it:
+You can reopen the image with narf_tester to inspect it:
 
-   ./src/tester narf.img <<'EOF'
+   ./src/narf_tester narf.img <<'EOF'
    init
    ls /
    ls /newdir/
@@ -285,9 +283,9 @@ for example:
 
    Install `pkg-config` and `libfuse3-dev`.
 
-`./fuse/narf_fuse: open existing: No such file or directory`:
+`./src/narf_fuse: open existing: No such file or directory`:
 
-   The image path is wrong.  Create the image with tester first or pass the
+   The image path is wrong.  Create the image with narf_tester first or pass the
    correct path.
 
 `fusermount3: failed to open /dev/fuse`:
