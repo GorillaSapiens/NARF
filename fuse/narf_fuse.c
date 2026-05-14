@@ -383,6 +383,7 @@ static int init_metadata_for_key(const char *key, mode_t mode) {
 static int key_for_existing_path(const char *path, char key[NARF_SECTOR_SIZE],
       bool *is_dir) {
    int n;
+   char filekey[NARF_SECTOR_SIZE];
    char *dirkey;
 
    if (path == NULL || key == NULL || is_dir == NULL) {
@@ -394,14 +395,9 @@ static int key_for_existing_path(const char *path, char key[NARF_SECTOR_SIZE],
    }
 
    path++;
-   n = snprintf(key, NARF_SECTOR_SIZE, "%s", path);
-   if (n < 0 || (size_t) n >= NARF_SECTOR_SIZE) {
+   n = snprintf(filekey, sizeof(filekey), "%s", path);
+   if (n < 0 || (size_t) n >= sizeof(filekey)) {
       return -ENAMETOOLONG;
-   }
-
-   if (narf_find(key)) {
-      *is_dir = false;
-      return 0;
    }
 
    dirkey = xformpath(path - 1);
@@ -416,8 +412,21 @@ static int key_for_existing_path(const char *path, char key[NARF_SECTOR_SIZE],
       return -ENAMETOOLONG;
    }
 
+   // POSIX cannot expose both a file named "dir" and a directory
+   // marker named "dir/" at the same path.  Directory wins so the
+   // subtree remains reachable through FUSE.
    if (narf_find(key)) {
       *is_dir = true;
+      return 0;
+   }
+
+   n = snprintf(key, NARF_SECTOR_SIZE, "%s", filekey);
+   if (n < 0 || (size_t) n >= NARF_SECTOR_SIZE) {
+      return -ENAMETOOLONG;
+   }
+
+   if (narf_find(key)) {
+      *is_dir = false;
       return 0;
    }
 
@@ -717,57 +726,51 @@ static int my_getattr(const char *path, struct stat *st, struct fuse_file_info *
       return 0;
    }
 
-   // see if it exists as a file
-   if (narf_find(path + 1)) {
+   // POSIX cannot expose both "dir" and "dir/".  key_for_existing_path()
+   // intentionally checks the directory key first so getattr("/dir") agrees
+   // with readdir() and leaves any subtree reachable.
+   char key[NARF_SECTOR_SIZE];
+   bool is_dir;
+   int ret = key_for_existing_path(path, key, &is_dir);
+
+   if (ret == 0) {
       char metadata[NARF_METADATA_SIZE];
       NarfFuseMeta meta;
+      mode_t default_mode = is_dir ? (S_IFDIR | 0755) : (S_IFREG | 0644);
 
-      if (read_metadata(path + 1, S_IFREG | 0644, &meta, metadata) != 0) {
-         meta_defaults(&meta, S_IFREG | 0644);
+      if (read_metadata(key, default_mode, &meta, metadata) != 0) {
+         meta_defaults(&meta, default_mode);
       }
 
-      st->st_mode = S_IFREG | (meta.mode & 07777);
-      st->st_nlink = 1;
+      st->st_mode = (is_dir ? S_IFDIR : S_IFREG) | (meta.mode & 07777);
+      st->st_nlink = is_dir ? 2 : 1;
       st->st_uid = meta.uid;
       st->st_gid = meta.gid;
-      st->st_size = narf_size(path + 1);
+      st->st_size = narf_size(key);
       st->st_atime = meta.mtime;
       st->st_ctime = meta.mtime;
       st->st_mtime = meta.mtime;
-      st->st_blocks = (st->st_size + 511) / 512;
+
+      if (!is_dir) {
+         st->st_blocks = (st->st_size + 511) / 512;
+      }
+
       UNLOCK;
       return 0;
    }
 
-   // see if it exists as a directory
+   if (ret != -ENOENT) {
+      UNLOCK;
+      return ret;
+   }
+
+   // see if it exists as a phantom directory
    char *p = xformpath(path);
    if (p == NULL) {
       UNLOCK;
       return -ENOMEM;
    }
 
-   if (narf_find(p)) {
-      char metadata[NARF_METADATA_SIZE];
-      NarfFuseMeta meta;
-
-      if (read_metadata(p, S_IFDIR | 0755, &meta, metadata) != 0) {
-         meta_defaults(&meta, S_IFDIR | 0755);
-      }
-
-      st->st_mode = S_IFDIR | (meta.mode & 07777);
-      st->st_nlink = 2;
-      st->st_uid = meta.uid;
-      st->st_gid = meta.gid;
-      st->st_size = narf_size(p);
-      st->st_atime = meta.mtime;
-      st->st_ctime = meta.mtime;
-      st->st_mtime = meta.mtime;
-      free(p);
-      UNLOCK;
-      return 0;
-   }
-
-   // see if it exists as a phantom directory
    const char *dirent0 = narf_dirfirst(p, "/");
    free(p);
    if (dirent0 != NULL) {
@@ -1386,6 +1389,144 @@ static int my_fsync(const char *path, int isdatasync, struct fuse_file_info *fi)
 }
 
 // --- Directory handling ---
+
+typedef struct {
+   char **names;
+   size_t count;
+   size_t capacity;
+} ReaddirSeen;
+
+static void readdir_seen_free(ReaddirSeen *seen) {
+   size_t i;
+
+   if (seen == NULL) {
+      return;
+   }
+
+   for (i = 0; i < seen->count; i++) {
+      free(seen->names[i]);
+   }
+
+   free(seen->names);
+   seen->names = NULL;
+   seen->count = 0;
+   seen->capacity = 0;
+}
+
+static bool readdir_seen_contains(const ReaddirSeen *seen, const char *name) {
+   size_t i;
+
+   if (seen == NULL || name == NULL) {
+      return false;
+   }
+
+   for (i = 0; i < seen->count; i++) {
+      if (!strcmp(seen->names[i], name)) {
+         return true;
+      }
+   }
+
+   return false;
+}
+
+static int readdir_seen_add(ReaddirSeen *seen, const char *name) {
+   char **names;
+
+   if (seen == NULL || name == NULL) {
+      return -EINVAL;
+   }
+
+   if (readdir_seen_contains(seen, name)) {
+      return 0;
+   }
+
+   if (seen->count == seen->capacity) {
+      size_t new_capacity = seen->capacity ? seen->capacity * 2 : 16;
+
+      names = realloc(seen->names, new_capacity * sizeof(*names));
+      if (names == NULL) {
+         return -ENOMEM;
+      }
+
+      seen->names = names;
+      seen->capacity = new_capacity;
+   }
+
+   seen->names[seen->count] = strdup(name);
+   if (seen->names[seen->count] == NULL) {
+      return -ENOMEM;
+   }
+
+   seen->count++;
+   return 1;
+}
+
+static int readdir_name_from_entry(const char *relative, char **name_out) {
+   size_t len;
+   const char *slash;
+   char *name;
+
+   if (relative == NULL || name_out == NULL) {
+      return -EINVAL;
+   }
+
+   *name_out = NULL;
+
+   if (*relative == 0) {
+      return 0;
+   }
+
+   slash = strchr(relative, '/');
+   if (slash != NULL && slash[1] != 0) {
+      len = (size_t) (slash - relative);
+   }
+   else {
+      len = strlen(relative);
+      if (len > 0 && relative[len - 1] == '/') {
+         len--;
+      }
+   }
+
+   if (len == 0) {
+      return 0;
+   }
+
+   name = malloc(len + 1);
+   if (name == NULL) {
+      return -ENOMEM;
+   }
+
+   memcpy(name, relative, len);
+   name[len] = 0;
+   *name_out = name;
+   return 1;
+}
+
+static int readdir_emit_unique(void *buf, fuse_fill_dir_t filler,
+      ReaddirSeen *seen, const char *relative) {
+   char *name = NULL;
+   int ret;
+
+   ret = readdir_name_from_entry(relative, &name);
+   if (ret <= 0) {
+      return ret;
+   }
+
+   ret = readdir_seen_add(seen, name);
+   if (ret < 0) {
+      free(name);
+      return ret;
+   }
+
+   if (ret > 0 && filler(buf, name, NULL, 0, 0)) {
+      free(name);
+      return 1;
+   }
+
+   free(name);
+   return 0;
+}
+
 //! @brief FUSE opendir callback.
 static int my_opendir(const char *path, struct fuse_file_info *fi) {
    (void) path;
@@ -1399,13 +1540,18 @@ static int my_opendir(const char *path, struct fuse_file_info *fi) {
 
 static int my_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
       off_t offset, struct fuse_file_info *fi, enum fuse_readdir_flags flags) {
+   ReaddirSeen seen = {0};
+   int ret = 0;
+
    (void) offset;
    (void) fi;
    (void) flags;
 
    if (!mounted) return -ENODEV;
 
-   // List contents of directory
+   // List contents of directory.  NARF can contain both "dir" and "dir/",
+   // but FUSE/POSIX cannot expose both at the same path.  Emit each POSIX
+   // child name only once; getattr() decides what that one visible object is.
 
    LOCK;
 
@@ -1415,24 +1561,13 @@ static int my_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
    if (!strcmp(path, "/")) {
       const char *entry = narf_dirfirst("", "/");
       while (entry != NULL) {
-         if (*entry) {
-            size_t entry_len = strlen(entry);
-
-            if (entry[entry_len - 1] == '/') {
-               char *dirname = strdup(entry);
-
-               if (dirname == NULL) {
-                  UNLOCK;
-                  return -ENOMEM;
-               }
-
-               dirname[entry_len - 1] = 0;
-               filler(buf, dirname, NULL, 0, 0);
-               free(dirname);
-            }
-            else {
-               filler(buf, entry, NULL, 0, 0);
-            }
+         ret = readdir_emit_unique(buf, filler, &seen, entry);
+         if (ret < 0) {
+            break;
+         }
+         if (ret > 0) {
+            ret = 0;
+            break;
          }
 
          entry = narf_dirnext("", "/", entry);
@@ -1440,36 +1575,34 @@ static int my_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
    }
    else {
       char *p = xformpath(path);
-      const char *entry = narf_dirfirst(p, "/");
-      while (entry != NULL) {
-         const char *q = entry + strlen(p);
-         if (*q) {
-            size_t q_len = strlen(q);
 
-            if (q[q_len - 1] == '/') {
-               char *dirname = strdup(q);
-
-               if (dirname == NULL) {
-                  free(p);
-                  UNLOCK;
-                  return -ENOMEM;
-               }
-
-               dirname[q_len - 1] = 0;
-               filler(buf, dirname, NULL, 0, 0);
-               free(dirname);
-            }
-            else {
-               filler(buf, q, NULL, 0, 0);
-            }
-         }
-         entry = narf_dirnext(p, "/", entry);
+      if (p == NULL) {
+         ret = -ENOMEM;
       }
-      free(p);
+      else {
+         const char *entry = narf_dirfirst(p, "/");
+         size_t prefix_len = strlen(p);
+
+         while (entry != NULL) {
+            ret = readdir_emit_unique(buf, filler, &seen, entry + prefix_len);
+            if (ret < 0) {
+               break;
+            }
+            if (ret > 0) {
+               ret = 0;
+               break;
+            }
+
+            entry = narf_dirnext(p, "/", entry);
+         }
+
+         free(p);
+      }
    }
 
+   readdir_seen_free(&seen);
    UNLOCK;
-   return 0;
+   return ret;
 }
 
 //! @brief FUSE releasedir callback.
