@@ -6,10 +6,6 @@
 #include <time.h>
 #include <unistd.h>
 
-#ifdef HAVE_ZLIB
-#include <zlib.h>
-#endif
-
 #include "narf_conf.h"
 #include "narf.h"
 #include "narf_io.h"
@@ -153,23 +149,20 @@ static int dirty_count = 0;
 
 static void dirty_clear(void);
 
-#ifndef HAVE_ZLIB
-//! @brief Compute a fallback CRC-32 checksum when zlib is not available.
-uint32_t crc32(uint32_t crc, const void *data, int length) {
-   int i, j;
-   const uint8_t *p = (const uint8_t *) data;
+//! @brief Compute a CRC-32, should ve zlib compatible
+uint32_t crc32(uint32_t crc, const void *data, size_t length) {
+   const uint8_t *p = data;
 
-   for (i = 0; i < length; i++) {
+   crc = ~crc;
+
+   for (size_t i = 0; i < length; i++) {
       crc ^= p[i];
-      for (j = 0; j < 8; j++) {
-         if (crc & 1) crc = (crc >> 1) ^ 0xEDB88320;
-         else crc >>= 1;
-      }
+      for (int j = 0; j < 8; j++)
+         crc = (crc & 1) ? (crc >> 1) ^ 0xEDB88320u : crc >> 1;
    }
 
    return ~crc;
 }
-#endif
 
 //! @brief Return true when a versioned NARF reference is null.
 static bool ref_is_null(NarfRef ref) {
