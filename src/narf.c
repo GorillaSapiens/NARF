@@ -67,7 +67,7 @@ typedef struct {
    NarfRef      m_data_root;
    NarfRef      m_free_root;
 
-   NarfSector   m_spare_count; // see "Recycled catalog-node sectors" below
+   NarfSector   m_spare_count; // see "Spare catalog-node sectors" below
    NarfSector   m_spare_inline[SPARE_MAX];
 
    NarfSector   m_count;
@@ -78,7 +78,7 @@ typedef struct {
    uint32_t     m_lfsr_seed;
 } RootState;
 
-// Recycled catalog-node sectors.
+// Spare catalog-node sectors.
 //
 // NARF stores AVL/catalog nodes in ordinary sectors near the high end
 // of the volume. Because catalog updates are copy-on-write, old node
@@ -471,7 +471,7 @@ static bool pop_spare(NarfRef *ref) {
    return false;
 }
 
-//! @brief Remember one trash metadata sector in the root-resident free stack.
+//! @brief Add one committed-safe catalog-node sector to the spare stack.
 static bool push_spare(NarfSector sector) {
    if (!valid_node_sector(sector)) return true;
 
@@ -1450,7 +1450,7 @@ static bool mount_root_copy(NarfSector start, int which) {
 }
 
 //! @brief Recycle metadata nodes trash by a successfully committed mutation.
-static void recycle_trash_nodes_after_commit(void) {
+static void move_trash_to_spare_after_commit(void) {
    RootSnapshot committed;
    unsigned count = trash_node_count;
 
@@ -1484,7 +1484,7 @@ static void recycle_trash_nodes_after_commit(void) {
 //! @brief Commit a public mutation.
 static bool commit_user_transaction(void) {
    if (!commit_root()) return false;
-   recycle_trash_nodes_after_commit();
+   move_trash_to_spare_after_commit();
    return true;
 }
 
@@ -1998,7 +1998,7 @@ static void fsck_free_extents_rec(NarfRef ref) {
 }
 
 //! @brief Validate root-resident metadata-free stack entries.
-static void fsck_meta_free_stack(void) {
+static void fsck_spare_stack(void) {
    if (root.m_spare_count > SPARE_MAX) {
       fsck_error();
       return;
@@ -2007,7 +2007,7 @@ static void fsck_meta_free_stack(void) {
    for (NarfSector i = 0; i < root.m_spare_count; i++) {
       NarfSector sector = root.m_spare_inline[i];
 
-      fsck_ctx.m_report.meta_free_nodes++;
+      fsck_ctx.m_report.spare_nodes++;
 
       if (!valid_node_sector(sector)) {
          fsck_error();
@@ -2062,7 +2062,7 @@ static bool narf_fsck_impl(NarfFsckReport *report, bool deep_checks) {
 
          fsck_data_extents_rec(root.m_data_root);
          fsck_free_extents_rec(root.m_free_root);
-         fsck_meta_free_stack();
+         fsck_spare_stack();
       }
 
       fsck_ctx.m_report.file_count = root.m_count;

@@ -23,7 +23,7 @@ typedef struct {
    NarfSector errors;
    NarfSector data_nodes;
    NarfSector free_nodes;
-   NarfSector meta_free_nodes;
+   NarfSector spare_nodes;
    NarfSector file_count;
    NarfSector free_extents;
    NarfSector payload_sectors;

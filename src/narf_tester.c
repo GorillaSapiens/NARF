@@ -754,7 +754,7 @@ static void cmd_fsck(int argc, char **argv) {
    printf("  files           = %u\n", (unsigned) report.file_count);
    printf("  data_nodes      = %u\n", (unsigned) report.data_nodes);
    printf("  free_nodes      = %u\n", (unsigned) report.free_nodes);
-   printf("  meta_free_nodes = %u\n", (unsigned) report.meta_free_nodes);
+   printf("  spare_nodes     = %u\n", (unsigned) report.spare_nodes);
    printf("  free_extents    = %u\n", (unsigned) report.free_extents);
    printf("  payload_sectors = %u\n", (unsigned) report.payload_sectors);
    printf("  free_sectors    = %u\n", (unsigned) report.free_sectors);
