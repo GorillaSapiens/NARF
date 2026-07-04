@@ -433,8 +433,8 @@ static uint32_t node_checksum(Node *n) {
    return ck;
 }
 
-//! @brief Remember that a committed metadata node can be spare after commit.
-static void spare_node_later(NarfRef ref) {
+//! @brief Move node to trash.  It will be moved to spare after commit.
+static void trash_node(NarfRef ref) {
    if (!transaction_open) return;
    if (ref_is_null(ref)) return;
    if (!valid_node_sector(ref.m_sector)) return;
@@ -451,8 +451,8 @@ static void spare_node_later(NarfRef ref) {
    }
 }
 
-//! @brief Pop one sector from the rollback-safe root-resident metadata-free stack.
-static bool pop_meta_free_sector(NarfRef *ref) {
+//! @brief Pop one sector from the rollback-safe root-resident spare stack.
+static bool pop_spare(NarfRef *ref) {
    if (ref == NULL) return false;
 
    while (root.m_spare_count > 0) {
@@ -472,7 +472,7 @@ static bool pop_meta_free_sector(NarfRef *ref) {
 }
 
 //! @brief Remember one trash metadata sector in the root-resident free stack.
-static bool push_meta_free_sector(NarfSector sector) {
+static bool push_spare(NarfSector sector) {
    if (!valid_node_sector(sector)) return true;
 
    for (NarfSector i = 0; i < root.m_spare_count && i < SPARE_MAX; i++) {
@@ -549,7 +549,7 @@ static bool write_node(NarfRef oldref, Node *n, NarfRef *newref) {
    else {
       if (!alloc_node_sector(&ref)) return false;
       n->m_node_version = new_node_version(oldver, ref.m_sector);
-      spare_node_later(oldref);
+      trash_node(oldref);
    }
 
    n->m_root_version = txver;
@@ -753,7 +753,7 @@ static bool data_delete_min_rec(NarfRef rootref, NarfRef *out, NarfRef *minref) 
 
    if (ref_is_null(left)) {
       if (minref) *minref = rootref;
-      spare_node_later(rootref);
+      trash_node(rootref);
       *out = right;
       return true;
    }
@@ -796,7 +796,7 @@ static bool data_delete_rec(NarfRef rootref, const char *key, NarfRef *out, Narf
    }
    else {
       *removed_ref = rootref;
-      spare_node_later(rootref);
+      trash_node(rootref);
       if (removed_data) *removed_data = node_work0.m_data;
       if (ref_is_null(left)) {
          *out = right;
@@ -899,7 +899,7 @@ static bool free_delete_min_rec(NarfRef rootref, NarfRef *out, NarfRef *minref) 
 
    if (ref_is_null(left)) {
       if (minref) *minref = rootref;
-      spare_node_later(rootref);
+      trash_node(rootref);
       *out = right;
       return true;
    }
@@ -942,7 +942,7 @@ static bool free_delete_rec(NarfRef rootref, NarfSector length, NarfSector start
    }
    else {
       *removed_ref = rootref;
-      spare_node_later(rootref);
+      trash_node(rootref);
       if (removed_free) *removed_free = node_work0.m_free;
       if (ref_is_null(left)) {
          *out = right;
@@ -1084,7 +1084,7 @@ static bool alloc_node_sector(NarfRef *ref) {
 
    if (ref == NULL) return false;
 
-   if (pop_meta_free_sector(ref)) {
+   if (pop_spare(ref)) {
       return true;
    }
 
@@ -1463,7 +1463,7 @@ static void recycle_trash_nodes_after_commit(void) {
    committed.m_lfsr_state = lfsr_state;
 
    for (unsigned i = 0; i < count; i++) {
-      if (!push_meta_free_sector(trash_nodes[i])) {
+      if (!push_spare(trash_nodes[i])) {
          root = committed.m_root;
          lfsr_state = committed.m_lfsr_state;
          trash_node_count = 0;
