@@ -17,12 +17,12 @@
 #endif
 
 #define SIGNATURE 0x4652414E // little endian 'NARF'
-#define VERSION 0x00000006
+#define VERSION 0x00000007
 #define END INVALID_NAF
 #define NARF_MIN_FS_SECTORS 4
 #define NARF_MAX_AVL_DEPTH 96
-#define META_RETIRED_MAX (NARF_MAX_AVL_DEPTH * 4)
-#define META_FREE_INLINE_MAX 64
+#define TRASH_MAX (NARF_MAX_AVL_DEPTH * 4)
+#define SPARE_MAX 64
 
 // Uncomment for unicode line drawing characters in debug functions
 #define USE_UTF8_LINE_DRAWING
@@ -67,8 +67,8 @@ typedef struct {
    NarfRef      m_data_root;
    NarfRef      m_free_root;
 
-   NarfSector   m_recycled_count; // see "Recycled catalog-node sectors" below
-   NarfSector   m_recycled_inline[META_FREE_INLINE_MAX];
+   NarfSector   m_spare_count; // see "Recycled catalog-node sectors" below
+   NarfSector   m_spare_inline[SPARE_MAX];
 
    NarfSector   m_count;
    NarfSector   m_bottom;
@@ -84,14 +84,14 @@ typedef struct {
 // of the volume. Because catalog updates are copy-on-write, old node
 // sectors cannot be reused until after the new root has committed.
 //
-// After commit, retired node sectors are pushed here and may be reused
+// After commit, trash node sectors are pushed here and may be reused
 // by later catalog-node allocations. These are NOT user-payload free
 // sectors and are intentionally separate from the payload free tree,
 // because the free tree is itself made of catalog nodes.
 
 // Bytes occupied by Root fields other than m_reserved. Keep this next to Root.
 #define ROOT_PREFIX_BYTES (4 + 4 + sizeof(NarfByteSize) + sizeof(NarfSector) + \
-                           2 * sizeof(NarfRef) + (5 + META_FREE_INLINE_MAX) * sizeof(NarfSector) + \
+                           2 * sizeof(NarfRef) + (5 + SPARE_MAX) * sizeof(NarfSector) + \
                            4 + 4)
 #define ROOT_RESERVED_BYTES (NARF_SECTOR_SIZE - ROOT_PREFIX_BYTES - sizeof(uint32_t))
 
@@ -105,8 +105,8 @@ typedef struct PACKED {
    NarfSector   m_total_sectors;
    NarfRef      m_data_root;
    NarfRef      m_free_root;
-   NarfSector   m_recycled_count;
-   NarfSector   m_recycled_inline[META_FREE_INLINE_MAX];
+   NarfSector   m_spare_count;
+   NarfSector   m_spare_inline[SPARE_MAX];
    NarfSector   m_count;
    NarfSector   m_bottom;
    NarfSector   m_top;
@@ -167,9 +167,9 @@ static char key_work[KEYSIZE];
 static uint32_t lfsr_state = 1;
 static bool transaction_may_use_reserve = false;
 static bool transaction_open = false;
-static NarfSector retired_nodes[META_RETIRED_MAX];
-static unsigned retired_node_count = 0;
-static bool retired_node_overflow = false;
+static NarfSector trash_nodes[TRASH_MAX];
+static unsigned trash_node_count = 0;
+static bool trash_node_overflow = false;
 
 //! @brief Compute a CRC-32, should ve zlib compatible
 uint32_t crc32(uint32_t crc, const void *data, size_t length) {
@@ -214,8 +214,8 @@ static void transaction_begin(void) {
    saved_root.m_root = root;
    saved_root.m_lfsr_state = lfsr_state;
    transaction_may_use_reserve = false;
-   retired_node_count = 0;
-   retired_node_overflow = false;
+   trash_node_count = 0;
+   trash_node_overflow = false;
    transaction_open = true;
 }
 
@@ -224,8 +224,8 @@ static void transaction_rollback(void) {
    root = saved_root.m_root;
    lfsr_state = saved_root.m_lfsr_state;
    transaction_may_use_reserve = false;
-   retired_node_count = 0;
-   retired_node_overflow = false;
+   trash_node_count = 0;
+   trash_node_overflow = false;
    transaction_open = false;
 }
 
@@ -323,8 +323,8 @@ static void root_to_disk(Root *out) {
    out->m_total_sectors = root.m_total_sectors;
    out->m_data_root = root.m_data_root;
    out->m_free_root = root.m_free_root;
-   out->m_recycled_count = root.m_recycled_count;
-   memcpy(out->m_recycled_inline, root.m_recycled_inline, sizeof(out->m_recycled_inline));
+   out->m_spare_count = root.m_spare_count;
+   memcpy(out->m_spare_inline, root.m_spare_inline, sizeof(out->m_spare_inline));
    out->m_count = root.m_count;
    out->m_bottom = root.m_bottom;
    out->m_top = root.m_top;
@@ -341,11 +341,11 @@ static void root_from_disk(const Root *in) {
    root.m_total_sectors = in->m_total_sectors;
    root.m_data_root = in->m_data_root;
    root.m_free_root = in->m_free_root;
-   root.m_recycled_count = in->m_recycled_count;
-   if (root.m_recycled_count > META_FREE_INLINE_MAX) {
-      root.m_recycled_count = 0;
+   root.m_spare_count = in->m_spare_count;
+   if (root.m_spare_count > SPARE_MAX) {
+      root.m_spare_count = 0;
    }
-   memcpy(root.m_recycled_inline, in->m_recycled_inline, sizeof(root.m_recycled_inline));
+   memcpy(root.m_spare_inline, in->m_spare_inline, sizeof(root.m_spare_inline));
    root.m_count = in->m_count;
    root.m_bottom = in->m_bottom;
    root.m_top = in->m_top;
@@ -396,9 +396,9 @@ static bool init_root(NarfSector origin, NarfSector size) {
    root.m_total_sectors = size;
    root.m_data_root = NULL_REF;
    root.m_free_root = NULL_REF;
-   root.m_recycled_count = 0;
-   for (unsigned i = 0; i < META_FREE_INLINE_MAX; i++) {
-      root.m_recycled_inline[i] = END;
+   root.m_spare_count = 0;
+   for (unsigned i = 0; i < SPARE_MAX; i++) {
+      root.m_spare_inline[i] = END;
    }
    root.m_count = 0;
    root.m_bottom = 2;
@@ -433,21 +433,21 @@ static uint32_t node_checksum(Node *n) {
    return ck;
 }
 
-//! @brief Remember that a committed metadata node can be recycled after commit.
+//! @brief Remember that a committed metadata node can be spare after commit.
 static void retire_node_later(NarfRef ref) {
    if (!transaction_open) return;
    if (ref_is_null(ref)) return;
    if (!valid_node_sector(ref.m_sector)) return;
 
-   for (unsigned i = 0; i < retired_node_count; i++) {
-      if (retired_nodes[i] == ref.m_sector) return;
+   for (unsigned i = 0; i < trash_node_count; i++) {
+      if (trash_nodes[i] == ref.m_sector) return;
    }
 
-   if (retired_node_count < META_RETIRED_MAX) {
-      retired_nodes[retired_node_count++] = ref.m_sector;
+   if (trash_node_count < TRASH_MAX) {
+      trash_nodes[trash_node_count++] = ref.m_sector;
    }
    else {
-      retired_node_overflow = true;
+      trash_node_overflow = true;
    }
 }
 
@@ -455,9 +455,9 @@ static void retire_node_later(NarfRef ref) {
 static bool pop_meta_free_sector(NarfRef *ref) {
    if (ref == NULL) return false;
 
-   while (root.m_recycled_count > 0) {
-      NarfSector sector = root.m_recycled_inline[--root.m_recycled_count];
-      root.m_recycled_inline[root.m_recycled_count] = END;
+   while (root.m_spare_count > 0) {
+      NarfSector sector = root.m_spare_inline[--root.m_spare_count];
+      root.m_spare_inline[root.m_spare_count] = END;
 
       if (!valid_node_sector(sector)) {
          continue;
@@ -471,21 +471,21 @@ static bool pop_meta_free_sector(NarfRef *ref) {
    return false;
 }
 
-//! @brief Remember one retired metadata sector in the root-resident free stack.
+//! @brief Remember one trash metadata sector in the root-resident free stack.
 static bool push_meta_free_sector(NarfSector sector) {
    if (!valid_node_sector(sector)) return true;
 
-   for (NarfSector i = 0; i < root.m_recycled_count && i < META_FREE_INLINE_MAX; i++) {
-      if (root.m_recycled_inline[i] == sector) {
+   for (NarfSector i = 0; i < root.m_spare_count && i < SPARE_MAX; i++) {
+      if (root.m_spare_inline[i] == sector) {
          return true;
       }
    }
 
-   if (root.m_recycled_count >= META_FREE_INLINE_MAX) {
+   if (root.m_spare_count >= SPARE_MAX) {
       return true;
    }
 
-   root.m_recycled_inline[root.m_recycled_count++] = sector;
+   root.m_spare_inline[root.m_spare_count++] = sector;
    return true;
 }
 
@@ -1449,13 +1449,13 @@ static bool mount_root_copy(NarfSector start, int which) {
    return true;
 }
 
-//! @brief Recycle metadata nodes retired by a successfully committed mutation.
-static void recycle_retired_nodes_after_commit(void) {
+//! @brief Recycle metadata nodes trash by a successfully committed mutation.
+static void recycle_trash_nodes_after_commit(void) {
    RootSnapshot committed;
-   unsigned count = retired_node_count;
+   unsigned count = trash_node_count;
 
    if (count == 0) {
-      retired_node_overflow = false;
+      trash_node_overflow = false;
       return;
    }
 
@@ -1463,11 +1463,11 @@ static void recycle_retired_nodes_after_commit(void) {
    committed.m_lfsr_state = lfsr_state;
 
    for (unsigned i = 0; i < count; i++) {
-      if (!push_meta_free_sector(retired_nodes[i])) {
+      if (!push_meta_free_sector(trash_nodes[i])) {
          root = committed.m_root;
          lfsr_state = committed.m_lfsr_state;
-         retired_node_count = 0;
-         retired_node_overflow = false;
+         trash_node_count = 0;
+         trash_node_overflow = false;
          return;
       }
    }
@@ -1477,14 +1477,14 @@ static void recycle_retired_nodes_after_commit(void) {
       lfsr_state = committed.m_lfsr_state;
    }
 
-   retired_node_count = 0;
-   retired_node_overflow = false;
+   trash_node_count = 0;
+   trash_node_overflow = false;
 }
 
 //! @brief Commit a public mutation.
 static bool commit_user_transaction(void) {
    if (!commit_root()) return false;
-   recycle_retired_nodes_after_commit();
+   recycle_trash_nodes_after_commit();
    return true;
 }
 
@@ -1999,13 +1999,13 @@ static void fsck_free_extents_rec(NarfRef ref) {
 
 //! @brief Validate root-resident metadata-free stack entries.
 static void fsck_meta_free_stack(void) {
-   if (root.m_recycled_count > META_FREE_INLINE_MAX) {
+   if (root.m_spare_count > SPARE_MAX) {
       fsck_error();
       return;
    }
 
-   for (NarfSector i = 0; i < root.m_recycled_count; i++) {
-      NarfSector sector = root.m_recycled_inline[i];
+   for (NarfSector i = 0; i < root.m_spare_count; i++) {
+      NarfSector sector = root.m_spare_inline[i];
 
       fsck_ctx.m_report.meta_free_nodes++;
 
@@ -2018,8 +2018,8 @@ static void fsck_meta_free_stack(void) {
          fsck_error();
       }
 
-      for (NarfSector j = i + 1; j < root.m_recycled_count; j++) {
-         if (root.m_recycled_inline[j] == sector) {
+      for (NarfSector j = i + 1; j < root.m_spare_count; j++) {
+         if (root.m_spare_inline[j] == sector) {
             fsck_error();
          }
       }
@@ -3270,17 +3270,17 @@ static void print_tree(NarfRef ref, int indent, uint64_t pattern, const char *la
 
 //! @brief Print internal NARF root and tree state.
 void narf_debug(void) {
-   printf("root.m_signature      = %08x '%.4s'\n", root.m_signature, root.m_sigbytes);
-   printf("root.m_version        = %08x\n", root.m_version);
-   printf("root.m_root_version   = %u copy=%d\n", root.m_root_version, root_copy);
-   printf("root.m_total_sectors  = %08x\n", root.m_total_sectors);
-   printf("root.m_data_root      = [%08x:%08x]\n", root.m_data_root.m_sector, root.m_data_root.m_version);
-   printf("root.m_free_root      = [%08x:%08x]\n", root.m_free_root.m_sector, root.m_free_root.m_version);
-   printf("root.m_recycled_count = %u\n", (unsigned)root.m_recycled_count);
-   printf("root.m_lfsr_seed      = %08x\n", root.m_lfsr_seed);
-   printf("root.m_count          = %08x\n", root.m_count);
-   printf("root.m_bottom         = %08x\n", root.m_bottom);
-   printf("root.m_top            = %08x\n", root.m_top);
+   printf("root.m_signature     = %08x '%.4s'\n", root.m_signature, root.m_sigbytes);
+   printf("root.m_version       = %08x\n", root.m_version);
+   printf("root.m_root_version  = %u copy=%d\n", root.m_root_version, root_copy);
+   printf("root.m_total_sectors = %08x\n", root.m_total_sectors);
+   printf("root.m_data_root     = [%08x:%08x]\n", root.m_data_root.m_sector, root.m_data_root.m_version);
+   printf("root.m_free_root     = [%08x:%08x]\n", root.m_free_root.m_sector, root.m_free_root.m_version);
+   printf("root.m_spare_count   = %u\n", (unsigned)root.m_spare_count);
+   printf("root.m_lfsr_seed     = %08x\n", root.m_lfsr_seed);
+   printf("root.m_count         = %08x\n", root.m_count);
+   printf("root.m_bottom        = %08x\n", root.m_bottom);
+   printf("root.m_top           = %08x\n", root.m_top);
    printf("data tree:\n");
    print_tree(root.m_data_root, 0, 0, "D");
    printf("free tree:\n");
