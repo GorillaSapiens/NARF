@@ -434,7 +434,7 @@ static uint32_t node_checksum(Node *n) {
 }
 
 //! @brief Remember that a committed metadata node can be spare after commit.
-static void retire_node_later(NarfRef ref) {
+static void spare_node_later(NarfRef ref) {
    if (!transaction_open) return;
    if (ref_is_null(ref)) return;
    if (!valid_node_sector(ref.m_sector)) return;
@@ -549,7 +549,7 @@ static bool write_node(NarfRef oldref, Node *n, NarfRef *newref) {
    else {
       if (!alloc_node_sector(&ref)) return false;
       n->m_node_version = new_node_version(oldver, ref.m_sector);
-      retire_node_later(oldref);
+      spare_node_later(oldref);
    }
 
    n->m_root_version = txver;
@@ -753,7 +753,7 @@ static bool data_delete_min_rec(NarfRef rootref, NarfRef *out, NarfRef *minref) 
 
    if (ref_is_null(left)) {
       if (minref) *minref = rootref;
-      retire_node_later(rootref);
+      spare_node_later(rootref);
       *out = right;
       return true;
    }
@@ -796,7 +796,7 @@ static bool data_delete_rec(NarfRef rootref, const char *key, NarfRef *out, Narf
    }
    else {
       *removed_ref = rootref;
-      retire_node_later(rootref);
+      spare_node_later(rootref);
       if (removed_data) *removed_data = node_work0.m_data;
       if (ref_is_null(left)) {
          *out = right;
@@ -899,7 +899,7 @@ static bool free_delete_min_rec(NarfRef rootref, NarfRef *out, NarfRef *minref) 
 
    if (ref_is_null(left)) {
       if (minref) *minref = rootref;
-      retire_node_later(rootref);
+      spare_node_later(rootref);
       *out = right;
       return true;
    }
@@ -942,7 +942,7 @@ static bool free_delete_rec(NarfRef rootref, NarfSector length, NarfSector start
    }
    else {
       *removed_ref = rootref;
-      retire_node_later(rootref);
+      spare_node_later(rootref);
       if (removed_free) *removed_free = node_work0.m_free;
       if (ref_is_null(left)) {
          *out = right;
