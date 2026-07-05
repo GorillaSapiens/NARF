@@ -15,7 +15,11 @@ MSRC := narf_mkfs.c narf.c
 MOBJ := $(MSRC:.c=.o)
 MDEP := $(MOBJ:.o=.d)
 
-all: narf_tester narf_fuse narf_mkfs
+all: narf_details narf_tester narf_fuse narf_mkfs
+
+narf_details:
+	$(CC) -DNARF_DETAILS narf.c -o narf_details
+	./narf_details
 
 narf_tester: $(TOBJ)
 	$(CC) $(TOBJ) -o $@

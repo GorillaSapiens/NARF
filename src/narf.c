@@ -71,9 +71,10 @@ typedef struct PACKED {
    NarfSector   m_top;           \
    NarfSector   m_origin;        \
    uint32_t     m_root_version;  \
-   uint32_t     m_lfsr_seed;
+   uint32_t     m_lfsr_seed; \
+   uint8_t      m_spare_ptr;
 
-typedef struct {
+typedef struct PACKED {
    ROOT_HEAD_FIELDS
 } RootHead;
 
@@ -3156,3 +3157,32 @@ void narf_debug(void) {
 }
 #endif
 
+#ifdef NARF_DETAILS
+bool narf_io_open(void) {
+   return false;
+}
+
+bool narf_io_close(void) {
+   return false;
+}
+
+uint32_t narf_io_sectors(void) {
+   return 0;
+}
+
+bool narf_io_write(uint32_t sector, void *data) {
+   return false;
+}
+
+bool narf_io_read(uint32_t sector, void *data) {
+   return false;
+}
+
+int main(int argc, char **argv) {
+   (void) argc;
+   (void) argv;
+
+   printf("key   size : %d\n", sizeof(((Node *) NULL)->m_key));
+   printf("spare size : %d\n", SPARE_SIZE);
+}
+#endif
