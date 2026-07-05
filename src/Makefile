@@ -1,6 +1,7 @@
 CC     := gcc
 ERR    := -Wall -Wextra -Wpedantic -Werror
-CFLAGS := -MMD -MP -MF $(ERR) -g
+STD    := -D_XOPEN_SOURCE=700 -std=c11
+CFLAGS := $(STD) $(ERR) -g
 
 TSRC := narf_tester.c narf_io.c narf.c
 TOBJ := $(TSRC:.c=.o)

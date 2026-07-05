@@ -21,8 +21,6 @@
 #define END INVALID_NAF
 #define NARF_MIN_FS_SECTORS 4
 #define NARF_MAX_AVL_DEPTH 96
-#define TRASH_MAX (NARF_MAX_AVL_DEPTH * 4)
-#define SPARE_MAX 64
 
 // Uncomment for unicode line drawing characters in debug functions
 #define USE_UTF8_LINE_DRAWING
@@ -56,86 +54,84 @@ typedef struct PACKED {
    NarfSector m_length;
 } FreePayload;
 
-typedef struct {
-   union {
-      uint32_t m_signature;
-      uint8_t  m_sigbytes[4];
-   };
-   uint32_t     m_version;
-   NarfByteSize m_sector_size;
-   NarfSector   m_total_sectors;
-   NarfRef      m_data_root;
-   NarfRef      m_free_root;
-
-   NarfSector   m_spare_count; // see "Spare catalog-node sectors" below
-   NarfSector   m_spare_inline[SPARE_MAX];
-
-   NarfSector   m_count;
-   NarfSector   m_bottom;
-   NarfSector   m_top;
-   NarfSector   m_origin;
-   uint32_t     m_root_version;
+#define ROOT_HEAD_FIELDS         \
+   union {                       \
+      uint32_t m_signature;      \
+      uint8_t  m_sigbytes[4];    \
+   };                            \
+   uint32_t     m_version;       \
+   NarfByteSize m_sector_size;   \
+   NarfSector   m_total_sectors; \
+   NarfRef      m_data_root;     \
+   NarfRef      m_free_root;     \
+   NarfRef      m_spare;         \
+   NarfSector   m_spare_count;   \
+   NarfSector   m_count;         \
+   NarfSector   m_bottom;        \
+   NarfSector   m_top;           \
+   NarfSector   m_origin;        \
+   uint32_t     m_root_version;  \
    uint32_t     m_lfsr_seed;
-} RootState;
 
-// Spare catalog-node sectors.
-//
-// NARF stores AVL/catalog nodes in ordinary sectors near the high end
-// of the volume. Because catalog updates are copy-on-write, old node
-// sectors cannot be reused until after the new root has committed.
-//
-// After commit, trash node sectors are pushed here and may be reused
-// by later catalog-node allocations. These are NOT user-payload free
-// sectors and are intentionally separate from the payload free tree,
-// because the free tree is itself made of catalog nodes.
-
-// Bytes occupied by Root fields other than m_reserved. Keep this next to Root.
-#define ROOT_PREFIX_BYTES (4 + 4 + sizeof(NarfByteSize) + sizeof(NarfSector) + \
-                           2 * sizeof(NarfRef) + (5 + SPARE_MAX) * sizeof(NarfSector) + \
-                           4 + 4)
-#define ROOT_RESERVED_BYTES (NARF_SECTOR_SIZE - ROOT_PREFIX_BYTES - sizeof(uint32_t))
+typedef struct {
+   ROOT_HEAD_FIELDS
+} RootHead;
 
 typedef struct PACKED {
-   union {
-      uint32_t m_signature;
-      uint8_t  m_sigbytes[4];
-   };
-   uint32_t     m_version;
-   NarfByteSize m_sector_size;
-   NarfSector   m_total_sectors;
-   NarfRef      m_data_root;
-   NarfRef      m_free_root;
-   NarfSector   m_spare_count;
-   NarfSector   m_spare_inline[SPARE_MAX];
-   NarfSector   m_count;
-   NarfSector   m_bottom;
-   NarfSector   m_top;
-   NarfSector   m_origin;
-   uint32_t     m_root_version;
-   uint32_t     m_lfsr_seed;
-   uint8_t      m_reserved[ROOT_RESERVED_BYTES];
+   ROOT_HEAD_FIELDS
+   uint8_t      m_reserved[NARF_SECTOR_SIZE - sizeof(RootHead) - sizeof(uint32_t)];
    uint32_t     m_checksum;
 } Root;
 static_assert(sizeof(Root) == NARF_SECTOR_SIZE, "Root wrong size");
 
-// Bytes occupied by Node fields other than m_key. Keep this next to Node.
-#define NODE_BYTES_EXCEPT_KEY (2 * sizeof(NarfRef) + 1 + sizeof(DataPayload) + \
-                               3 * sizeof(uint32_t))
+#define NODE_HEAD_FIELDS \
+   uint32_t     m_root_version; \
+   uint32_t     m_node_version; \
+   NarfRef      m_left; \
+   NarfRef      m_right; \
+   uint8_t      m_height; \
+   union { \
+      DataPayload m_data; \
+      FreePayload m_free; \
+   };
 
 typedef struct PACKED {
-   NarfRef      m_left;
-   NarfRef      m_right;
-   uint8_t      m_height;
-   union {
-      DataPayload m_data;
-      FreePayload m_free;
-   };
-   char         m_key[NARF_SECTOR_SIZE - NODE_BYTES_EXCEPT_KEY];
-   uint32_t     m_root_version;
-   uint32_t     m_node_version;
+   NODE_HEAD_FIELDS
+} NodeHead;
+
+typedef struct PACKED {
+   NODE_HEAD_FIELDS
+   char         m_key[NARF_SECTOR_SIZE - sizeof(NodeHead) - sizeof(uint32_t)];
    uint32_t     m_checksum;
 } Node;
 static_assert(sizeof(Node) == NARF_SECTOR_SIZE, "Node wrong size");
+
+#define SPARE_PREHEADER_FIELDS       \
+   uint32_t m_root_version;          \
+   uint32_t m_version;               \
+   NarfRef  m_next;                  \
+   NarfSector m_count;
+
+typedef struct PACKED {
+   SPARE_PREHEADER_FIELDS
+} SparePreHeader;
+
+#define SPARE_SIZE (((NARF_SECTOR_SIZE - sizeof(SparePreHeader) - sizeof(uint32_t)) / sizeof(NarfSector)) - 1)
+
+#define SPARE_HEADER_FIELDS          \
+   SPARE_PREHEADER_FIELDS            \
+   NarfSector m_spares[SPARE_SIZE];
+
+typedef struct PACKED {
+   SPARE_HEADER_FIELDS
+} SpareHeader;
+
+typedef struct PACKED {
+   SPARE_HEADER_FIELDS
+   char       m_reserved[NARF_SECTOR_SIZE - sizeof(SpareHeader) - sizeof(uint32_t)];
+   uint32_t   m_checksum;
+} Spare;
+static_assert(sizeof(Spare) == NARF_SECTOR_SIZE, "Spare wrong size");
 
 #define BYTES2SECTORS(x) \
    (((x) / NARF_SECTOR_SIZE) + (((x) % NARF_SECTOR_SIZE) != 0))
@@ -148,7 +144,7 @@ typedef union {
 } SectorScratch;
 
 typedef struct {
-   RootState m_root;
+   RootHead m_root;
    uint32_t  m_lfsr_state;
 } RootSnapshot;
 
@@ -157,7 +153,7 @@ static SectorScratch sector_work;
 #define root_tmp      sector_work.root
 #define node_tmp      sector_work.node
 
-static RootState root;
+static RootHead root;
 static RootSnapshot saved_root;
 static Node node_work0;
 static Node node_work1;
@@ -167,11 +163,8 @@ static char key_work[KEYSIZE];
 static uint32_t lfsr_state = 1;
 static bool transaction_may_use_reserve = false;
 static bool transaction_open = false;
-static NarfSector trash_nodes[TRASH_MAX];
-static unsigned trash_node_count = 0;
-static bool trash_node_overflow = false;
 
-//! @brief Compute a CRC-32, should ve zlib compatible
+//! @brief Compute a CRC-32, should be zlib compatible
 uint32_t crc32(uint32_t crc, const void *data, size_t length) {
    const uint8_t *p = data;
 
@@ -214,9 +207,26 @@ static void transaction_begin(void) {
    saved_root.m_root = root;
    saved_root.m_lfsr_state = lfsr_state;
    transaction_may_use_reserve = false;
-   trash_node_count = 0;
-   trash_node_overflow = false;
    transaction_open = true;
+
+   if (!ref_is_null(root.m_spare)) {
+      // allocate new m_spare
+
+      // read m_spare sector
+
+      // if (count == 1) {
+      //    just allocate one the old way
+      //    and copy
+      // }
+      // else {
+      //    pop one off to use it as our new thing
+      //    and copy
+      //    and decrement m_spare_count
+      // }
+
+      // write the new m_spare sector
+      // update root
+   }
 }
 
 //! @brief Restore the root state saved by transaction_begin().
@@ -224,8 +234,8 @@ static void transaction_rollback(void) {
    root = saved_root.m_root;
    lfsr_state = saved_root.m_lfsr_state;
    transaction_may_use_reserve = false;
-   trash_node_count = 0;
-   trash_node_overflow = false;
+   //trash_node_count = 0;
+   //trash_node_overflow = false;
    transaction_open = false;
 }
 
@@ -317,41 +327,12 @@ static uint32_t root_checksum(Root *r) {
 //! @brief Expand the compact in-memory root state into one on-disk sector.
 static void root_to_disk(Root *out) {
    memset(out, 0, sizeof(*out));
-   out->m_signature = root.m_signature;
-   out->m_version = root.m_version;
-   out->m_sector_size = root.m_sector_size;
-   out->m_total_sectors = root.m_total_sectors;
-   out->m_data_root = root.m_data_root;
-   out->m_free_root = root.m_free_root;
-   out->m_spare_count = root.m_spare_count;
-   memcpy(out->m_spare_inline, root.m_spare_inline, sizeof(out->m_spare_inline));
-   out->m_count = root.m_count;
-   out->m_bottom = root.m_bottom;
-   out->m_top = root.m_top;
-   out->m_origin = root.m_origin;
-   out->m_root_version = root.m_root_version;
-   out->m_lfsr_seed = root.m_lfsr_seed;
+   memcpy(out, &root, sizeof(RootHead));
 }
 
 //! @brief Load the compact in-memory root state from a validated on-disk sector.
 static void root_from_disk(const Root *in) {
-   root.m_signature = in->m_signature;
-   root.m_version = in->m_version;
-   root.m_sector_size = in->m_sector_size;
-   root.m_total_sectors = in->m_total_sectors;
-   root.m_data_root = in->m_data_root;
-   root.m_free_root = in->m_free_root;
-   root.m_spare_count = in->m_spare_count;
-   if (root.m_spare_count > SPARE_MAX) {
-      root.m_spare_count = 0;
-   }
-   memcpy(root.m_spare_inline, in->m_spare_inline, sizeof(root.m_spare_inline));
-   root.m_count = in->m_count;
-   root.m_bottom = in->m_bottom;
-   root.m_top = in->m_top;
-   root.m_origin = in->m_origin;
-   root.m_root_version = in->m_root_version;
-   root.m_lfsr_seed = in->m_lfsr_seed;
+   memcpy(&root, in, sizeof(RootHead));
 }
 
 //! @brief Read and validate one of the two root copies.
@@ -390,23 +371,22 @@ static bool commit_root(void) {
 //! @brief Initialize an empty root block for a new filesystem.
 static bool init_root(NarfSector origin, NarfSector size) {
    memset(&root, 0, sizeof(root));
-   root.m_signature = SIGNATURE;
-   root.m_version = VERSION;
-   root.m_sector_size = NARF_SECTOR_SIZE;
+   root.m_signature     = SIGNATURE;
+   root.m_version       = VERSION;
+   root.m_sector_size   = NARF_SECTOR_SIZE;
    root.m_total_sectors = size;
-   root.m_data_root = NULL_REF;
-   root.m_free_root = NULL_REF;
-   root.m_spare_count = 0;
-   for (unsigned i = 0; i < SPARE_MAX; i++) {
-      root.m_spare_inline[i] = END;
-   }
-   root.m_count = 0;
-   root.m_bottom = 2;
-   root.m_top = size;
-   root.m_origin = origin;
-   root.m_root_version = 0;
-   root.m_lfsr_seed = mkfs_lfsr_seed(origin, size);
-   lfsr_state = root.m_lfsr_seed;
+   root.m_data_root     = NULL_REF;
+   root.m_free_root     = NULL_REF;
+   root.m_spare         = NULL_REF;
+   root.m_spare_count   = 0;
+   root.m_count         = 0;
+   root.m_bottom        = 2;
+   root.m_top           = size;
+   root.m_origin        = origin;
+   root.m_root_version  = 0;
+   root.m_lfsr_seed     = mkfs_lfsr_seed(origin, size);
+
+   lfsr_state           = root.m_lfsr_seed;
 
    root_to_disk(&root_tmp);
    root_tmp.m_checksum = 0;
@@ -431,62 +411,6 @@ static uint32_t node_checksum(Node *n) {
    ck = crc32(0, n, NARF_SECTOR_SIZE - sizeof(uint32_t));
    n->m_checksum = old;
    return ck;
-}
-
-//! @brief Move node to trash.  It will be moved to spare after commit.
-static void trash_node(NarfRef ref) {
-   if (!transaction_open) return;
-   if (ref_is_null(ref)) return;
-   if (!valid_node_sector(ref.m_sector)) return;
-
-   for (unsigned i = 0; i < trash_node_count; i++) {
-      if (trash_nodes[i] == ref.m_sector) return;
-   }
-
-   if (trash_node_count < TRASH_MAX) {
-      trash_nodes[trash_node_count++] = ref.m_sector;
-   }
-   else {
-      trash_node_overflow = true;
-   }
-}
-
-//! @brief Pop one sector from the rollback-safe root-resident spare stack.
-static bool pop_spare(NarfRef *ref) {
-   if (ref == NULL) return false;
-
-   while (root.m_spare_count > 0) {
-      NarfSector sector = root.m_spare_inline[--root.m_spare_count];
-      root.m_spare_inline[root.m_spare_count] = END;
-
-      if (!valid_node_sector(sector)) {
-         continue;
-      }
-
-      ref->m_sector = sector;
-      ref->m_version = 0;
-      return true;
-   }
-
-   return false;
-}
-
-//! @brief Add one committed-safe catalog-node sector to the spare stack.
-static bool push_spare(NarfSector sector) {
-   if (!valid_node_sector(sector)) return true;
-
-   for (NarfSector i = 0; i < root.m_spare_count && i < SPARE_MAX; i++) {
-      if (root.m_spare_inline[i] == sector) {
-         return true;
-      }
-   }
-
-   if (root.m_spare_count >= SPARE_MAX) {
-      return true;
-   }
-
-   root.m_spare_inline[root.m_spare_count++] = sector;
-   return true;
 }
 
 static bool alloc_node_sector(NarfRef *ref);
@@ -549,7 +473,7 @@ static bool write_node(NarfRef oldref, Node *n, NarfRef *newref) {
    else {
       if (!alloc_node_sector(&ref)) return false;
       n->m_node_version = new_node_version(oldver, ref.m_sector);
-      trash_node(oldref);
+      //trash_node(oldref);
    }
 
    n->m_root_version = txver;
@@ -753,7 +677,7 @@ static bool data_delete_min_rec(NarfRef rootref, NarfRef *out, NarfRef *minref) 
 
    if (ref_is_null(left)) {
       if (minref) *minref = rootref;
-      trash_node(rootref);
+      //trash_node(rootref);
       *out = right;
       return true;
    }
@@ -796,7 +720,7 @@ static bool data_delete_rec(NarfRef rootref, const char *key, NarfRef *out, Narf
    }
    else {
       *removed_ref = rootref;
-      trash_node(rootref);
+      //trash_node(rootref);
       if (removed_data) *removed_data = node_work0.m_data;
       if (ref_is_null(left)) {
          *out = right;
@@ -899,7 +823,7 @@ static bool free_delete_min_rec(NarfRef rootref, NarfRef *out, NarfRef *minref) 
 
    if (ref_is_null(left)) {
       if (minref) *minref = rootref;
-      trash_node(rootref);
+      //trash_node(rootref);
       *out = right;
       return true;
    }
@@ -942,7 +866,7 @@ static bool free_delete_rec(NarfRef rootref, NarfSector length, NarfSector start
    }
    else {
       *removed_ref = rootref;
-      trash_node(rootref);
+      //trash_node(rootref);
       if (removed_free) *removed_free = node_work0.m_free;
       if (ref_is_null(left)) {
          *out = right;
@@ -1084,9 +1008,11 @@ static bool alloc_node_sector(NarfRef *ref) {
 
    if (ref == NULL) return false;
 
+#if 0
    if (pop_spare(ref)) {
       return true;
    }
+#endif
 
    reserve = transaction_may_use_reserve ? 0 : metadata_reserve();
    if (root.m_top > root.m_bottom + reserve) {
@@ -1430,6 +1356,8 @@ static bool validate_mounted_root(void) {
    if (!validate_tree_rec(root.m_data_root)) return false;
    if (!validate_tree_rec(root.m_free_root)) return false;
 
+   // TODO FIX validate m_spare
+
    return true;
 }
 
@@ -1449,42 +1377,10 @@ static bool mount_root_copy(NarfSector start, int which) {
    return true;
 }
 
-//! @brief Recycle metadata nodes trash by a successfully committed mutation.
-static void move_trash_to_spare_after_commit(void) {
-   RootSnapshot committed;
-   unsigned count = trash_node_count;
-
-   if (count == 0) {
-      trash_node_overflow = false;
-      return;
-   }
-
-   committed.m_root = root;
-   committed.m_lfsr_state = lfsr_state;
-
-   for (unsigned i = 0; i < count; i++) {
-      if (!push_spare(trash_nodes[i])) {
-         root = committed.m_root;
-         lfsr_state = committed.m_lfsr_state;
-         trash_node_count = 0;
-         trash_node_overflow = false;
-         return;
-      }
-   }
-
-   if (!commit_root()) {
-      root = committed.m_root;
-      lfsr_state = committed.m_lfsr_state;
-   }
-
-   trash_node_count = 0;
-   trash_node_overflow = false;
-}
-
 //! @brief Commit a public mutation.
 static bool commit_user_transaction(void) {
    if (!commit_root()) return false;
-   move_trash_to_spare_after_commit();
+   //move_trash_to_spare_after_commit();
    return true;
 }
 
@@ -1824,6 +1720,7 @@ static void fsck_free_order_rec(NarfRef ref) {
    fsck_free_order_rec(right);
 }
 
+#if 0
 //! @brief Count matching metadata node sectors in a tree.
 static NarfSector fsck_count_node_sector_rec(NarfRef ref, NarfSector sector) {
    NarfRef left;
@@ -1844,6 +1741,7 @@ static NarfSector fsck_count_node_sector_rec(NarfRef ref, NarfSector sector) {
    count += fsck_count_node_sector_rec(right, sector);
    return count;
 }
+#endif
 
 //! @brief Check whether one free extent overlaps a given payload extent.
 static void fsck_scan_free_overlap_rec(NarfRef ref, NarfSector start, NarfSector length) {
@@ -1997,38 +1895,8 @@ static void fsck_free_extents_rec(NarfRef ref) {
    fsck_free_extents_rec(right);
 }
 
-//! @brief Validate root-resident metadata-free stack entries.
-static void fsck_spare_stack(void) {
-   if (root.m_spare_count > SPARE_MAX) {
-      fsck_error();
-      return;
-   }
-
-   for (NarfSector i = 0; i < root.m_spare_count; i++) {
-      NarfSector sector = root.m_spare_inline[i];
-
-      fsck_ctx.m_report.spare_nodes++;
-
-      if (!valid_node_sector(sector)) {
-         fsck_error();
-         continue;
-      }
-
-      if (sector < root.m_top || sector >= root.m_total_sectors) {
-         fsck_error();
-      }
-
-      for (NarfSector j = i + 1; j < root.m_spare_count; j++) {
-         if (root.m_spare_inline[j] == sector) {
-            fsck_error();
-         }
-      }
-
-      if (fsck_count_node_sector_rec(root.m_data_root, sector) != 0 ||
-          fsck_count_node_sector_rec(root.m_free_root, sector) != 0) {
-         fsck_error();
-      }
-   }
+//! @brief Validate spare
+static void fsck_spare(void) {
 }
 
 //! @brief Validate the mounted filesystem and return a small consistency report.
@@ -2062,7 +1930,7 @@ static bool narf_fsck_impl(NarfFsckReport *report, bool deep_checks) {
 
          fsck_data_extents_rec(root.m_data_root);
          fsck_free_extents_rec(root.m_free_root);
-         fsck_spare_stack();
+         fsck_spare();
       }
 
       fsck_ctx.m_report.file_count = root.m_count;
@@ -3276,7 +3144,7 @@ void narf_debug(void) {
    printf("root.m_total_sectors = %08x\n", root.m_total_sectors);
    printf("root.m_data_root     = [%08x:%08x]\n", root.m_data_root.m_sector, root.m_data_root.m_version);
    printf("root.m_free_root     = [%08x:%08x]\n", root.m_free_root.m_sector, root.m_free_root.m_version);
-   printf("root.m_spare_count   = %u\n", (unsigned)root.m_spare_count);
+   //printf("root.m_spare_count   = %u\n", (unsigned)root.m_spare_count);
    printf("root.m_lfsr_seed     = %08x\n", root.m_lfsr_seed);
    printf("root.m_count         = %08x\n", root.m_count);
    printf("root.m_bottom        = %08x\n", root.m_bottom);
