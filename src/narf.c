@@ -17,7 +17,7 @@
 #endif
 
 #define SIGNATURE 0x4652414E // little endian 'NARF'
-#define VERSION 0x00000007
+#define FORMAT 0x00000007
 #define END INVALID_NAF
 #define NARF_MIN_FS_SECTORS 4
 #define NARF_MAX_AVL_DEPTH 96
@@ -59,7 +59,7 @@ typedef struct PACKED {
       uint32_t m_signature;      \
       uint8_t  m_sigbytes[4];    \
    };                            \
-   uint32_t     m_version;       \
+   uint32_t     m_format;        \
    NarfByteSize m_sector_size;   \
    NarfSector   m_total_sectors; \
    NarfRef      m_data_root;     \
@@ -283,7 +283,7 @@ static uint32_t mkfs_lfsr_seed(NarfSector origin, NarfSector size) {
 //! @brief Validate that the mounted root looks like a current NARF root.
 static bool verify(void) {
    if (root.m_signature != SIGNATURE) return false;
-   if (root.m_version != VERSION) return false;
+   if (root.m_format != FORMAT) return false;
    if (root.m_sector_size != NARF_SECTOR_SIZE) return false;
    return true;
 }
@@ -340,7 +340,7 @@ static void root_from_disk(const Root *in) {
 static bool read_root_copy(NarfSector origin, int which, Root *out) {
    if (!narf_io_read(origin + (NarfSector) which, out)) return false;
    if (out->m_signature != SIGNATURE) return false;
-   if (out->m_version != VERSION) return false;
+   if (out->m_format != FORMAT) return false;
    if (out->m_sector_size != NARF_SECTOR_SIZE) return false;
    if (out->m_checksum != root_checksum(out)) return false;
    return true;
@@ -373,7 +373,7 @@ static bool commit_root(void) {
 static bool init_root(NarfSector origin, NarfSector size) {
    memset(&root, 0, sizeof(root));
    root.m_signature     = SIGNATURE;
-   root.m_version       = VERSION;
+   root.m_format        = FORMAT;
    root.m_sector_size   = NARF_SECTOR_SIZE;
    root.m_total_sectors = size;
    root.m_data_root     = NULL_REF;
@@ -3140,7 +3140,7 @@ static void print_tree(NarfRef ref, int indent, uint64_t pattern, const char *la
 //! @brief Print internal NARF root and tree state.
 void narf_debug(void) {
    printf("root.m_signature     = %08x '%.4s'\n", root.m_signature, root.m_sigbytes);
-   printf("root.m_version       = %08x\n", root.m_version);
+   printf("root.m_format        = %08x\n", root.m_format);
    printf("root.m_root_version  = %u copy=%d\n", root.m_root_version, root_copy);
    printf("root.m_total_sectors = %08x\n", root.m_total_sectors);
    printf("root.m_data_root     = [%08x:%08x]\n", root.m_data_root.m_sector, root.m_data_root.m_version);
