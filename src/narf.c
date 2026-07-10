@@ -37,7 +37,7 @@
 
 typedef struct PACKED {
    NarfSector m_sector;
-   uint32_t   m_version;
+   uint32_t   m_gen;
 } NarfRef;
 
 #define NULL_REF ((NarfRef){ END, 0 })
@@ -70,8 +70,8 @@ typedef struct PACKED {
    NarfSector   m_bottom;        \
    NarfSector   m_top;           \
    NarfSector   m_origin;        \
-   uint32_t     m_root_version;  \
-   uint32_t     m_lfsr_seed; \
+   uint32_t     m_gen;           \
+   uint32_t     m_lfsr_seed;     \
    uint8_t      m_spare_ptr;
 
 typedef struct PACKED {
@@ -86,8 +86,7 @@ typedef struct PACKED {
 static_assert(sizeof(Root) == NARF_SECTOR_SIZE, "Root wrong size");
 
 #define NODE_HEAD_FIELDS \
-   uint32_t     m_root_version; \
-   uint32_t     m_node_version; \
+   uint32_t     m_gen; \
    NarfRef      m_left; \
    NarfRef      m_right; \
    uint8_t      m_height; \
@@ -108,8 +107,7 @@ typedef struct PACKED {
 static_assert(sizeof(Node) == NARF_SECTOR_SIZE, "Node wrong size");
 
 #define SPARE_PREHEADER_FIELDS       \
-   uint32_t m_root_version;          \
-   uint32_t m_version;               \
+   uint32_t m_spare_gen;             \
    NarfRef  m_next;                  \
    NarfSector m_count;
 
@@ -180,21 +178,21 @@ uint32_t crc32(uint32_t crc, const void *data, size_t length) {
    return ~crc;
 }
 
-//! @brief Return true when a versioned NARF reference is null.
+//! @brief Return true when a generation-tagged NARF reference is null.
 static bool ref_is_null(NarfRef ref) {
-   return ref.m_sector == END || ref.m_version == 0;
+   return ref.m_sector == END || ref.m_gen == 0;
 }
 
 
-//! @brief Compare 32-bit root versions using wraparound ordering.
-static bool version_after(uint32_t a, uint32_t b) {
+//! @brief Compare 32-bit root generations using wraparound ordering.
+static bool gen_after(uint32_t a, uint32_t b) {
    uint32_t diff = a - b;
    return diff != 0 && diff < 0x80000000u;
 }
 
-//! @brief Return the root version assigned to writes in the open transaction.
-static uint32_t transaction_root_version(void) {
-   uint32_t v = root.m_root_version + 1;
+//! @brief Return the root generation assigned to writes in the open transaction.
+static uint32_t transaction_root_gen(void) {
+   uint32_t v = root.m_gen + 1;
 
    if (v == 0) {
       v = 1;
@@ -346,18 +344,18 @@ static bool read_root_copy(NarfSector origin, int which, Root *out) {
    return true;
 }
 
-//! @brief Read and validate a root copy, returning only its root version.
-static bool read_root_copy_version(NarfSector origin, int which, uint32_t *version) {
+//! @brief Read and validate a root copy, returning only its root generation.
+static bool read_root_copy_gen(NarfSector origin, int which, uint32_t *version) {
    if (version == NULL) return false;
    if (!read_root_copy(origin, which, &root_tmp)) return false;
-   *version = root_tmp.m_root_version;
+   *version = root_tmp.m_gen;
    return true;
 }
 
 //! @brief Commit the current in-memory root as the newest root copy.
 static bool commit_root(void) {
    int dest = 1 - root_copy;
-   root.m_root_version = transaction_root_version();
+   root.m_gen = transaction_root_gen();
    root.m_lfsr_seed = lfsr_next();
    root_to_disk(&root_tmp);
    root_tmp.m_checksum = 0;
@@ -384,7 +382,7 @@ static bool init_root(NarfSector origin, NarfSector size) {
    root.m_bottom        = 2;
    root.m_top           = size;
    root.m_origin        = origin;
-   root.m_root_version  = 0;
+   root.m_gen           = 0;
    root.m_lfsr_seed     = mkfs_lfsr_seed(origin, size);
 
    lfsr_state           = root.m_lfsr_seed;
@@ -394,7 +392,7 @@ static bool init_root(NarfSector origin, NarfSector size) {
    root_tmp.m_checksum = crc32(0, &root_tmp, NARF_SECTOR_SIZE - sizeof(uint32_t));
    if (!narf_io_write(origin + 1, &root_tmp)) return false;
 
-   root.m_root_version = 1;
+   root.m_gen = 1;
    root_to_disk(&root_tmp);
    root_tmp.m_checksum = 0;
    root_tmp.m_checksum = crc32(0, &root_tmp, NARF_SECTOR_SIZE - sizeof(uint32_t));
@@ -422,7 +420,7 @@ static bool read_node_any(NarfSector sector, Node *out) {
    if (!valid_node_sector(sector)) return false;
    if (!narf_io_read(root.m_origin + sector, out)) return false;
    if (out->m_checksum != node_checksum(out)) return false;
-   if (out->m_node_version == 0) return false;
+   if (out->m_gen == 0) return false;
    return true;
 }
 
@@ -431,18 +429,18 @@ static bool read_node(NarfRef ref, Node *out, int *which) {
    if (ref_is_null(ref)) return false;
    if (!valid_node_sector(ref.m_sector)) return false;
    if (!read_node_any(ref.m_sector, out)) return false;
-   if (out->m_node_version != ref.m_version) return false;
+   if (out->m_gen != ref.m_gen) return false;
    if (which) *which = 0;
    return true;
 }
 
-//! @brief Choose a new node version that does not collide with visible contents.
-static uint32_t new_node_version(uint32_t old, NarfSector sector) {
+//! @brief Choose a new node generation that does not collide with visible contents.
+static uint32_t new_node_gen(uint32_t old, NarfSector sector) {
    uint32_t v;
    uint32_t current = 0;
 
    if (valid_node_sector(sector) && read_node_any(sector, &node_tmp)) {
-      current = node_tmp.m_node_version;
+      current = node_tmp.m_gen;
    }
 
    do {
@@ -459,25 +457,25 @@ static bool write_node(NarfRef oldref, Node *n, NarfRef *newref) {
 
    if (n == NULL || newref == NULL) return false;
 
-   txver = transaction_root_version();
-   oldver = oldref.m_version;
+   txver = transaction_root_gen();
+   oldver = oldref.m_gen;
    ref = oldref;
 
-   if (oldref.m_sector != END && oldref.m_version == 0 &&
+   if (oldref.m_sector != END && oldref.m_gen == 0 &&
        valid_node_sector(oldref.m_sector)) {
-      n->m_node_version = new_node_version(0, oldref.m_sector);
+      n->m_gen = new_node_gen(0, oldref.m_sector);
    }
    else if (!ref_is_null(oldref) && read_node(oldref, &node_tmp, NULL) &&
-            node_tmp.m_root_version == txver) {
-      n->m_node_version = node_tmp.m_node_version;
+            node_tmp.m_gen == txver) {
+      n->m_gen = node_tmp.m_gen;
    }
    else {
       if (!alloc_node_sector(&ref)) return false;
-      n->m_node_version = new_node_version(oldver, ref.m_sector);
+      n->m_gen = new_node_gen(oldver, ref.m_sector);
       //trash_node(oldref);
    }
 
-   n->m_root_version = txver;
+   n->m_gen = txver;
    n->m_checksum = 0;
    n->m_checksum = crc32(0, n, NARF_SECTOR_SIZE - sizeof(uint32_t));
 
@@ -486,7 +484,7 @@ static bool write_node(NarfRef oldref, Node *n, NarfRef *newref) {
    }
 
    newref->m_sector = ref.m_sector;
-   newref->m_version = n->m_node_version;
+   newref->m_gen = n->m_gen;
    return true;
 }
 
@@ -1019,7 +1017,7 @@ static bool alloc_node_sector(NarfRef *ref) {
    if (root.m_top > root.m_bottom + reserve) {
       root.m_top--;
       ref->m_sector = root.m_top;
-      ref->m_version = 0;
+      ref->m_gen = 0;
       return true;
    }
 
@@ -1078,7 +1076,7 @@ static bool insert_free_extent_with_ref(NarfRef ref, NarfSector start, NarfSecto
       }
    } while (changed);
 
-   if (ref.m_sector != END && ref.m_version == 0) {
+   if (ref.m_sector != END && ref.m_gen == 0) {
       seed = ref;
    }
 
@@ -1507,17 +1505,17 @@ bool narf_mkfs(NarfSector start, NarfSector size) {
 bool narf_init(NarfSector start) {
    bool loval;
    bool hival;
-   uint32_t loversion = 0;
-   uint32_t hiversion = 0;
+   uint32_t logen = 0;
+   uint32_t higen = 0;
    int chosen;
    int fallback;
 
    if (!narf_io_open()) return false;
-   loval = read_root_copy_version(start, 0, &loversion);
-   hival = read_root_copy_version(start, 1, &hiversion);
+   loval = read_root_copy_gen(start, 0, &logen);
+   hival = read_root_copy_gen(start, 1, &higen);
 
    if (loval && hival) {
-      chosen = version_after(hiversion, loversion) ? 1 : 0;
+      chosen = gen_after(higen, logen) ? 1 : 0;
       fallback = 1 - chosen;
       if (mount_root_copy(start, chosen)) return true;
       return mount_root_copy(start, fallback);
@@ -3072,12 +3070,12 @@ static void print_debug_metadata(const uint8_t metadata[NARF_METADATA_SIZE]) {
 static void print_tree_node(NarfRef ref, const Node *n, const char *label) {
    if (label[0] == 'F') {
       printf("'%s' [%08x:%08x] F-> start:len=(%08x:%u) h=%u",
-             n->m_key, ref.m_sector, ref.m_version,
+             n->m_key, ref.m_sector, ref.m_gen,
              n->m_free.m_start, (unsigned)n->m_free.m_length, n->m_height);
    }
    else {
       printf("'%s' [%08x:%08x] %s-> start:len=(%08x:%u) bytes=%u h=%u",
-             n->m_key, ref.m_sector, ref.m_version, label,
+             n->m_key, ref.m_sector, ref.m_gen, label,
              n->m_data.m_start, (unsigned)n->m_data.m_length, (unsigned)n->m_data.m_bytes, n->m_height);
       print_debug_metadata(n->m_data.m_metadata);
    }
@@ -3141,10 +3139,10 @@ static void print_tree(NarfRef ref, int indent, uint64_t pattern, const char *la
 void narf_debug(void) {
    printf("root.m_signature     = %08x '%.4s'\n", root.m_signature, root.m_sigbytes);
    printf("root.m_format        = %08x\n", root.m_format);
-   printf("root.m_root_version  = %u copy=%d\n", root.m_root_version, root_copy);
+   printf("root.m_gen           = %u copy=%d\n", root.m_gen, root_copy);
    printf("root.m_total_sectors = %08x\n", root.m_total_sectors);
-   printf("root.m_data_root     = [%08x:%08x]\n", root.m_data_root.m_sector, root.m_data_root.m_version);
-   printf("root.m_free_root     = [%08x:%08x]\n", root.m_free_root.m_sector, root.m_free_root.m_version);
+   printf("root.m_data_root     = [%08x:%08x]\n", root.m_data_root.m_sector, root.m_data_root.m_gen);
+   printf("root.m_free_root     = [%08x:%08x]\n", root.m_free_root.m_sector, root.m_free_root.m_gen);
    //printf("root.m_spare_count   = %u\n", (unsigned)root.m_spare_count);
    printf("root.m_lfsr_seed     = %08x\n", root.m_lfsr_seed);
    printf("root.m_count         = %08x\n", root.m_count);

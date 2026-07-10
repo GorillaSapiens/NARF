@@ -1,5 +1,6 @@
 all:
 	(cd src ; make)
+	src/narf_details
 
 clean:
 	(cd src ; make clean)
