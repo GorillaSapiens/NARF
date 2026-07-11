@@ -14,7 +14,10 @@ MSRC := narf_mkfs.c narf.c
 MOBJ := $(MSRC:.c=.o)
 MDEP := $(MOBJ:.o=.d)
 
-all: narf_tester narf_fuse narf_mkfs
+all: narf_details narf_tester narf_fuse narf_mkfs
+
+narf_details: narf.c
+	$(CC) -DNARF_DETAILS narf.c -o narf_details
 
 narf_tester: $(TOBJ)
 	$(CC) $(TOBJ) -o $@ -lreadline
@@ -30,7 +33,7 @@ bootloader.bin: bootloader.asm
 	nasm -f bin bootloader.asm -o bootloader.bin
 
 clean:
-	rm -rf narf_tester narf_fuse narf_mkfs *.o *.d
+	rm -rf narf_details narf_tester narf_fuse narf_mkfs *.o *.d
 
 %.o: %.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@

@@ -3304,3 +3304,31 @@ void narf_debug(void) {
 }
 #endif
 
+#ifdef NARF_DETAILS
+bool narf_io_open(void) {
+   return false;
+}
+
+bool narf_io_close(void) {
+   return false;
+}
+
+uint32_t narf_io_sectors(void) {
+   return 0;
+}
+
+bool narf_io_write(uint32_t sector, void *data) {
+   return false;
+}
+
+bool narf_io_read(uint32_t sector, void *data) {
+   return false;
+}
+
+int main(int argc, char **argv) {
+   (void) argc;
+   (void) argv;
+
+   printf("key size : %d bytes\n", sizeof(((Node *) NULL)->m_key));
+}
+#endif
