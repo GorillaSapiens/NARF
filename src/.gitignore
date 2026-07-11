@@ -1,5 +1,6 @@
 narf_tester
 narf_fuse
 narf_mkfs
+narf_details
 *.o
 *.d
