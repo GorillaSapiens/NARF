@@ -24,7 +24,7 @@ static pthread_mutex_t narf_mutex = PTHREAD_MUTEX_INITIALIZER;
 #define LOCK   pthread_mutex_lock(&narf_mutex)
 #define UNLOCK pthread_mutex_unlock(&narf_mutex)
 
-static int fd;
+static int fd = -1;
 static off_t size;
 static int partition = -1;
 static bool mounted = false;
@@ -618,71 +618,74 @@ uint32_t narf_io_sectors(void) {
    return size / NARF_SECTOR_SIZE;
 }
 
+//! @brief Return true when a sector is inside the opened image.
+static bool sector_is_valid(uint32_t sector) {
+   if (fd == -1) {
+      return false;
+   }
+
+   if (sector >= narf_io_sectors()) {
+      return false;
+   }
+
+   return true;
+}
+
+//! @brief Do one exact-size positional file transfer.
+static bool exact_pio(bool write_op, uint32_t sector, void *data) {
+   uint8_t *p = (uint8_t *) data;
+   size_t done = 0;
+   off_t offset;
+
+   if (data == NULL) return false;
+   if (!sector_is_valid(sector)) return false;
+
+   offset = (off_t) sector * (off_t) NARF_SECTOR_SIZE;
+
+   while (done < NARF_SECTOR_SIZE) {
+      ssize_t n;
+
+      if (write_op) {
+         n = pwrite(fd, p + done, NARF_SECTOR_SIZE - done, offset + (off_t) done);
+      }
+      else {
+         n = pread(fd, p + done, NARF_SECTOR_SIZE - done, offset + (off_t) done);
+      }
+
+      if (n < 0) {
+         if (errno == EINTR) continue;
+         return false;
+      }
+
+      if (n == 0) {
+         return false;
+      }
+
+      done += (size_t) n;
+   }
+
+   return true;
+}
+
 //! @brief Write one sector to the backing file.
+//! @see narf_io.h
 //!
 //! @param sector Sector address to access.
 //! @param data Pointer to one sector of data to write.
 //! @return true on success.
 bool narf_io_write(uint32_t sector, void *data) {
-   off_t offset;
-   ssize_t written;
-
-   if (data == NULL) {
-      return false;
-   }
-
-   if (sector >= narf_io_sectors()) {
-      return false;
-   }
-
-   offset = (off_t) sector * NARF_SECTOR_SIZE;
-
-   if (lseek(fd, offset, SEEK_SET) == (off_t) -1) {
-      return false;
-   }
-
-   written = write(fd, data, NARF_SECTOR_SIZE);
-
-   if (written != NARF_SECTOR_SIZE) {
-      return false;
-   }
-
-   fsync(fd);
-   return true;
+   return exact_pio(true, sector, data);
 }
 
 //! @brief Read one sector from the backing file.
+//! @see narf_io.h
 //!
 //! @param sector Sector address to access.
 //! @param data Pointer to one sector of read buffer.
 //! @return true on success.
 bool narf_io_read(uint32_t sector, void *data) {
-   off_t offset;
-   ssize_t bytes;
-
-   if (data == NULL) {
-      return false;
-   }
-
-   if (sector >= narf_io_sectors()) {
-      return false;
-   }
-
-   offset = (off_t) sector * NARF_SECTOR_SIZE;
-
-   if (lseek(fd, offset, SEEK_SET) == (off_t) -1) {
-      return false;
-   }
-
-   bytes = read(fd, data, NARF_SECTOR_SIZE);
-
-   if (bytes != NARF_SECTOR_SIZE) {
-      return false;
-   }
-
-   return true;
+   return exact_pio(false, sector, data);
 }
-
 
 // --- File & directory metadata ---
 //! @brief FUSE getattr callback.
@@ -1341,7 +1344,7 @@ static int my_flush(const char *path, struct fuse_file_info *fi) {
 
    if (!mounted) return -ENODEV;
 
-   // The core writes synchronously; there is no per-handle flush state.
+   // There is no per-handle dirty state here; durability is handled by fsync/fsyncdir.
    return 0;
 }
 
@@ -1364,7 +1367,7 @@ static int my_fsync(const char *path, int isdatasync, struct fuse_file_info *fi)
 
    if (!mounted) return -ENODEV;
 
-   // The core write path fsyncs sectors through narf_io_write().
+   if (fsync(fd) == -1) return -errno;
    return 0;
 }
 
@@ -1604,7 +1607,7 @@ static int my_fsyncdir(const char *path, int isdatasync, struct fuse_file_info *
 
    if (!mounted) return -ENODEV;
 
-   // Directory updates are committed synchronously by the core.
+   if (fsync(fd) == -1) return -errno;
    return 0;
 }
 
@@ -1942,9 +1945,13 @@ static void *my_init(struct fuse_conn_info *conn, struct fuse_config *cfg) {
 static void my_destroy(void *private_data) {
    (void) private_data;
 
-   //if (!mounted) return -ENODEV;
+   if (fd != -1) {
+      fsync(fd);
+      close(fd);
+      fd = -1;
+   }
 
-   // Called on unmount.
+   mounted = false;
 }
 
 static struct fuse_operations my_ops = {

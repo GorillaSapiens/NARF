@@ -56,26 +56,29 @@ typedef struct PACKED {
    NarfSector m_length;
 } FreePayload;
 
-typedef struct {
-   union {
-      uint32_t m_signature;
-      uint8_t  m_sigbytes[4];
-   };
-   uint32_t     m_version;
-   NarfByteSize m_sector_size;
-   NarfSector   m_total_sectors;
-   NarfRef      m_data_root;
-   NarfRef      m_free_root;
-
-   NarfSector   m_spare_count; // see "Spare catalog-node sectors" below
-   NarfSector   m_spare_inline[SPARE_MAX];
-
-   NarfSector   m_count;
-   NarfSector   m_bottom;
-   NarfSector   m_top;
-   NarfSector   m_origin;
-   uint32_t     m_root_version;
+#define ROOT_FIELDS                        \
+   union {                                 \
+      uint32_t m_signature;                \
+      uint8_t  m_sigbytes[4];              \
+   };                                      \
+   uint32_t     m_version;                 \
+   NarfByteSize m_sector_size;             \
+   NarfSector   m_total_sectors;           \
+   NarfRef      m_data_root;               \
+   NarfRef      m_free_root;               \
+                                           \
+   NarfSector   m_spare_count;             \
+   NarfSector   m_spare_inline[SPARE_MAX]; \
+                                           \
+   NarfSector   m_count;                   \
+   NarfSector   m_bottom;                  \
+   NarfSector   m_top;                     \
+   NarfSector   m_origin;                  \
+   uint32_t     m_root_version;            \
    uint32_t     m_lfsr_seed;
+
+typedef struct {
+   ROOT_FIELDS
 } RootState;
 
 // Spare catalog-node sectors.
@@ -90,49 +93,34 @@ typedef struct {
 // because the free tree is itself made of catalog nodes.
 
 // Bytes occupied by Root fields other than m_reserved. Keep this next to Root.
-#define ROOT_PREFIX_BYTES (4 + 4 + sizeof(NarfByteSize) + sizeof(NarfSector) + \
-                           2 * sizeof(NarfRef) + (5 + SPARE_MAX) * sizeof(NarfSector) + \
-                           4 + 4)
+#define ROOT_PREFIX_BYTES (sizeof(RootState))
 #define ROOT_RESERVED_BYTES (NARF_SECTOR_SIZE - ROOT_PREFIX_BYTES - sizeof(uint32_t))
 
 typedef struct PACKED {
-   union {
-      uint32_t m_signature;
-      uint8_t  m_sigbytes[4];
-   };
-   uint32_t     m_version;
-   NarfByteSize m_sector_size;
-   NarfSector   m_total_sectors;
-   NarfRef      m_data_root;
-   NarfRef      m_free_root;
-   NarfSector   m_spare_count;
-   NarfSector   m_spare_inline[SPARE_MAX];
-   NarfSector   m_count;
-   NarfSector   m_bottom;
-   NarfSector   m_top;
-   NarfSector   m_origin;
-   uint32_t     m_root_version;
-   uint32_t     m_lfsr_seed;
+   ROOT_FIELDS
    uint8_t      m_reserved[ROOT_RESERVED_BYTES];
    uint32_t     m_checksum;
 } Root;
 static_assert(sizeof(Root) == NARF_SECTOR_SIZE, "Root wrong size");
 
-// Bytes occupied by Node fields other than m_key. Keep this next to Node.
-#define NODE_BYTES_EXCEPT_KEY (2 * sizeof(NarfRef) + 1 + sizeof(DataPayload) + \
-                               3 * sizeof(uint32_t))
+#define NODE_FIELDS             \
+   NarfRef      m_left;         \
+   NarfRef      m_right;        \
+   uint8_t      m_height;       \
+   union {                      \
+      DataPayload m_data;       \
+      FreePayload m_free;       \
+   };                           \
+   uint32_t     m_root_version; \
+   uint32_t     m_node_version;
 
 typedef struct PACKED {
-   NarfRef      m_left;
-   NarfRef      m_right;
-   uint8_t      m_height;
-   union {
-      DataPayload m_data;
-      FreePayload m_free;
-   };
-   char         m_key[NARF_SECTOR_SIZE - NODE_BYTES_EXCEPT_KEY];
-   uint32_t     m_root_version;
-   uint32_t     m_node_version;
+   NODE_FIELDS
+} NodeHeader;
+
+typedef struct PACKED {
+   NODE_FIELDS
+   char         m_key[NARF_SECTOR_SIZE - sizeof(NodeHeader) - sizeof(uint32_t)];
    uint32_t     m_checksum;
 } Node;
 static_assert(sizeof(Node) == NARF_SECTOR_SIZE, "Node wrong size");
@@ -146,6 +134,7 @@ typedef union {
    Root     root;
    Node     node;
 } SectorScratch;
+static_assert(sizeof(SectorScratch) == NARF_SECTOR_SIZE, "Node sector scratch size");
 
 typedef struct {
    RootState m_root;
@@ -153,7 +142,7 @@ typedef struct {
 } RootSnapshot;
 
 static SectorScratch sector_work;
-#define buffer   sector_work.bytes
+#define buffer        sector_work.bytes
 #define root_tmp      sector_work.root
 #define node_tmp      sector_work.node
 
