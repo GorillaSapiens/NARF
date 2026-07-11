@@ -8,6 +8,19 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#if defined(__has_include)
+#  if __has_include(<readline/readline.h>) && __has_include(<readline/history.h>)
+#     include <readline/history.h>
+#     include <readline/readline.h>
+#  else
+char *readline(const char *prompt);
+void add_history(const char *line);
+#  endif
+#else
+#  include <readline/history.h>
+#  include <readline/readline.h>
+#endif
+
 #include <linux/limits.h>
 
 #include "narf.h"
@@ -1021,7 +1034,7 @@ void process_cmd(const char *buffer) {
    cmd = find_command(argv[0]);
    if (cmd == NULL) {
       printf("huh? Unknown command '%s'.\n", argv[0]);
-      printf("Use 'help' for a command list.\n");
+      print_help();
       return;
    }
 
@@ -1110,23 +1123,54 @@ void gremlins(int s, int n) {
    //exit(0);
 }
 
+//! @brief Return true when a line contains at least one non-space byte.
+static bool line_has_text(const char *line) {
+   if (line == NULL) {
+      return false;
+   }
+
+   while (*line != 0) {
+      if ((unsigned char)*line > ' ') {
+         return true;
+      }
+      ++line;
+   }
+
+   return false;
+}
+
 //! @brief Run the interactive tester prompt.
 void loop(void) {
-   char buffer[1024];
-
    g_quit_requested = false;
-   printf("#>");
-   while(!g_quit_requested && fgets(buffer, sizeof(buffer), stdin)) {
-      size_t len = strlen(buffer);
 
-      while (len > 0 && (unsigned char) buffer[len - 1] < ' ') {
-         buffer[--len] = 0;
+   if (isatty(STDIN_FILENO)) {
+      char *line;
+
+      while (!g_quit_requested && (line = readline("#>")) != NULL) {
+         if (line_has_text(line)) {
+            add_history(line);
+         }
+
+         process_cmd(line);
+         free(line);
       }
+   }
+   else {
+      char buffer[1024];
 
-      process_cmd(buffer);
+      printf("#>");
+      while(!g_quit_requested && fgets(buffer, sizeof(buffer), stdin)) {
+         size_t len = strlen(buffer);
 
-      if (!g_quit_requested) {
-         printf("#>");
+         while (len > 0 && (unsigned char) buffer[len - 1] < ' ') {
+            buffer[--len] = 0;
+         }
+
+         process_cmd(buffer);
+
+         if (!g_quit_requested) {
+            printf("#>");
+         }
       }
    }
 }

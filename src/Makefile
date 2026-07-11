@@ -17,7 +17,7 @@ MDEP := $(MOBJ:.o=.d)
 all: narf_tester narf_fuse narf_mkfs
 
 narf_tester: $(TOBJ)
-	$(CC) $(TOBJ) -o $@
+	$(CC) $(TOBJ) -o $@ -lreadline
 
 narf_fuse: $(FOBJ)
 	$(CC) $(FOBJ) -o $@ `pkg-config fuse3 --cflags --libs`
