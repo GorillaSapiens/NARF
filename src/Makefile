@@ -1,6 +1,6 @@
 CC     := gcc
 ERR    := -Wall -Wextra -Wpedantic -Werror
-CFLAGS := -MMD -MP -MF $(ERR) -g
+CFLAGS := $(ERR) -g
 
 TSRC := narf_tester.c narf_io.c narf.c
 TOBJ := $(TSRC:.c=.o)
@@ -35,6 +35,7 @@ clean:
 %.o: %.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
 
+DEP := $(sort $(TDEP) $(FDEP) $(MDEP))
 -include $(DEP)
 
 # vim:set ai softtabstop=3 shiftwidth=3 tabstop=3 expandtab: ff=unix
