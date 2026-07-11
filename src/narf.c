@@ -753,7 +753,6 @@ static bool data_delete_min_rec(NarfRef rootref, NarfRef *out, NarfRef *minref) 
 
    if (ref_is_null(left)) {
       if (minref) *minref = rootref;
-      trash_node(rootref);
       *out = right;
       return true;
    }
@@ -815,6 +814,7 @@ static bool data_delete_rec(NarfRef rootref, const char *key, NarfRef *out, Narf
       node_work1.m_right = child;
       update_height(&node_work1);
       if (!write_node(succref, &node_work1, &rootref)) return false;
+      if (rootref.m_sector != succref.m_sector) trash_node(succref);
       return rebalance(rootref, out);
    }
 
@@ -899,7 +899,6 @@ static bool free_delete_min_rec(NarfRef rootref, NarfRef *out, NarfRef *minref) 
 
    if (ref_is_null(left)) {
       if (minref) *minref = rootref;
-      trash_node(rootref);
       *out = right;
       return true;
    }
@@ -961,6 +960,7 @@ static bool free_delete_rec(NarfRef rootref, NarfSector length, NarfSector start
       node_work1.m_right = child;
       update_height(&node_work1);
       if (!write_node(succref, &node_work1, &rootref)) return false;
+      if (rootref.m_sector != succref.m_sector) trash_node(succref);
       return rebalance(rootref, out);
    }
 
