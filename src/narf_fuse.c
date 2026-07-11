@@ -18,8 +18,8 @@
 #include "narf_io.h"
 #include "narf.h"
 
-// NARF is not thread safe.  so here we have a mutex, used
-// by all FUSE functions, to guarantee single threaded access.
+// NARF core state is not thread-safe, so every FUSE callback takes
+// this mutex before touching the mounted filesystem.
 static pthread_mutex_t narf_mutex = PTHREAD_MUTEX_INITIALIZER;
 #define LOCK   pthread_mutex_lock(&narf_mutex)
 #define UNLOCK pthread_mutex_unlock(&narf_mutex)
@@ -40,8 +40,8 @@ char *xformpath(const char *path);
 //    v1 uid=1000 gid=1000 mode=100644 mtime=1778706214 bs=4K
 //
 // FUSE parses the Unix-ish fields and exposes every other key=value token as
-// a user.<key> extended attribute.  Unknown tokens are preserved when known
-// fields are changed.  Tokens with whitespace cannot be represented here.
+// a user.<key> extended attribute. Unknown valid tokens are preserved when
+// known fields are changed. Tokens with whitespace cannot be represented here.
 typedef struct {
    uid_t uid;
    gid_t gid;
@@ -567,9 +567,8 @@ static int check_access_bits(const NarfFuseMeta *meta, int mask) {
    return 0;
 }
 
-// strips leading slash if present,
-// adds trailing slash if missing
-// must be free'd !!!
+// Return a newly allocated NARF directory key: no leading slash, one trailing slash.
+// Caller must free the returned string.
 char *xformpath(const char *path) {
    size_t n;
    char *p;
@@ -598,45 +597,32 @@ char *xformpath(const char *path) {
    return p;
 }
 
-//! @brief Initialize the narf_io layer
+//! @brief Initialize the FUSE-backed narf_io layer.
 //!
-//! Used
-//! This is typically implemented by you for yor
-//! hardware.
-//!
-//! @return true on success
+//! @return true on success.
 bool narf_io_open(void) {
    return true;
 }
 
-//! @brief Deinitialize the narf_io layer
+//! @brief Deinitialize the FUSE-backed narf_io layer.
 //!
-//! This is typically implemented by you for yor
-//! hardware.
-//!
-//! @return true on success
+//! @return true on success.
 bool narf_io_close(void) {
    return true;
 }
 
-//! @brief Get the size of the underlying hardware device in sectors
-//!
-//! This is typically implemented by you for yor
-//! hardware.
+//! @brief Get the backing file size in NARF sectors.
 //!
 //! @return the number of sectors supported by the device
 uint32_t narf_io_sectors(void) {
    return size / NARF_SECTOR_SIZE;
 }
 
-//! @brief Write a sector to the disk
+//! @brief Write one sector to the backing file.
 //!
-//! This is typically implemented by you for your
-//! hardware.
-//!
-//! @param sector The address of the sector to access
-//! @param data Pointer to 512 bytes of data to write
-//! @return true on success
+//! @param sector Sector address to access.
+//! @param data Pointer to one sector of data to write.
+//! @return true on success.
 bool narf_io_write(uint32_t sector, void *data) {
    off_t offset;
    ssize_t written;
@@ -665,14 +651,11 @@ bool narf_io_write(uint32_t sector, void *data) {
    return true;
 }
 
-//! @brief Read a sector from the disk
+//! @brief Read one sector from the backing file.
 //!
-//! This is typically implemented by you for your
-//! hardware.
-//!
-//! @param sector The address of the sector to access
-//! @param data Pointer to 512 bytes read buffer
-//! @return true on success
+//! @param sector Sector address to access.
+//! @param data Pointer to one sector of read buffer.
+//! @return true on success.
 bool narf_io_read(uint32_t sector, void *data) {
    off_t offset;
    ssize_t bytes;
@@ -764,7 +747,7 @@ static int my_getattr(const char *path, struct stat *st, struct fuse_file_info *
       return ret;
    }
 
-   // see if it exists as a phantom directory
+   // See if it exists as an implicit directory prefix.
    char *p = xformpath(path);
    if (p == NULL) {
       UNLOCK;
@@ -869,7 +852,7 @@ static int my_mkdir(const char *path, mode_t mode) {
 
    // Create a directory
    if (narf_find(path + 1)) {
-      // it already exists as a file
+      // A regular-file key with this path already exists.
       UNLOCK;
       return -EEXIST;
    }
@@ -882,7 +865,7 @@ static int my_mkdir(const char *path, mode_t mode) {
    }
 
    if (narf_find(p)) {
-      // it already exists as a directory
+      // A directory-marker key with this path already exists.
       free(p);
       UNLOCK;
       return -EEXIST;
@@ -1204,8 +1187,7 @@ static int my_open(const char *path, struct fuse_file_info *fi) {
 
    if (!mounted) return -ENODEV;
 
-   // Open a file
-   // optional, fuse should only call if it exists.
+   // Open is optional here; lookup/getattr already proved the file exists.
    return 0;
 }
 
@@ -1293,8 +1275,7 @@ static int my_write(const char *path, const char *buf, size_t size, off_t offset
 
    LOCK;
 
-   // Write data to a file atomically by letting the core copy-on-write
-   // the payload extent and commit metadata last.
+   // Write data through the core COW path, then update FUSE metadata.
 
    if (!narf_find(path + 1)) {
       UNLOCK;
@@ -1332,7 +1313,7 @@ static int my_statfs(const char *path, struct statvfs *st) {
 
    LOCK;
 
-   // Report filesystem stats
+   // Report filesystem stats.
    NarfStat stats;
    if (!narf_stat(&stats)) {
       UNLOCK;
@@ -1360,7 +1341,7 @@ static int my_flush(const char *path, struct fuse_file_info *fi) {
 
    if (!mounted) return -ENODEV;
 
-   // Flush file contents (can often be a no-op)
+   // The core writes synchronously; there is no per-handle flush state.
    return 0;
 }
 
@@ -1371,8 +1352,7 @@ static int my_release(const char *path, struct fuse_file_info *fi) {
 
    if (!mounted) return -ENODEV;
 
-   // Close file
-   // optional in our case
+   // Release is optional here; no per-handle state is kept.
    return 0;
 }
 
@@ -1384,7 +1364,7 @@ static int my_fsync(const char *path, int isdatasync, struct fuse_file_info *fi)
 
    if (!mounted) return -ENODEV;
 
-   // Flush file to storage
+   // The core write path fsyncs sectors through narf_io_write().
    return 0;
 }
 
@@ -1534,7 +1514,7 @@ static int my_opendir(const char *path, struct fuse_file_info *fi) {
 
    if (!mounted) return -ENODEV;
 
-   // Open directory
+   // Opendir is optional here; no per-directory state is kept.
    return 0;
 }
 
@@ -1612,7 +1592,7 @@ static int my_releasedir(const char *path, struct fuse_file_info *fi) {
 
    if (!mounted) return -ENODEV;
 
-   // Close directory
+   // Releasedir is optional here; no per-directory state is kept.
    return 0;
 }
 
@@ -1624,7 +1604,7 @@ static int my_fsyncdir(const char *path, int isdatasync, struct fuse_file_info *
 
    if (!mounted) return -ENODEV;
 
-   // Sync directory to disk
+   // Directory updates are committed synchronously by the core.
    return 0;
 }
 
@@ -1639,9 +1619,9 @@ static int my_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
 
    LOCK;
 
-   // Create and open a file
+   // Create and open a regular file.
    if (narf_find(path + 1)) {
-      // it already exists
+      // FUSE may call create after lookup; existing file is success here.
       UNLOCK;
       return 0;
    }
@@ -1706,7 +1686,7 @@ static int my_bmap(const char *path, size_t blocksize, uint64_t *idx) {
 
    if (!mounted) return -ENODEV;
 
-   // Map logical block to physical (rarely used)
+   // Physical block mapping is not exposed.
    return -ENOSYS;
 }
 
@@ -1942,7 +1922,7 @@ static void *my_init(struct fuse_conn_info *conn, struct fuse_config *cfg) {
    (void) conn;
    (void) cfg;
 
-   // Called on mount
+   // Called on mount.
    mount_time = now_sec();
    LOCK;
    if (partition == -1) {
@@ -1964,7 +1944,7 @@ static void my_destroy(void *private_data) {
 
    //if (!mounted) return -ENODEV;
 
-   // Called on unmount
+   // Called on unmount.
 }
 
 static struct fuse_operations my_ops = {

@@ -58,8 +58,9 @@ root block contains:
 
 * filesystem signature and current development format version
 * sector size and total sector count
-* root references for the data tree, free tree, and index tree
-* allocation frontier values
+* root references for the data tree and free tree
+* allocation frontier values: `m_bottom` for payload growth and `m_top` for catalog-node growth
+* a small root-resident stack of committed-safe spare catalog-node sectors
 * a persisted LFSR seed for node-version generation
 * a 32-bit root commit version
 * checksum
@@ -73,16 +74,16 @@ other version is nonzero and less than 2^31.
 Nodes and references
 --------------------
 
-Internal node references are not just sector numbers.  They are exact copy
+Internal node references are not just sector numbers.  They are exact-version
 references:
 
 ```
 { sector, node_version }
 ```
 
-The sector identifies the two-sector node slot.  The node version identifies
-which valid copy is expected.  Each node slot has two physical sectors, allowing
-copy-on-write replacement of individual record nodes.
+The sector identifies one 512-byte catalog-node sector.  The node version
+identifies the exact node contents expected at that sector.  A stale sector with
+the wrong node version is not the referenced node, even if its checksum is valid.
 
 Each node contains:
 
@@ -91,21 +92,21 @@ Each node contains:
 * one tree-specific payload union:
   * data nodes store payload start sector, payload length, byte size, and `m_metadata`
   * free nodes store free-extent start sector and length
-  * index nodes store parent/previous/next traversal references
-* key string
+* key string, used by data nodes and empty for free nodes
+* root version of the transaction that last wrote the node
 * random-looking 32-bit node version
 * checksum
 
 Node versions come from a 32-bit LFSR.  The current LFSR state is stored in the
 root when a transaction commits, so remounting continues from the committed
-state.  When a node copy is written, NARF rejects version 0 and rejects versions
-already visible in that node slot.  That prevents abandoned copies from being
-mistaken for the exact node version referenced by committed catalog state.
+state.  When a node sector is written, NARF rejects version 0 and avoids the
+currently visible version in that sector.  That prevents abandoned copies from
+being mistaken for the exact node version referenced by committed catalog state.
 
 Trees
 -----
 
-Current NARF catalog state is stored in three AVL trees:
+Current NARF catalog state is stored in two AVL trees:
 
 1. **Data tree**
 
@@ -114,38 +115,40 @@ Current NARF catalog state is stored in three AVL trees:
 
 2. **Free tree**
 
-   Keyed by `(length, start, node-sector)`.  This tracks free extents by size,
-   with deterministic tie breakers for equal-sized extents.  Zero-length free
-   nodes represent reusable record-node slots rather than payload storage.
+   Keyed by `(length, start, node-sector)`.  This tracks free payload extents by
+   size, with deterministic tie breakers for equal-sized extents.  The tree is
+   ordered for best-fit allocation, not for address lookup.  Defrag and
+   coalescing therefore do address-based searches by walking the tree.
 
-3. **Index tree**
-
-   Keyed by file key.  Each index node stores three `NarfRef` values for that
-   key: parent, previous in-order entry, and next in-order entry.
-
-The data tree and free tree are authoritative.  The index tree is a committed
-secondary index used to make traversal and debugging easier without putting
-parent/previous/next links back into data nodes.  Keeping those links out of the
-data tree matters because versioned references and copy-on-write work cleanly
-when updates do not require every inbound pointer in the graph to be rewritten.
+The core does not maintain a parent-pointer or directory index tree.  Directory
+traversal is a prefix/separator scan over the data tree.
 
 Transactions and power loss
 ---------------------------
 
-NARF uses copy-on-write catalog records.  A catalog update writes new node copies
-first and writes the new root last.  If power is lost before the root write, the
-previous root still points to the old exact node versions.  The abandoned node
-copies are just unreachable junk.  If power is lost after the root write, the
-new root points to the new exact node versions.
+NARF uses copy-on-write catalog records.  A catalog update writes new or
+transaction-private node sectors first and writes the new root last.  If power
+is lost before the root write, the previous root still points to the old exact
+node versions.  The abandoned node sectors are just unreachable junk.  If power
+is lost after the root write, the new root points to the new exact node versions.
+
+A catalog node written earlier in the same open transaction may be rewritten in
+place because no committed root can point at that transaction-private version
+yet.  A committed node is not overwritten in place; writing a changed version
+allocates another node sector, writes the replacement, and marks the old sector
+as trash.  Trashed sectors are moved to the root-resident spare stack only after
+the transaction commits successfully.
 
 Rollback on normal runtime failure restores the in-memory root state and clears
-transaction-local dirty tracking.  It does not need to erase abandoned node
-copies; committed roots decide what is reachable.
+transaction-local dirty/trash tracking.  It does not need to erase abandoned
+node sectors; committed roots decide what is reachable.
 
-Payload data writes follow the same commit rule: new payload sectors are written
-before catalog state is committed.  Overwrites and appends allocate/write a fresh
-extent, copy any unchanged old data, write the new bytes, then commit catalog state
-that points at the new extent.  This keeps committed catalog state from pointing at
+Payload data writes follow the same commit rule.  Overwrites and most resizes
+allocate/write a fresh extent, copy any unchanged old data, write the new bytes,
+then commit catalog state that points at the new extent.  The sector-aligned
+append fast path may extend a payload into immediately following free/open
+space, but the committed old metadata still describes the old shorter extent
+until the root commit.  This keeps committed catalog state from pointing at
 unwritten file data.
 
 Allocation
@@ -153,11 +156,14 @@ Allocation
 
 Data allocation first tries to satisfy the request from the free tree.  If no
 suitable free extent exists, NARF allocates from the open space between the low
-data frontier and the high record frontier.
+payload frontier and the high catalog-node frontier.
 
-Record nodes are allocated from the high end of the filesystem in two-sector
-pairs.  File payload data grows upward from the low end.  The root tracks the
-current bottom/top frontier values.
+Catalog nodes are allocated from the high end of the filesystem one sector at a
+time, or from the root-resident spare stack when a committed-safe node sector is
+available.  File payload data grows upward from the low end.  The root tracks
+the current bottom/top frontier values.  Normal allocations preserve a small
+metadata reserve so that a full medium can still perform delete/cleanup-style
+metadata updates.
 
 Defragmentation
 ---------------
@@ -165,15 +171,20 @@ Defragmentation
 `narf_defrag()` is optional behind `NARF_USE_DEFRAG`.  It works in small
 power-loss-safe steps rather than doing one giant in-place rewrite.  A step may
 merge adjacent free payload extents, move a file payload into a lower free hole,
-or temporarily move a payload to the current data frontier when the lower hole
-is too small.  Each step writes payload data before committing catalog state.  The
-old committed root therefore remains usable if power is lost before the step's
-new root is written.
+or move that payload to the current payload frontier when the lower hole is too
+small.  The too-small-hole case deliberately avoids sliding a payload through an
+overlapping destination: old committed payload sectors are left intact until the
+new root points at the new copy.
 
-When a free payload extent reaches the current data frontier, defrag lowers
+Each defrag step writes payload data before committing catalog state.  The old
+committed root therefore remains usable if power is lost before the step's new
+root is written.
+
+When a free payload extent reaches the current payload frontier, defrag lowers
 `root.m_bottom`, turning that space back into the implicit free area between
-payload data and record storage.  Defrag also reclaims zero-length record-free nodes
-that sit at `root.m_top`, raising the record frontier when possible.
+payload data and catalog-node storage.  Defrag also tidies catalog-node sectors
+that have become reclaimable at `root.m_top`, raising the catalog-node frontier
+when possible.
 
 Directory-style traversal
 -------------------------
@@ -226,8 +237,8 @@ NARF is intentionally small.  It is not thread-safe.  The core stores a 128-byte
 metadata area per data node but does not enforce permissions, ownership, or
 timestamps by itself; the FUSE front-end can interpret that area as compact
 Unix-ish metadata plus simple `user.*` xattrs.  The core has no journaling API
-exposed to callers and no real directories.  It assumes the media layer handles bad blocks and wear leveling,
-which is a reasonable assumption for many modern microSD cards but may not be
-true for raw flash.
+exposed to callers and no real directories.  It assumes the media layer handles
+bad blocks and wear leveling, which is a reasonable assumption for many modern
+microSD cards but may not be true for raw flash.
 
 NARF is still Not A Real Filesystem.  The name is doing legal work.

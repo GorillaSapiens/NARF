@@ -223,8 +223,8 @@ You can reopen the image with narf_tester to inspect it:
 9. Unix-ish metadata and user xattrs
 ------------------------------------
 
-The FUSE layer stores compact, human-readable metadata in each NARF node's
-`m_metadata` area.  The canonical form is:
+The FUSE layer stores compact, human-readable metadata in each NARF data
+node's `m_metadata` area.  A typical form is:
 
    v1 uid=1000 gid=1000 mode=100644 mtime=1778706214 bs=4K
 

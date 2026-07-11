@@ -4,49 +4,43 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-//! @brief Initialize the narf_io layer
+//! @brief Initialize the narf_io layer.
 //!
-//! Used
-//! This is typically implemented by you for yor
-//! hardware.
+//! This is typically implemented by the platform-specific I/O layer.
 //!
-//! @return true on success
+//! @return true on success.
 bool narf_io_open(void);
 
-//! @brief Deinitialize the narf_io layer
+//! @brief Deinitialize the narf_io layer.
 //!
-//! This is typically implemented by you for yor
-//! hardware.
+//! This is typically implemented by the platform-specific I/O layer.
 //!
-//! @return true on success
+//! @return true on success.
 bool narf_io_close(void);
 
-//! @brief Get the size of the underlying hardware device in sectors
+//! @brief Get the size of the underlying device in sectors.
 //!
-//! This is typically implemented by you for yor
-//! hardware.
+//! This is typically implemented by the platform-specific I/O layer.
 //!
-//! @return the number of sectors supported by the device
+//! @return Number of sectors supported by the device.
 uint32_t narf_io_sectors(void);
 
-//! @brief Write a sector to the disk
+//! @brief Write one sector to the underlying device.
 //!
-//! This is typically implemented by you for your
-//! hardware.
+//! This is typically implemented by the platform-specific I/O layer.
 //!
-//! @param sector The address of the sector to access
-//! @param data Pointer to 512 bytes of data to write
-//! @return true on success
+//! @param sector Sector address to write.
+//! @param data Pointer to one sector of data to write.
+//! @return true on success.
 bool narf_io_write(uint32_t sector, void *data);
 
-//! @brief Read a sector from the disk
+//! @brief Read one sector from the underlying device.
 //!
-//! This is typically implemented by you for your
-//! hardware.
+//! This is typically implemented by the platform-specific I/O layer.
 //!
-//! @param sector The address of the sector to access
-//! @param data Pointer to 512 bytes read buffer
-//! @return true on success
+//! @param sector Sector address to read.
+//! @param data Pointer to one sector of read buffer.
+//! @return true on success.
 bool narf_io_read(uint32_t sector, void *data);
 
 #endif

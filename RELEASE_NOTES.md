@@ -1,5 +1,5 @@
 === v3
-fixed corruption on power loss and other failure
+fixed power-loss and failure-path catalog corruption
 full FUSE support including mode, mtime, uid, gid, xattr
 
 === v1

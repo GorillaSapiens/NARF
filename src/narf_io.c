@@ -71,16 +71,14 @@ static bool parse_create_size(const char *file, uint64_t *bytes, const char **na
    return true;
 }
 
-//! @brief Return true when a byte count can be addressed through narf_io_sectors().
+//! @brief Return true when an image byte count is a supported sector count.
 static bool byte_count_is_supported(uint64_t bytes) {
    if ((bytes % SECTOR_SIZE) != 0) return false;
    if ((bytes / SECTOR_SIZE) > UINT32_MAX) return false;
    return true;
 }
 
-//! @brief Configure this narf_io_ implementation
-//!
-//! Used by outside
+//! @brief Configure this example narf_io implementation.
 void narf_io_configure(const char *file) {
    filename = file;
    total_bytes = 0;
@@ -105,7 +103,7 @@ void narf_io_configure(const char *file) {
 bool narf_io_open(void) {
    struct stat st;
 
-   // if we're already open, just return true
+   // If already open, succeed without reopening.
    if (fd != -1) {
       return true;
    }
@@ -208,7 +206,7 @@ uint32_t narf_io_sectors(void) {
    return (uint32_t)(total_bytes / SECTOR_SIZE);
 }
 
-//! sanity checking
+//! @brief Return true when a sector is inside the opened image.
 static bool sector_is_valid(uint32_t sector) {
    if (fd == -1) {
       return false;

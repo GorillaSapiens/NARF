@@ -20,45 +20,32 @@ int         write_mbr        = 0;
 int         format           = 0;
 int         partition_number = -1;
 
-//! @brief Initialize the narf_io layer
+//! @brief Initialize the mkfs image I/O layer.
 //!
-//! Used
-//! This is typically implemented by you for yor
-//! hardware.
-//!
-//! @return true on success
+//! @return true on success.
 bool narf_io_open(void) {
    return true;
 }
 
-//! @brief Deinitialize the narf_io layer
+//! @brief Deinitialize the mkfs image I/O layer.
 //!
-//! This is typically implemented by you for yor
-//! hardware.
-//!
-//! @return true on success
+//! @return true on success.
 bool narf_io_close(void) {
    return true;
 }
 
-//! @brief Get the size of the underlying hardware device in sectors
-//!
-//! This is typically implemented by you for yor
-//! hardware.
+//! @brief Get the mkfs target image size in sectors.
 //!
 //! @return the number of sectors supported by the device
 uint32_t narf_io_sectors(void) {
    return size / NARF_SECTOR_SIZE;
 }
 
-//! @brief Write a sector to the disk
+//! @brief Write one sector to the mkfs target image.
 //!
-//! This is typically implemented by you for your
-//! hardware.
-//!
-//! @param sector The address of the sector to access
-//! @param data Pointer to 512 bytes of data to write
-//! @return true on success
+//! @param sector Sector address to access.
+//! @param data Pointer to one sector of data to write.
+//! @return true on success.
 bool narf_io_write(uint32_t sector, void *data) {
    off_t offset;
    ssize_t written;
@@ -87,14 +74,11 @@ bool narf_io_write(uint32_t sector, void *data) {
    return true;
 }
 
-//! @brief Read a sector from the disk
+//! @brief Read one sector from the mkfs target image.
 //!
-//! This is typically implemented by you for your
-//! hardware.
-//!
-//! @param sector The address of the sector to access
-//! @param data Pointer to 512 bytes read buffer
-//! @return true on success
+//! @param sector Sector address to access.
+//! @param data Pointer to one sector of read buffer.
+//! @return true on success.
 bool narf_io_read(uint32_t sector, void *data) {
    off_t offset;
    ssize_t bytes;
@@ -149,7 +133,7 @@ int create_open_file(void){
    struct stat st;
 
    if (size >= 0) {
-      // File must not exist
+      // Creation mode: file must not already exist.
       if (access(target, F_OK) == 0) {
          fprintf(stderr, "Error: file '%s' already exists\n", target);
          return 1;
@@ -170,7 +154,7 @@ int create_open_file(void){
       printf("Created '%s' with size %lld bytes\n", target, (long long)size);
    }
    else {
-      // File must already exist
+      // Existing-image mode: file must already exist.
       fd = open(target, O_RDWR);
       if (fd < 0) {
          perror("open existing");
@@ -209,7 +193,7 @@ int main(int argc, char *argv[]) {
    if (argc < 2)
       usage(argv[0]);
 
-   // Check if first argument is a size or a filename
+   // Check whether the first argument is a size or a filename.
    if (access(argv[1], F_OK) != 0) {
       if (argc < 3)
          usage(argv[0]);

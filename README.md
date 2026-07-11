@@ -7,7 +7,7 @@ NARF is aimed at storage for small embedded systems.
 NARF is missing a LOT of features you might expect from a real filesystem.
 
 NARF files aren't really even files.
-they're are more like blobs in a database.
+they're more like blobs in a database.
 there is a string key, and some data associated with the key.
 lots of reads are expected.
 but only the occasional write.
@@ -18,9 +18,9 @@ it is not thread safe.
 
 there is no access control.
 
-there are no timestamps.
+the core has no built-in timestamp fields.
 
-we don't need them
+the FUSE front-end can stash mtime in the metadata blob when you want Unix-ish behavior.
 
 because
 

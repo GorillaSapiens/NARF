@@ -171,7 +171,7 @@ static NarfSector trash_nodes[TRASH_MAX];
 static unsigned trash_node_count = 0;
 static bool trash_node_overflow = false;
 
-//! @brief Compute a CRC-32, should ve zlib compatible
+//! @brief Compute a CRC-32 compatible with zlib/crc32().
 uint32_t crc32(uint32_t crc, const void *data, size_t length) {
    const uint8_t *p = data;
 
@@ -294,7 +294,7 @@ static bool valid_dir_args(const char *dirname, const char *sep) {
    return true;
 }
 
-//! @brief Validate a single-sector record node address.
+//! @brief Validate a single-sector catalog-node address.
 static bool valid_node_sector(NarfSector sector) {
    if (!verify()) return false;
    if (sector == END) return false;
@@ -423,7 +423,7 @@ static bool init_root(NarfSector origin, NarfSector size) {
    return true;
 }
 
-//! @brief Compute the checksum for a record node.
+//! @brief Compute the checksum for a catalog node.
 static uint32_t node_checksum(Node *n) {
    uint32_t old = n->m_checksum;
    uint32_t ck;
@@ -433,7 +433,7 @@ static uint32_t node_checksum(Node *n) {
    return ck;
 }
 
-//! @brief Move node to trash.  It will be moved to spare after commit.
+//! @brief Mark a committed catalog-node sector as trash until commit succeeds.
 static void trash_node(NarfRef ref) {
    if (!transaction_open) return;
    if (ref_is_null(ref)) return;
@@ -527,6 +527,11 @@ static uint32_t new_node_version(uint32_t old, NarfSector sector) {
    return v;
 }
 
+//! @brief Write a catalog node, reusing transaction-private sectors or COWing committed ones.
+//!
+//! If oldref names a node already written by this transaction, the same sector
+//! is rewritten.  Otherwise a fresh/spare sector is allocated and the old
+//! committed sector is marked as trash for post-commit recycling.
 static bool write_node(NarfRef oldref, Node *n, NarfRef *newref) {
    uint32_t txver;
    uint32_t oldver;
@@ -739,7 +744,7 @@ static bool data_insert_rec(NarfRef rootref, NarfRef itemref, const char *key, N
    return rebalance(rootref, out);
 }
 
-//! @brief Delete and return the smallest key in a data AVL subtree.
+//! @brief Detach and return the smallest data node; caller owns the returned ref.
 static bool data_delete_min_rec(NarfRef rootref, NarfRef *out, NarfRef *minref) {
    NarfRef left;
    NarfRef right;
@@ -752,6 +757,8 @@ static bool data_delete_min_rec(NarfRef rootref, NarfRef *out, NarfRef *minref) 
    right = node_work0.m_right;
 
    if (ref_is_null(left)) {
+      // Return the detached node still live.  The caller may reuse it as a
+      // successor, or trash it later if write_node() COWs it elsewhere.
       if (minref) *minref = rootref;
       *out = right;
       return true;
@@ -814,6 +821,8 @@ static bool data_delete_rec(NarfRef rootref, const char *key, NarfRef *out, Narf
       node_work1.m_right = child;
       update_height(&node_work1);
       if (!write_node(succref, &node_work1, &rootref)) return false;
+      // If write_node() COWed the successor, its old sector is no longer live.
+      // If it rewrote in place, trashing it would corrupt the final tree.
       if (rootref.m_sector != succref.m_sector) trash_node(succref);
       return rebalance(rootref, out);
    }
@@ -885,7 +894,7 @@ static bool free_insert_rec(NarfRef rootref, NarfRef itemref, NarfSector length,
    return rebalance(rootref, out);
 }
 
-//! @brief Delete and return the smallest node in a free AVL subtree.
+//! @brief Detach and return the smallest free node; caller owns the returned ref.
 static bool free_delete_min_rec(NarfRef rootref, NarfRef *out, NarfRef *minref) {
    NarfRef left;
    NarfRef right;
@@ -898,6 +907,8 @@ static bool free_delete_min_rec(NarfRef rootref, NarfRef *out, NarfRef *minref) 
    right = node_work0.m_right;
 
    if (ref_is_null(left)) {
+      // Return the detached node still live.  The caller may reuse it as a
+      // successor, or trash it later if write_node() COWs it elsewhere.
       if (minref) *minref = rootref;
       *out = right;
       return true;
@@ -960,6 +971,8 @@ static bool free_delete_rec(NarfRef rootref, NarfSector length, NarfSector start
       node_work1.m_right = child;
       update_height(&node_work1);
       if (!write_node(succref, &node_work1, &rootref)) return false;
+      // If write_node() COWed the successor, its old sector is no longer live.
+      // If it rewrote in place, trashing it would corrupt the final tree.
       if (rootref.m_sector != succref.m_sector) trash_node(succref);
       return rebalance(rootref, out);
    }
@@ -1078,7 +1091,7 @@ static NarfSector metadata_reserve(void) {
    return r;
 }
 
-//! @brief Allocate a fresh single-sector record node.
+//! @brief Allocate a single-sector catalog node from spare or high-end space.
 static bool alloc_node_sector(NarfRef *ref) {
    NarfSector reserve;
 
@@ -1362,7 +1375,7 @@ static bool write_append_fast(const char *key, const uint8_t *src,
    return true;
 }
 
-//! @brief Allocate a record node and optional payload storage for a new entry.
+//! @brief Allocate a catalog node and optional payload storage for a new entry.
 static bool allocate_storage(NarfSector length, NarfRef *metaref, NarfSector *start) {
    NarfRef freeref;
    NarfRef newroot;
@@ -1449,7 +1462,7 @@ static bool mount_root_copy(NarfSector start, int which) {
    return true;
 }
 
-//! @brief Recycle metadata nodes trash by a successfully committed mutation.
+//! @brief Recycle metadata-node trash after a mutation commits successfully.
 static void move_trash_to_spare_after_commit(void) {
    RootSnapshot committed;
    unsigned count = trash_node_count;
@@ -2753,7 +2766,7 @@ static bool defrag_find_data_start_rec(NarfRef ref, NarfSector start, NarfRef *f
    return defrag_find_data_start_rec(right, start, found, outdata, outkey);
 }
 
-//! @brief Copy payload sectors from one extent to another.
+//! @brief Copy payload sectors between non-overlapping extents chosen by the caller.
 static bool defrag_copy_extent(NarfSector src, NarfSector dst, NarfSector length) {
    NarfSector i;
 
@@ -2926,7 +2939,7 @@ static bool defrag_merge_free(NarfRef leftref, const FreePayload *left, NarfRef 
    return true;
 }
 
-//! @brief Move an adjacent data extent into or beyond a free extent.
+//! @brief Move adjacent data into a large enough hole, or to the payload frontier.
 static bool defrag_move_data_after_free(NarfRef freeref, const FreePayload *free_node, const DataPayload *data_node, const char *data_key) {
    NarfRef newroot;
    NarfRef removed_ref;
@@ -2949,11 +2962,14 @@ static bool defrag_move_data_after_free(NarfRef freeref, const FreePayload *free
    if (free_start + free_length != old_start) return false;
 
    if (free_length >= old_length) {
+      // The destination is entirely inside the existing free hole.
       new_start = free_start;
       new_free_start = free_start + old_length;
       new_free_length = free_length;
    }
    else {
+      // Do not slide through an overlapping too-small hole.  Copy to the
+      // open frontier so the committed old payload remains intact until commit.
       if (root.m_bottom > root.m_top) return false;
       if (old_length > root.m_top - root.m_bottom) return false;
       new_start = root.m_bottom;
@@ -3077,7 +3093,7 @@ static bool defrag_squish_once(bool *changed) {
    return false;
 }
 
-//! @brief Reclaim one zero-length record node from the top of the record area.
+//! @brief Reclaim one parked catalog-node sector when it reaches root.m_top.
 static bool defrag_tidy_once(bool *changed) {
    NarfRef newroot;
    NarfRef removed_ref;

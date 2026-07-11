@@ -27,7 +27,7 @@
 // should be one of uint8_t, uint16_t, uint32_t, or uint64_t
 #define NARF_SECTOR_ADDRESS_TYPE uint32_t
 
-// Type used to store byte sizes of a NAF
+// Type used to store NARF byte sizes
 // should be one of uint8_t, uint16_t, uint32_t, or uint64_t
 #define NARF_SIZE_TYPE uint32_t
 

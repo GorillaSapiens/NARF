@@ -238,13 +238,15 @@ bytes.  This is mostly a stress-test helper.
 
 Call `narf_defrag()`.  When `NARF_USE_DEFRAG` is enabled, this compacts payload
 extents by moving data into lower free holes using small copy-on-write catalog-record
-commits.  It also merges adjacent free extents, lowers the data frontier when
-the highest payload extent becomes free, and reclaims zero-length record-free
-nodes from the top of the record area.
+commits.  When a lower free hole is too small, defrag copies the payload to
+the current payload frontier instead of doing an overlapping in-place slide.
+It also merges adjacent free extents, lowers the data frontier when
+the highest payload extent becomes free, and reclaims parked catalog-node
+sectors from the top of the catalog-node area.
 
 ### `debug`
 
-Print internal root/data-tree/free-tree/index-tree information.  This requires `NARF_DEBUG` to
+Print internal root/data-tree/free-tree/spare-stack information.  This requires `NARF_DEBUG` to
 be enabled in the build.
 
 ### `gremlins <seed> <count>`
