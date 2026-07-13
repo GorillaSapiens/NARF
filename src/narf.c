@@ -2068,6 +2068,7 @@ bool narf_find(const char *key) {
    return valid_key(key) && verify() && data_find_ref_rec(root.m_data_root, key, NULL, NULL);
 }
 
+//! @brief Return the directory prefix after an optional leading separator.
 static const char *dir_prefix(const char *dirname, const char *sep) {
    size_t sep_len = strlen(sep);
 
@@ -2078,6 +2079,7 @@ static const char *dir_prefix(const char *dirname, const char *sep) {
    return dirname;
 }
 
+//! @brief Return whether a key is an immediate entry of a directory.
 static bool dir_match(const char *key, const char *dirname, const char *sep) {
    const char *prefix = dir_prefix(dirname, sep);
    size_t prefix_len = strlen(prefix);
@@ -2163,6 +2165,7 @@ static bool dir_scan_rec(NarfRef ref, const char *dirname, const char *sep,
                        after, best);
 }
 
+//! @brief Return the next directory entry after an optional previous key.
 static const char *dir_scan_next(const char *dirname, const char *sep, const char *after) {
    const char *best = NULL;
    const char *prefix = dir_prefix(dirname, sep);
@@ -2179,12 +2182,14 @@ static const char *dir_scan_next(const char *dirname, const char *sep, const cha
    return best;
 }
 
+//! @brief Return the first immediate key in a directory.
 const char *narf_dirfirst(const char *dirname, const char *sep) {
    if (!verify()) return NULL;
    if (!valid_dir_args(dirname, sep)) return NULL;
    return dir_scan_next(dirname, sep, NULL);
 }
 
+//! @brief Return the immediate directory key after a previous key.
 const char *narf_dirnext(const char *dirname, const char *sep, const char *previous_key) {
    if (!verify()) return NULL;
    if (!valid_dir_args(dirname, sep)) return NULL;
@@ -2344,6 +2349,7 @@ bool narf_realloc_key(const char *key, NarfByteSize bytes) {
    return narf_realloc(key, bytes);
 }
 
+//! @brief Delete a key and return its payload extent to free storage.
 bool narf_free(const char *key) {
    NarfRef removed_ref;
    NarfRef newroot;
@@ -2379,6 +2385,7 @@ bool narf_free_key(const char *key) {
    return narf_free(key);
 }
 
+//! @brief Rename one key without moving its payload extent.
 bool narf_rename_key(const char *key, const char *newkey) {
    NarfRef removed_ref;
    NarfRef newroot;
@@ -2433,6 +2440,7 @@ NarfByteSize narf_size(const char *key) {
    return node_work1.m_data.m_bytes;
 }
 
+//! @brief Return a copy of a key metadata area.
 void *narf_metadata(const char *key) {
    static uint8_t metadata[NARF_METADATA_SIZE];
    if (!verify()) return NULL;
@@ -3266,26 +3274,32 @@ void narf_debug(void) {
 #endif
 
 #ifdef NARF_DETAILS
+//! @brief Stub I/O open used when building the standalone layout-details tool.
 bool narf_io_open(void) {
    return false;
 }
 
+//! @brief Stub I/O close used when building the standalone layout-details tool.
 bool narf_io_close(void) {
    return false;
 }
 
+//! @brief Stub I/O sector count used when building the standalone layout-details tool.
 uint32_t narf_io_sectors(void) {
    return 0;
 }
 
+//! @brief Stub I/O write used when building the standalone layout-details tool.
 bool narf_io_write(uint32_t sector, void *data) {
    return false;
 }
 
+//! @brief Stub I/O read used when building the standalone layout-details tool.
 bool narf_io_read(uint32_t sector, void *data) {
    return false;
 }
 
+//! @brief Print compile-time layout details for the standalone details build.
 int main(int argc, char **argv) {
    (void) argc;
    (void) argv;
