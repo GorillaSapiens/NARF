@@ -1614,6 +1614,8 @@ static int my_fsyncdir(const char *path, int isdatasync, struct fuse_file_info *
 // --- File creation ---
 //! @brief FUSE create callback.
 static int my_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
+   char key[NARF_SECTOR_SIZE];
+   bool is_dir;
    int ret;
 
    (void) fi;
@@ -1622,11 +1624,17 @@ static int my_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
 
    LOCK;
 
-   // Create and open a regular file.
-   if (narf_find(path + 1)) {
-      // FUSE may call create after lookup; existing file is success here.
+   // Create and open a regular file.  Directory markers have priority over
+   // same-name file keys, so do not create a hidden file under an existing
+   // directory path.
+   ret = key_for_existing_path(path, key, &is_dir);
+   if (ret == 0) {
       UNLOCK;
-      return 0;
+      return is_dir ? -EISDIR : 0;
+   }
+   if (ret != -ENOENT) {
+      UNLOCK;
+      return ret;
    }
 
    if (!narf_alloc(path + 1, 0)) {
@@ -2014,7 +2022,16 @@ int main(int argc, char *argv[]) {
       *colon = 0;
       colon++;
       if (*colon) {
-         partition = *colon - '0';
+         char *end = NULL;
+         long part;
+
+         errno = 0;
+         part = strtol(colon, &end, 10);
+         if (errno != 0 || end == colon || *end != '\0' || part < 1 || part > 4) {
+            fprintf(stderr, "Invalid partition number: %s\n", colon);
+            usage(argv[0]);
+         }
+         partition = (int) part;
       }
       else {
          partition = 0;
@@ -2027,6 +2044,12 @@ int main(int argc, char *argv[]) {
       return 1;
    }
    size = lseek(fd, 0, SEEK_END);
+   if (size < 0) {
+      perror("lseek");
+      close(fd);
+      fd = -1;
+      return 1;
+   }
 
    argv[1] = argv[0];
    argc--;
