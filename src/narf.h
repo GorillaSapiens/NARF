@@ -139,6 +139,14 @@ bool narf_realloc_key(const char *key, NarfByteSize bytes);
 //! @return true on success.
 bool narf_rename_key(const char *key, const char *newkey);
 
+//! @brief Rename an existing directory.
+//!
+//! @param key Existing directory prefix.
+//! @param newkey New directory prefix.
+//! @param sep The directory separator
+//! @return true on success.
+bool narf_rename_dir(const char *key, const char *newkey, const char *sep);
+
 //! @brief Delete a key.
 //!
 //! @param key Existing key.

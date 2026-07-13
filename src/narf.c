@@ -273,6 +273,27 @@ static bool valid_key(const char *key) {
    return true;
 }
 
+//! @brief Validate a public directory-marker key string.
+static bool valid_dir_key(const char *key, const char *sep) {
+   size_t klen;
+   size_t slen;
+
+   if (key == NULL) return false;
+   if (sep == NULL) return false;
+
+   klen = strlen(key);
+   slen = strlen(sep);
+
+   if (klen == 0 || klen >= KEYSIZE) return false;
+   if (slen == 0 || slen >= KEYSIZE) return false;
+   if (klen < slen) return false;
+
+   // Root is not represented as a stored directory key.
+   if (klen == slen && strcmp(key, sep) == 0) return false;
+
+   return strcmp(key + klen - slen, sep) == 0;
+}
+
 //! @brief Validate directory traversal arguments.
 static bool valid_dir_args(const char *dirname, const char *sep) {
    if (dirname == NULL) return false;
@@ -491,12 +512,11 @@ static bool read_node_any(NarfSector sector, Node *out) {
 }
 
 //! @brief Read the node matching an exact reference.
-static bool read_node(NarfRef ref, Node *out, int *which) {
+static bool read_node(NarfRef ref, Node *out) {
    if (ref_is_null(ref)) return false;
    if (!valid_node_sector(ref.m_sector)) return false;
    if (!read_node_any(ref.m_sector, out)) return false;
    if (out->m_node_version != ref.m_version) return false;
-   if (which) *which = 0;
    return true;
 }
 
@@ -536,7 +556,7 @@ static bool write_node(NarfRef oldref, Node *n, NarfRef *newref) {
        valid_node_sector(oldref.m_sector)) {
       n->m_node_version = new_node_version(0, oldref.m_sector);
    }
-   else if (!ref_is_null(oldref) && read_node(oldref, &node_tmp, NULL) &&
+   else if (!ref_is_null(oldref) && read_node(oldref, &node_tmp) &&
             node_tmp.m_root_version == txver) {
       n->m_node_version = node_tmp.m_node_version;
    }
@@ -562,7 +582,7 @@ static bool write_node(NarfRef oldref, Node *n, NarfRef *newref) {
 //! @brief Return the AVL height for a referenced node.
 static int height(NarfRef ref) {
    if (ref_is_null(ref)) return 0;
-   if (!read_node(ref, &node_tmp, NULL)) return 0;
+   if (!read_node(ref, &node_tmp)) return 0;
    return node_tmp.m_height;
 }
 
@@ -579,7 +599,7 @@ static int balance_factor(NarfRef ref) {
    NarfRef right;
 
    if (ref_is_null(ref)) return 0;
-   if (!read_node(ref, &node_tmp, NULL)) return 0;
+   if (!read_node(ref, &node_tmp)) return 0;
    left = node_tmp.m_left;
    right = node_tmp.m_right;
    return height(left) - height(right);
@@ -591,9 +611,9 @@ static bool rotate_right(NarfRef yref, NarfRef *out) {
    NarfRef y2;
    NarfRef x2;
 
-   if (!read_node(yref, &node_work0, NULL)) return false;
+   if (!read_node(yref, &node_work0)) return false;
    xref = node_work0.m_left;
-   if (!read_node(xref, &node_work1, NULL)) return false;
+   if (!read_node(xref, &node_work1)) return false;
 
    node_work0.m_left = node_work1.m_right;
    update_height(&node_work0);
@@ -613,9 +633,9 @@ static bool rotate_left(NarfRef xref, NarfRef *out) {
    NarfRef x2;
    NarfRef y2;
 
-   if (!read_node(xref, &node_work0, NULL)) return false;
+   if (!read_node(xref, &node_work0)) return false;
    yref = node_work0.m_right;
-   if (!read_node(yref, &node_work1, NULL)) return false;
+   if (!read_node(yref, &node_work1)) return false;
 
    node_work0.m_right = node_work1.m_left;
    update_height(&node_work0);
@@ -643,11 +663,11 @@ static bool rebalance(NarfRef ref, NarfRef *out) {
    bf = balance_factor(ref);
 
    if (bf > 1) {
-      if (!read_node(ref, &node_work0, NULL)) return false;
+      if (!read_node(ref, &node_work0)) return false;
       child = node_work0.m_left;
       if (balance_factor(child) < 0) {
          if (!rotate_left(child, &tmp)) return false;
-         if (!read_node(ref, &node_work0, NULL)) return false;
+         if (!read_node(ref, &node_work0)) return false;
          node_work0.m_left = tmp;
          update_height(&node_work0);
          if (!write_node(ref, &node_work0, &ref)) return false;
@@ -656,11 +676,11 @@ static bool rebalance(NarfRef ref, NarfRef *out) {
    }
 
    if (bf < -1) {
-      if (!read_node(ref, &node_work0, NULL)) return false;
+      if (!read_node(ref, &node_work0)) return false;
       child = node_work0.m_right;
       if (balance_factor(child) > 0) {
          if (!rotate_right(child, &tmp)) return false;
-         if (!read_node(ref, &node_work0, NULL)) return false;
+         if (!read_node(ref, &node_work0)) return false;
          node_work0.m_right = tmp;
          update_height(&node_work0);
          if (!write_node(ref, &node_work0, &ref)) return false;
@@ -668,7 +688,7 @@ static bool rebalance(NarfRef ref, NarfRef *out) {
       return rotate_left(ref, out);
    }
 
-   if (!read_node(ref, &node_work0, NULL)) return false;
+   if (!read_node(ref, &node_work0)) return false;
    update_height(&node_work0);
    return write_node(ref, &node_work0, out);
 }
@@ -689,7 +709,7 @@ static bool data_find_ref_rec(NarfRef ref, const char *key, NarfRef *found, Node
    int cmp;
 
    while (!ref_is_null(ref)) {
-      if (!read_node(ref, &node_work0, NULL)) return false;
+      if (!read_node(ref, &node_work0)) return false;
       cmp = strcmp(key, node_work0.m_key);
       if (cmp == 0) {
          if (found) *found = ref;
@@ -713,13 +733,13 @@ static bool data_insert_rec(NarfRef rootref, NarfRef itemref, const char *key, N
       return true;
    }
 
-   if (!read_node(rootref, &node_work0, NULL)) return false;
+   if (!read_node(rootref, &node_work0)) return false;
    cmp = strcmp(key, node_work0.m_key);
    if (cmp == 0) return false;
    next = (cmp < 0) ? node_work0.m_left : node_work0.m_right;
 
    if (!data_insert_rec(next, itemref, key, &child)) return false;
-   if (!read_node(rootref, &node_work0, NULL)) return false;
+   if (!read_node(rootref, &node_work0)) return false;
 
    if (cmp < 0) {
       node_work0.m_left = child;
@@ -740,7 +760,7 @@ static bool delete_min_rec(NarfRef rootref, NarfRef *out, NarfRef *minref) {
    NarfRef child;
 
    if (ref_is_null(rootref)) return false;
-   if (!read_node(rootref, &node_work0, NULL)) return false;
+   if (!read_node(rootref, &node_work0)) return false;
 
    left = node_work0.m_left;
    right = node_work0.m_right;
@@ -754,7 +774,7 @@ static bool delete_min_rec(NarfRef rootref, NarfRef *out, NarfRef *minref) {
    }
 
    if (!delete_min_rec(left, &child, minref)) return false;
-   if (!read_node(rootref, &node_work0, NULL)) return false;
+   if (!read_node(rootref, &node_work0)) return false;
    node_work0.m_left = child;
    update_height(&node_work0);
    if (!write_node(rootref, &node_work0, &rootref)) return false;
@@ -771,7 +791,7 @@ static bool data_delete_rec(NarfRef rootref, const char *key, NarfRef *out, Narf
    int cmp;
 
    if (ref_is_null(rootref)) return false;
-   if (!read_node(rootref, &node_work0, NULL)) return false;
+   if (!read_node(rootref, &node_work0)) return false;
 
    cmp = strcmp(key, node_work0.m_key);
    left = node_work0.m_left;
@@ -780,13 +800,13 @@ static bool data_delete_rec(NarfRef rootref, const char *key, NarfRef *out, Narf
    if (cmp < 0) {
       next = left;
       if (!data_delete_rec(next, key, &child, removed_ref, removed_data)) return false;
-      if (!read_node(rootref, &node_work0, NULL)) return false;
+      if (!read_node(rootref, &node_work0)) return false;
       node_work0.m_left = child;
    }
    else if (cmp > 0) {
       next = right;
       if (!data_delete_rec(next, key, &child, removed_ref, removed_data)) return false;
-      if (!read_node(rootref, &node_work0, NULL)) return false;
+      if (!read_node(rootref, &node_work0)) return false;
       node_work0.m_right = child;
    }
    else {
@@ -802,10 +822,10 @@ static bool data_delete_rec(NarfRef rootref, const char *key, NarfRef *out, Narf
          return true;
       }
       if (!delete_min_rec(right, &child, &succref)) return false;
-      if (!read_node(rootref, &node_work0, NULL)) return false;
+      if (!read_node(rootref, &node_work0)) return false;
       *removed_ref = rootref;
       if (removed_data) *removed_data = node_work0.m_data;
-      if (!read_node(succref, &node_work1, NULL)) return false;
+      if (!read_node(succref, &node_work1)) return false;
       node_work1.m_left = left;
       node_work1.m_right = child;
       update_height(&node_work1);
@@ -828,19 +848,19 @@ static bool data_update_rec(NarfRef rootref, const char *key, const Node *newnod
    int cmp;
 
    if (ref_is_null(rootref)) return false;
-   if (!read_node(rootref, &node_work0, NULL)) return false;
+   if (!read_node(rootref, &node_work0)) return false;
 
    cmp = strcmp(key, node_work0.m_key);
    if (cmp < 0) {
       next = node_work0.m_left;
       if (!data_update_rec(next, key, newnode, &child)) return false;
-      if (!read_node(rootref, &node_work0, NULL)) return false;
+      if (!read_node(rootref, &node_work0)) return false;
       node_work0.m_left = child;
    }
    else if (cmp > 0) {
       next = node_work0.m_right;
       if (!data_update_rec(next, key, newnode, &child)) return false;
-      if (!read_node(rootref, &node_work0, NULL)) return false;
+      if (!read_node(rootref, &node_work0)) return false;
       node_work0.m_right = child;
    }
    else {
@@ -863,13 +883,13 @@ static bool free_insert_rec(NarfRef rootref, NarfRef itemref, NarfSector length,
       return true;
    }
 
-   if (!read_node(rootref, &node_work0, NULL)) return false;
+   if (!read_node(rootref, &node_work0)) return false;
    cmp = free_cmp_values(length, start, itemref.m_sector, &node_work0, rootref.m_sector);
    if (cmp == 0) return false;
    next = (cmp < 0) ? node_work0.m_left : node_work0.m_right;
 
    if (!free_insert_rec(next, itemref, length, start, &child)) return false;
-   if (!read_node(rootref, &node_work0, NULL)) return false;
+   if (!read_node(rootref, &node_work0)) return false;
 
    if (cmp < 0) {
       node_work0.m_left = child;
@@ -893,7 +913,7 @@ static bool free_delete_rec(NarfRef rootref, NarfSector length, NarfSector start
    int cmp;
 
    if (ref_is_null(rootref)) return false;
-   if (!read_node(rootref, &node_work0, NULL)) return false;
+   if (!read_node(rootref, &node_work0)) return false;
 
    cmp = free_cmp_values(length, start, sector, &node_work0, rootref.m_sector);
    left = node_work0.m_left;
@@ -902,13 +922,13 @@ static bool free_delete_rec(NarfRef rootref, NarfSector length, NarfSector start
    if (cmp < 0) {
       next = left;
       if (!free_delete_rec(next, length, start, sector, &child, removed_ref, removed_free)) return false;
-      if (!read_node(rootref, &node_work0, NULL)) return false;
+      if (!read_node(rootref, &node_work0)) return false;
       node_work0.m_left = child;
    }
    else if (cmp > 0) {
       next = right;
       if (!free_delete_rec(next, length, start, sector, &child, removed_ref, removed_free)) return false;
-      if (!read_node(rootref, &node_work0, NULL)) return false;
+      if (!read_node(rootref, &node_work0)) return false;
       node_work0.m_right = child;
    }
    else {
@@ -924,10 +944,10 @@ static bool free_delete_rec(NarfRef rootref, NarfSector length, NarfSector start
          return true;
       }
       if (!delete_min_rec(right, &child, &succref)) return false;
-      if (!read_node(rootref, &node_work0, NULL)) return false;
+      if (!read_node(rootref, &node_work0)) return false;
       *removed_ref = rootref;
       if (removed_free) *removed_free = node_work0.m_free;
-      if (!read_node(succref, &node_work1, NULL)) return false;
+      if (!read_node(succref, &node_work1)) return false;
       node_work1.m_left = left;
       node_work1.m_right = child;
       update_height(&node_work1);
@@ -951,7 +971,7 @@ static bool free_find_start_rec(NarfRef ref, NarfSector start, NarfRef *found, F
    FreePayload fp;
 
    if (ref_is_null(ref)) return false;
-   if (!read_node(ref, &node_work0, NULL)) return false;
+   if (!read_node(ref, &node_work0)) return false;
 
    left = node_work0.m_left;
    right = node_work0.m_right;
@@ -974,7 +994,7 @@ static bool free_find_end_rec(NarfRef ref, NarfSector end, NarfRef *found, FreeP
    FreePayload fp;
 
    if (ref_is_null(ref)) return false;
-   if (!read_node(ref, &node_work0, NULL)) return false;
+   if (!read_node(ref, &node_work0)) return false;
 
    left = node_work0.m_left;
    right = node_work0.m_right;
@@ -997,7 +1017,7 @@ static bool free_best_rec(NarfRef ref, NarfSector need, NarfRef *bestref, Node *
    bool found = false;
 
    while (!ref_is_null(ref)) {
-      if (!read_node(ref, &node_work0, NULL)) return false;
+      if (!read_node(ref, &node_work0)) return false;
       if (node_work0.m_free.m_length >= need) {
          *bestref = ref;
          *bestnode = node_work0;
@@ -1021,7 +1041,7 @@ static bool free_sector_count_rec(NarfRef ref, NarfSector *sectors) {
 
    if (sectors == NULL) return false;
    if (ref_is_null(ref)) return true;
-   if (!read_node(ref, &node_work0, NULL)) return false;
+   if (!read_node(ref, &node_work0)) return false;
 
    left = node_work0.m_left;
    right = node_work0.m_right;
@@ -1379,7 +1399,7 @@ static bool validate_tree_rec_depth(NarfRef ref, unsigned depth) {
 
    if (ref_is_null(ref)) return true;
    if (depth > NARF_MAX_AVL_DEPTH) return false;
-   if (!read_node(ref, &node_work0, NULL)) return false;
+   if (!read_node(ref, &node_work0)) return false;
 
    left = node_work0.m_left;
    right = node_work0.m_right;
@@ -1681,7 +1701,7 @@ static int fsck_tree_shape_rec(NarfRef ref, bool free_tree, unsigned depth) {
       return 0;
    }
 
-   if (!read_node(ref, &node_work0, NULL)) {
+   if (!read_node(ref, &node_work0)) {
       fsck_error();
       return 0;
    }
@@ -1718,7 +1738,7 @@ static void fsck_data_order_rec(NarfRef ref) {
    NarfRef right;
 
    if (ref_is_null(ref)) return;
-   if (!read_node(ref, &node_work0, NULL)) {
+   if (!read_node(ref, &node_work0)) {
       fsck_error();
       return;
    }
@@ -1728,7 +1748,7 @@ static void fsck_data_order_rec(NarfRef ref) {
 
    fsck_data_order_rec(left);
 
-   if (!read_node(ref, &node_work0, NULL)) {
+   if (!read_node(ref, &node_work0)) {
       fsck_error();
       return;
    }
@@ -1751,7 +1771,7 @@ static void fsck_free_order_rec(NarfRef ref) {
    FreePayload cur;
 
    if (ref_is_null(ref)) return;
-   if (!read_node(ref, &node_work0, NULL)) {
+   if (!read_node(ref, &node_work0)) {
       fsck_error();
       return;
    }
@@ -1761,7 +1781,7 @@ static void fsck_free_order_rec(NarfRef ref) {
 
    fsck_free_order_rec(left);
 
-   if (!read_node(ref, &node_work0, NULL)) {
+   if (!read_node(ref, &node_work0)) {
       fsck_error();
       return;
    }
@@ -1805,7 +1825,7 @@ static NarfSector fsck_count_node_sector_rec(NarfRef ref, NarfSector sector) {
    NarfSector count = 0;
 
    if (ref_is_null(ref)) return 0;
-   if (!read_node(ref, &node_work0, NULL)) {
+   if (!read_node(ref, &node_work0)) {
       fsck_error();
       return 0;
    }
@@ -1826,7 +1846,7 @@ static void fsck_scan_free_overlap_rec(NarfRef ref, NarfSector start, NarfSector
    FreePayload fp;
 
    if (ref_is_null(ref)) return;
-   if (!read_node(ref, &node_work0, NULL)) {
+   if (!read_node(ref, &node_work0)) {
       fsck_error();
       return;
    }
@@ -1851,7 +1871,7 @@ static void fsck_scan_data_overlap_rec(NarfRef ref, NarfRef self,
    DataPayload dp;
 
    if (ref_is_null(ref)) return;
-   if (!read_node(ref, &node_work0, NULL)) {
+   if (!read_node(ref, &node_work0)) {
       fsck_error();
       return;
    }
@@ -1877,7 +1897,7 @@ static void fsck_scan_free_free_overlap_rec(NarfRef ref, NarfRef self,
    FreePayload fp;
 
    if (ref_is_null(ref)) return;
-   if (!read_node(ref, &node_work0, NULL)) {
+   if (!read_node(ref, &node_work0)) {
       fsck_error();
       return;
    }
@@ -1903,7 +1923,7 @@ static void fsck_data_extents_rec(NarfRef ref) {
    NarfSector needed;
 
    if (ref_is_null(ref)) return;
-   if (!read_node(ref, &node_work0, NULL)) {
+   if (!read_node(ref, &node_work0)) {
       fsck_error();
       return;
    }
@@ -1948,7 +1968,7 @@ static void fsck_free_extents_rec(NarfRef ref) {
    FreePayload fp;
 
    if (ref_is_null(ref)) return;
-   if (!read_node(ref, &node_work0, NULL)) {
+   if (!read_node(ref, &node_work0)) {
       fsck_error();
       return;
    }
@@ -2125,7 +2145,7 @@ static bool dir_scan_rec(NarfRef ref, const char *dirname, const char *sep,
 
    if (best == NULL) return false;
    if (ref_is_null(ref)) return true;
-   if (!read_node(ref, &node_work0, NULL)) return false;
+   if (!read_node(ref, &node_work0)) return false;
 
    if (after != NULL && strcmp(node_work0.m_key, after) <= 0) {
       return dir_scan_rec(node_work0.m_right, dirname, sep, prefix, prefix_high,
@@ -2148,7 +2168,7 @@ static bool dir_scan_rec(NarfRef ref, const char *dirname, const char *sep,
       return false;
    }
 
-   if (!read_node(ref, &node_work0, NULL)) return false;
+   if (!read_node(ref, &node_work0)) return false;
 
    if ((*best == NULL || strcmp(node_work0.m_key, *best) < 0) &&
        dir_match(node_work0.m_key, dirname, sep)) {
@@ -2395,6 +2415,7 @@ bool narf_rename_key(const char *key, const char *newkey) {
    if (!verify()) return false;
    if (!valid_key(key) || !valid_key(newkey)) return false;
    if (narf_find(newkey)) return false;
+   if (strcmp(key, newkey) == 0) return true;
    transaction_begin();
    if (!data_delete_rec(root.m_data_root, key, &newroot, &removed_ref, &renamed_data)) {
       transaction_rollback();
@@ -2414,6 +2435,58 @@ bool narf_rename_key(const char *key, const char *newkey) {
       return false;
    }
    root.m_data_root = newroot;
+   if (!commit_user_transaction()) {
+      transaction_rollback();
+      return false;
+   }
+   return true;
+}
+
+//! @brief Rename one directory and all under it without moving its payload extent.
+bool narf_rename_dir(const char *oldkey, const char *newkey, const char *sep) {
+   NarfRef removed_ref;
+   NarfRef newroot;
+   NarfRef written;
+   DataPayload renamed_data;
+   bool done = false;
+
+   if (!verify()) return false;
+   if (!valid_key(oldkey) || !valid_key(newkey)) return false;
+   if (!valid_dir_key(oldkey, sep) || !valid_dir_key(newkey, sep)) return false;
+   if (narf_find(newkey)) return false;
+   if (strcmp(oldkey, newkey) == 0) return true;
+
+   transaction_begin();
+
+   // walk tree, looking for node keys beginning with prefix
+   while (!done) {
+      done = true;
+
+      // TODO: walk tree to find one node with key starting with oldkey
+      // if found, set done = false, and rename it to start with newkey
+
+      {  // TODO: this block likely needs to be reworked
+         if (!data_delete_rec(root.m_data_root, oldkey, &newroot, &removed_ref, &renamed_data)) {
+            transaction_rollback();
+            return false;
+         }
+         root.m_data_root = newroot;
+         memset(&node_work1, 0, sizeof(node_work1));
+         node_work1.m_data = renamed_data;
+         node_work1.m_left = NULL_REF;
+         node_work1.m_right = NULL_REF;
+         node_work1.m_height = 1;
+         strncpy(node_work1.m_key, newkey, sizeof(node_work1.m_key));
+         node_work1.m_key[sizeof(node_work1.m_key) - 1] = 0;
+         if (!write_node(removed_ref, &node_work1, &written) ||
+               !data_insert_rec(root.m_data_root, written, newkey, &newroot)) {
+            transaction_rollback();
+            return false;
+         }
+         root.m_data_root = newroot;
+      }
+   }
+
    if (!commit_user_transaction()) {
       transaction_rollback();
       return false;
@@ -2651,7 +2724,7 @@ static bool defrag_lowest_free_rec(NarfRef ref, NarfRef *bestref, FreePayload *b
       return false;
    }
 
-   if (!read_node(ref, &node_work0, NULL)) return false;
+   if (!read_node(ref, &node_work0)) return false;
    left = node_work0.m_left;
    right = node_work0.m_right;
    free_start = node_work0.m_free.m_start;
@@ -2685,7 +2758,7 @@ static bool defrag_find_free_start_rec(NarfRef ref, NarfSector start, NarfRef *f
    NarfSector free_length;
 
    if (ref_is_null(ref)) return false;
-   if (!read_node(ref, &node_work0, NULL)) return false;
+   if (!read_node(ref, &node_work0)) return false;
 
    left = node_work0.m_left;
    right = node_work0.m_right;
@@ -2714,7 +2787,7 @@ static bool defrag_find_data_start_rec(NarfRef ref, NarfSector start, NarfRef *f
    NarfSector data_length;
 
    if (ref_is_null(ref)) return false;
-   if (!read_node(ref, &node_work0, NULL)) return false;
+   if (!read_node(ref, &node_work0)) return false;
 
    left = node_work0.m_left;
    right = node_work0.m_right;
@@ -2778,13 +2851,13 @@ static bool defrag_carve_rec(NarfRef ref, bool *changed) {
 
    if (ref_is_null(ref)) return true;
    if (changed == NULL) return false;
-   if (!read_node(ref, &node_work0, NULL)) return false;
+   if (!read_node(ref, &node_work0)) return false;
    left = node_work0.m_left;
 
    if (!defrag_carve_rec(left, changed)) return false;
    if (*changed) return true;
 
-   if (!read_node(ref, &node_work0, NULL)) return false;
+   if (!read_node(ref, &node_work0)) return false;
    right = node_work0.m_right;
    data_start = node_work0.m_data.m_start;
    data_length = node_work0.m_data.m_length;
@@ -3207,7 +3280,7 @@ static void print_tree(NarfRef ref, int indent, uint64_t pattern, const char *la
    const char *arm;
 
    if (!ref_is_null(ref)) {
-      if (!read_node(ref, &node_work0, NULL)) {
+      if (!read_node(ref, &node_work0)) {
          return;
       }
 
@@ -3241,7 +3314,7 @@ static void print_tree(NarfRef ref, int indent, uint64_t pattern, const char *la
       return;
    }
 
-   if (!read_node(ref, &node_work0, NULL)) {
+   if (!read_node(ref, &node_work0)) {
       return;
    }
    right = node_work0.m_right;
