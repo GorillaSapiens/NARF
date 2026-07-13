@@ -2442,49 +2442,120 @@ bool narf_rename_key(const char *key, const char *newkey) {
    return true;
 }
 
-//! @brief Rename one directory and all under it without moving its payload extent.
+//! @brief Rename one directory prefix and all keys below it in one transaction.
 bool narf_rename_dir(const char *oldkey, const char *newkey, const char *sep) {
    NarfRef removed_ref;
    NarfRef newroot;
    NarfRef written;
+   NarfRef ref;
+   NarfRef best;
    DataPayload renamed_data;
-   bool done = false;
+   size_t oldlen;
+   size_t newlen;
+   size_t suffixlen;
+   int cmp;
+   bool renamed_any = false;
 
    if (!verify()) return false;
    if (!valid_key(oldkey) || !valid_key(newkey)) return false;
    if (!valid_dir_key(oldkey, sep) || !valid_dir_key(newkey, sep)) return false;
-   if (narf_find(newkey)) return false;
-   if (strcmp(oldkey, newkey) == 0) return true;
+
+   oldlen = strlen(oldkey);
+   newlen = strlen(newkey);
+
+   if (strcmp(oldkey, newkey) == 0) {
+      return narf_find(oldkey);
+   }
+
+   if (newlen > oldlen && strncmp(newkey, oldkey, oldlen) == 0) {
+      return false;
+   }
+
+   /* Reject an existing destination subtree.  Lower-bound search for newkey. */
+   ref = root.m_data_root;
+   best = NULL_REF;
+   while (!ref_is_null(ref)) {
+      if (!read_node(ref, &node_work0)) return false;
+      cmp = strcmp(node_work0.m_key, newkey);
+      if (cmp < 0) {
+         ref = node_work0.m_right;
+      }
+      else {
+         best = ref;
+         ref = node_work0.m_left;
+      }
+   }
+   if (!ref_is_null(best)) {
+      if (!read_node(best, &node_work0)) return false;
+      if (strncmp(node_work0.m_key, newkey, newlen) == 0) return false;
+   }
 
    transaction_begin();
 
-   // walk tree, looking for node keys beginning with prefix
-   while (!done) {
-      done = true;
-
-      // TODO: walk tree to find one node with key starting with oldkey
-      // if found, set done = false, and rename it to start with newkey
-
-      {  // TODO: this block likely needs to be reworked
-         if (!data_delete_rec(root.m_data_root, oldkey, &newroot, &removed_ref, &renamed_data)) {
+   for (;;) {
+      /* Find the lexicographically first key at or below oldkey. */
+      ref = root.m_data_root;
+      best = NULL_REF;
+      while (!ref_is_null(ref)) {
+         if (!read_node(ref, &node_work0)) {
             transaction_rollback();
             return false;
          }
-         root.m_data_root = newroot;
-         memset(&node_work1, 0, sizeof(node_work1));
-         node_work1.m_data = renamed_data;
-         node_work1.m_left = NULL_REF;
-         node_work1.m_right = NULL_REF;
-         node_work1.m_height = 1;
-         strncpy(node_work1.m_key, newkey, sizeof(node_work1.m_key));
-         node_work1.m_key[sizeof(node_work1.m_key) - 1] = 0;
-         if (!write_node(removed_ref, &node_work1, &written) ||
-               !data_insert_rec(root.m_data_root, written, newkey, &newroot)) {
-            transaction_rollback();
-            return false;
+         cmp = strcmp(node_work0.m_key, oldkey);
+         if (cmp < 0) {
+            ref = node_work0.m_right;
          }
-         root.m_data_root = newroot;
+         else {
+            best = ref;
+            ref = node_work0.m_left;
+         }
       }
+
+      if (ref_is_null(best)) break;
+      if (!read_node(best, &node_work0)) {
+         transaction_rollback();
+         return false;
+      }
+      if (strncmp(node_work0.m_key, oldkey, oldlen) != 0) break;
+
+      strncpy(dir_key, node_work0.m_key, sizeof(dir_key));
+      dir_key[sizeof(dir_key) - 1] = 0;
+
+      suffixlen = strlen(dir_key + oldlen);
+      if (newlen + suffixlen >= sizeof(key_work)) {
+         transaction_rollback();
+         return false;
+      }
+      memcpy(key_work, newkey, newlen);
+      memcpy(key_work + newlen, dir_key + oldlen, suffixlen + 1);
+
+      if (!data_delete_rec(root.m_data_root, dir_key, &newroot,
+                           &removed_ref, &renamed_data)) {
+         transaction_rollback();
+         return false;
+      }
+      root.m_data_root = newroot;
+
+      memset(&node_work1, 0, sizeof(node_work1));
+      node_work1.m_data = renamed_data;
+      node_work1.m_left = NULL_REF;
+      node_work1.m_right = NULL_REF;
+      node_work1.m_height = 1;
+      strncpy(node_work1.m_key, key_work, sizeof(node_work1.m_key));
+      node_work1.m_key[sizeof(node_work1.m_key) - 1] = 0;
+
+      if (!write_node(NULL_REF, &node_work1, &written) ||
+          !data_insert_rec(root.m_data_root, written, key_work, &newroot)) {
+         transaction_rollback();
+         return false;
+      }
+      root.m_data_root = newroot;
+      renamed_any = true;
+   }
+
+   if (!renamed_any) {
+      transaction_rollback();
+      return false;
    }
 
    if (!commit_user_transaction()) {

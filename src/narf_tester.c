@@ -78,6 +78,7 @@ static void cmd_ls(int argc, char **argv);
 static void cmd_mbr(int argc, char **argv);
 static void cmd_mkfs(int argc, char **argv);
 static void cmd_mount(int argc, char **argv);
+static void cmd_mvdir(int argc, char **argv);
 static void cmd_pack(int argc, char **argv);
 static void cmd_partition(int argc, char **argv);
 static void cmd_quit(int argc, char **argv);
@@ -86,18 +87,16 @@ static void cmd_rename(int argc, char **argv);
 static void cmd_scan(int argc, char **argv);
 static void cmd_slurp(int argc, char **argv);
 static void cmd_tag(int argc, char **argv);
+static void cmd_touch(int argc, char **argv);
 
 static void do_pack(const char *dirname);
-static bool path_join(char *out, size_t out_size,
-      const char *left, const char *right);
-static bool narf_dir_key(char *out, size_t out_size, const char *parent,
-      const char *name);
+static bool path_join(char *out, size_t out_size, const char *left, const char *right);
+static bool narf_dir_key(char *out, size_t out_size, const char *parent, const char *name);
 static bool pack_file(const char *host_path, const char *narf_key);
 static const TesterCommand *find_command(const char *name);
 static void print_help(void);
 static void print_usage(const char *name);
-static bool join_args(int argc, char **argv, int first,
-      char *text, size_t text_size);
+static bool join_args(int argc, char **argv, int first, char *text, size_t text_size);
 static int split_args(char *buffer, char **argv, int max_argc);
 static int parse_int_arg(const char *text, int *value);
 static int parse_size_arg(const char *text, NarfByteSize *value);
@@ -157,6 +156,9 @@ static const TesterCommand commands[] = {
    { "mount", cmd_mount,
       "mount <n>\n"
       "Mount the selected NARF partition." },
+   { "mvdir", cmd_mvdir,
+      "mvdir <olddir> <newdir> [<sep>]\n"
+      "Rename a directory.  If sep is omitted, '/' is used." },
    { "pack", cmd_pack,
       "pack <host-directory>\n"
       "Recursively copy files from a host directory into NARF." },
@@ -181,6 +183,9 @@ static const TesterCommand commands[] = {
    { "tag", cmd_tag,
       "tag <key> <metadata>\n"
       "Store a metadata string in the key's metadata area. Quote metadata that contains spaces." },
+   { "touch", cmd_touch,
+      "touch <key>\n"
+      "Create a new key with no data." },
    { NULL, NULL, NULL }
 };
 
@@ -885,6 +890,17 @@ static void cmd_mount(int argc, char **argv) {
          part, tf[narf_mount(part)]);
 }
 
+static void cmd_mvdir(int argc, char **argv) {
+   bool result;
+
+   if (argc != 3 && argc != 4) {
+      print_usage(argv[0]);
+      return;
+   }
+
+   printf("narf_rename(%s,%s,%s)=%d\n",
+         argv[1], argv[2], (argc == 4) ? argv[3] : "/", result ASSIGN narf_rename_dir(argv[1], argv[2], (argc == 4) ? argv[3] : "/"));
+}
 static void cmd_pack(int argc, char **argv) {
    if (argc != 2) {
       print_usage(argv[0]);
@@ -996,6 +1012,20 @@ static void cmd_tag(int argc, char **argv) {
 
    printf("narf_set_metadata(%s,%s)=%s\n",
          argv[1], data, tf[result ASSIGN narf_set_metadata(argv[1], (uint8_t *)data)]);
+}
+
+static void cmd_touch(int argc, char **argv) {
+   bool result;
+
+   if (argc < 2) {
+      print_usage(argv[0]);
+      return;
+   }
+
+   result = narf_alloc(argv[1], 0);
+
+   printf("touch(%s)=%s\n",
+         argv[1], tf[result]);
 }
 
 //! @brief Parse and execute one tester command line.
