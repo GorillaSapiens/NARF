@@ -733,8 +733,8 @@ static bool data_insert_rec(NarfRef rootref, NarfRef itemref, const char *key, N
    return rebalance(rootref, out);
 }
 
-//! @brief Detach and return the smallest data node; caller owns the returned ref.
-static bool data_delete_min_rec(NarfRef rootref, NarfRef *out, NarfRef *minref) {
+//! @brief Detach and return the smallest node; caller owns the returned ref.
+static bool delete_min_rec(NarfRef rootref, NarfRef *out, NarfRef *minref) {
    NarfRef left;
    NarfRef right;
    NarfRef child;
@@ -753,7 +753,7 @@ static bool data_delete_min_rec(NarfRef rootref, NarfRef *out, NarfRef *minref) 
       return true;
    }
 
-   if (!data_delete_min_rec(left, &child, minref)) return false;
+   if (!delete_min_rec(left, &child, minref)) return false;
    if (!read_node(rootref, &node_work0, NULL)) return false;
    node_work0.m_left = child;
    update_height(&node_work0);
@@ -801,7 +801,7 @@ static bool data_delete_rec(NarfRef rootref, const char *key, NarfRef *out, Narf
          *out = left;
          return true;
       }
-      if (!data_delete_min_rec(right, &child, &succref)) return false;
+      if (!delete_min_rec(right, &child, &succref)) return false;
       if (!read_node(rootref, &node_work0, NULL)) return false;
       *removed_ref = rootref;
       if (removed_data) *removed_data = node_work0.m_data;
@@ -883,34 +883,6 @@ static bool free_insert_rec(NarfRef rootref, NarfRef itemref, NarfSector length,
    return rebalance(rootref, out);
 }
 
-//! @brief Detach and return the smallest free node; caller owns the returned ref.
-static bool free_delete_min_rec(NarfRef rootref, NarfRef *out, NarfRef *minref) {
-   NarfRef left;
-   NarfRef right;
-   NarfRef child;
-
-   if (ref_is_null(rootref)) return false;
-   if (!read_node(rootref, &node_work0, NULL)) return false;
-
-   left = node_work0.m_left;
-   right = node_work0.m_right;
-
-   if (ref_is_null(left)) {
-      // Return the detached node still live.  The caller may reuse it as a
-      // successor, or trash it later if write_node() COWs it elsewhere.
-      if (minref) *minref = rootref;
-      *out = right;
-      return true;
-   }
-
-   if (!free_delete_min_rec(left, &child, minref)) return false;
-   if (!read_node(rootref, &node_work0, NULL)) return false;
-   node_work0.m_left = child;
-   update_height(&node_work0);
-   if (!write_node(rootref, &node_work0, &rootref)) return false;
-   return rebalance(rootref, out);
-}
-
 //! @brief Delete a specific extent node from the free AVL tree.
 static bool free_delete_rec(NarfRef rootref, NarfSector length, NarfSector start, NarfSector sector, NarfRef *out, NarfRef *removed_ref, FreePayload *removed_free) {
    NarfRef left;
@@ -951,7 +923,7 @@ static bool free_delete_rec(NarfRef rootref, NarfSector length, NarfSector start
          *out = left;
          return true;
       }
-      if (!free_delete_min_rec(right, &child, &succref)) return false;
+      if (!delete_min_rec(right, &child, &succref)) return false;
       if (!read_node(rootref, &node_work0, NULL)) return false;
       *removed_ref = rootref;
       if (removed_free) *removed_free = node_work0.m_free;
