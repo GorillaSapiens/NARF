@@ -3198,29 +3198,35 @@ static bool defrag_lower_bottom(NarfSector free_sector, const FreePayload *free_
 }
 #endif
 
-//! @brief Helper function for defrag_squish_lowest_hole_after
+//! @brief Helper function for defrag_squish_lowest_hole_after.
 static bool dslha_helper(NarfSector sector, NarfSector target, NarfSector *node, NarfSector *hole, NarfSector *size) {
    NarfSector left;
    NarfSector right;
+   NarfSector free_start;
+   NarfSector free_length;
 
+   if (!node || !hole || !size) return false;
    if (sector == END) return true;
 
-   if (!read_node(sector, &node_tmp)) return false; 
+   if (!read_node(sector, &node_tmp)) return false;
 
    left = node_tmp.m_left;
    right = node_tmp.m_right;
+   free_start = node_tmp.m_free.m_start;
+   free_length = node_tmp.m_free.m_length;
 
-   if (node_tmp.m_free.m_start != END &&
-       node_tmp.m_free.m_length != 0 &&
-       node_tmp.m_free.m_start >= target &&
-       node_tmp.m_free.m_start < *hole) {
+   if (free_start != END &&
+       free_length != 0 &&
+       free_start >= target &&
+       free_start < *hole) {
 
       *node = sector;
-      *hole = node_tmp.m_free.m_start;
-      *size = node_tmp.m_free.m_length;
+      *hole = free_start;
+      *size = free_length;
    }
 
-   return dslha_helper(left, target, node, hole, size) && dslha_helper(right, target, node, hole, size);
+   return dslha_helper(left, target, node, hole, size) &&
+          dslha_helper(right, target, node, hole, size);
 }
 
 //! @brief Find the catalog sector for the lowest free hole at or after target
@@ -3243,8 +3249,8 @@ static bool dshba_helper(NarfSector sector, NarfSector target, NarfSector size,
    NarfSector data_start;
    NarfSector data_length;
 
-   if (sector == END) return true;
    if (node == NULL || blob == NULL || blob_size == NULL) return false;
+   if (sector == END) return true;
 
    if (!read_node(sector, &node_tmp)) return false;
 
@@ -3285,95 +3291,90 @@ static bool defrag_squish_highest_blob_after(NarfSector target, NarfSector size,
 
 //! @brief Perform one power-loss-safe payload squish step.
 static bool defrag_squish_once(bool *changed) {
-   NarfSector fnode;
-   NarfSector dnode;
+   NarfSector free_sector;
+   NarfSector data_sector;
    NarfSector hole;
-   NarfSector blob;
-   NarfSector size;
-   NarfSector blob_size;
-   NarfSector target;
+   NarfSector hole_length;
    NarfSector search;
    NarfSector old_start;
    NarfSector old_length;
-   NarfSector newroot;
-   NarfSector removed_sector;
-   NarfSector leftover_start;
-   NarfSector leftover_length;
-   NarfSector i;
-   bool adjacent;
 
    if (!changed) return false;
    *changed = false;
    search = 0;
 
    while (search != END) {
-      if (!defrag_squish_lowest_hole_after(search, &fnode, &hole, &size)) return false;
-      if (fnode == END) return true;
-      if (size != 0 && hole <= END - size) {
-         target = hole + size;
-         if (!defrag_squish_highest_blob_after(target, size, &dnode, &blob, &blob_size)) return false;
-         if (dnode != END) {
-            if (!read_node(dnode, &node_work1)) return false;
-            old_start = node_work1.m_data.m_start;
-            old_length = node_work1.m_data.m_length;
+      if (!defrag_squish_lowest_hole_after(search, &free_sector, &hole, &hole_length)) return false;
+      if (free_sector == END) return true;
+      if (hole_length != 0 && hole <= END - hole_length) {
+         if (!defrag_squish_highest_blob_after(hole + hole_length, hole_length,
+                                               &data_sector, &old_start,
+                                               &old_length)) return false;
+         if (data_sector != END) {
+            if (!read_node(data_sector, &node_work1)) return false;
+            if (node_work1.m_data.m_start != old_start ||
+                node_work1.m_data.m_length != old_length) return false;
             strncpy(key_work, node_work1.m_key, sizeof(key_work));
             key_work[sizeof(key_work) - 1] = 0;
 
-            if (old_start != blob || old_length != blob_size) return false;
-            if (old_start == END || old_length == 0 || old_length > size) return false;
-            if (old_start < target) return false;
-
-            adjacent = (old_start == target);
-            leftover_start = hole + old_length;
-            leftover_length = adjacent ? size : size - old_length;
+            if (old_start == END || old_length == 0 || old_length > hole_length) return false;
+            if (old_start < hole + hole_length) return false;
 
             if (old_start > root.m_total_sectors || old_length > root.m_total_sectors - old_start) return false;
             if (hole > root.m_total_sectors || old_length > root.m_total_sectors - hole) return false;
-            for (i = 0; i < old_length; i++) {
-               if (!narf_io_read(root.m_origin + old_start + i, buffer)) return false;
-               if (!narf_io_write(root.m_origin + hole + i, buffer)) return false;
+            for (search = 0; search < old_length; search++) {
+               if (!narf_io_read(root.m_origin + old_start + search, buffer)) return false;
+               if (!narf_io_write(root.m_origin + hole + search, buffer)) return false;
             }
 
             transaction_begin();
             transaction_may_use_reserve = true;
 
-            if (!free_delete_rec(root.m_free_root, size, hole, fnode, &newroot,
-                                 &removed_sector, NULL)) {
+            if (!free_delete_rec(root.m_free_root, hole_length, hole, free_sector,
+                                 &data_sector, &free_sector, NULL)) {
                transaction_rollback();
                return false;
             }
-            root.m_free_root = newroot;
+            root.m_free_root = data_sector;
 
             if (!data_find_sector_rec(root.m_data_root, key_work, NULL, &node_work1)) {
                transaction_rollback();
                return false;
             }
             node_work1.m_data.m_start = hole;
-            if (!data_update_rec(root.m_data_root, key_work, &node_work1, &newroot)) {
+            if (!data_update_rec(root.m_data_root, key_work, &node_work1, &data_sector)) {
                transaction_rollback();
                return false;
             }
-            root.m_data_root = newroot;
+            root.m_data_root = data_sector;
 
-            if (leftover_length != 0) {
-               if (!insert_free_extent_with_seed_sector(removed_sector,
-                                                        leftover_start,
-                                                        leftover_length)) {
+            if (old_start == hole + hole_length) {
+               if (!insert_free_extent_with_seed_sector(free_sector,
+                                                        hole + old_length,
+                                                        hole_length)) {
                   transaction_rollback();
                   return false;
                }
-               removed_sector = END;
-            }
+               free_sector = END;
+            } else {
+               if (old_length != hole_length) {
+                  if (!insert_free_extent_with_seed_sector(free_sector,
+                                                           hole + old_length,
+                                                           hole_length - old_length)) {
+                     transaction_rollback();
+                     return false;
+                  }
+                  free_sector = END;
+               }
 
-            if (!adjacent) {
                if (!insert_free_extent(old_start, old_length)) {
                   transaction_rollback();
                   return false;
                }
             }
 
-            if (removed_sector != END &&
-                !insert_free_extent_with_seed_sector(removed_sector, END, 0)) {
+            if (free_sector != END &&
+                !insert_free_extent_with_seed_sector(free_sector, END, 0)) {
                transaction_rollback();
                return false;
             }
