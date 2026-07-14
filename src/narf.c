@@ -59,8 +59,8 @@ typedef struct PACKED {
    uint32_t     m_narf_version;            \
    NarfByteSize m_sector_size;             \
    NarfSector   m_total_sectors;           \
-   NarfSector      m_data_root;               \
-   NarfSector      m_free_root;               \
+   NarfSector   m_data_root;               \
+   NarfSector   m_free_root;               \
                                            \
    NarfSector   m_spare_count;             \
    NarfSector   m_spare_inline[SPARE_MAX]; \
@@ -2766,6 +2766,8 @@ bool narf_append_key(const char *key, const void *data, NarfByteSize size) {
 }
 
 #ifdef NARF_USE_DEFRAG
+
+#if 0
 //! @brief Find the lowest-addressed real free payload extent.
 static bool defrag_lowest_free_rec(NarfSector sector, NarfSector *best_sector, FreePayload *bestfree) {
    NarfSector left;
@@ -2797,7 +2799,9 @@ static bool defrag_lowest_free_rec(NarfSector sector, NarfSector *best_sector, F
 
    return true;
 }
+#endif
 
+#if 0
 //! @brief Find a real free payload extent by starting sector.
 static bool defrag_find_free_start_rec(NarfSector sector, NarfSector start, NarfSector *found, FreePayload *outfree) {
    NarfSector left;
@@ -2825,7 +2829,9 @@ static bool defrag_find_free_start_rec(NarfSector sector, NarfSector start, Narf
    if (defrag_find_free_start_rec(left, start, found, outfree)) return true;
    return defrag_find_free_start_rec(right, start, found, outfree);
 }
+#endif
 
+#if 0
 //! @brief Find a data-tree entry by payload starting sector.
 static bool defrag_find_data_start_rec(NarfSector sector, NarfSector start, NarfSector gaplength, NarfSector scratchlen, NarfSector *found,
                                        DataPayload *outdata, char *outkey) {
@@ -2865,7 +2871,9 @@ static bool defrag_find_data_start_rec(NarfSector sector, NarfSector start, Narf
    if (defrag_find_data_start_rec(left, start, gaplength, scratchlen, found, outdata, outkey)) return true;
    return defrag_find_data_start_rec(right, start, gaplength, scratchlen, found, outdata, outkey);
 }
+#endif
 
+#if 0
 //! @brief Copy payload sectors between non-overlapping extents chosen by the caller.
 static bool defrag_copy_extent(NarfSector src, NarfSector dst, NarfSector length) {
    NarfSector i;
@@ -2882,7 +2890,9 @@ static bool defrag_copy_extent(NarfSector src, NarfSector dst, NarfSector length
 
    return true;
 }
+#endif
 
+#if 0
 //! @brief Update one data node after its payload extent has moved.
 static bool defrag_update_data_start(const char *key, NarfSector start) {
    NarfSector newroot;
@@ -2894,6 +2904,7 @@ static bool defrag_update_data_start(const char *key, NarfSector start) {
    root.m_data_root = newroot;
    return true;
 }
+#endif
 
 //! @brief Carve unused tail sectors from overlong payload extents.
 static bool defrag_carve_rec(NarfSector sector, bool *changed) {
@@ -2978,6 +2989,7 @@ static bool defrag_carve_once(bool *changed) {
    return defrag_carve_rec(root.m_data_root, changed);
 }
 
+#if 0
 //! @brief Merge two adjacent free payload extents.
 static bool defrag_merge_free(NarfSector left_sector, const FreePayload *left, NarfSector right_sector, const FreePayload *right) {
    NarfSector newroot;
@@ -3040,7 +3052,9 @@ static bool defrag_merge_free(NarfSector left_sector, const FreePayload *left, N
 
    return true;
 }
+#endif
 
+#if 0
 //! @brief Move adjacent data into a large enough hole, or to the payload frontier.
 static bool defrag_move_data_after_free(NarfSector free_sector, const FreePayload *free_node, const DataPayload *data_node, const char *data_key) {
    NarfSector newroot;
@@ -3138,7 +3152,9 @@ static bool defrag_move_data_after_free(NarfSector free_sector, const FreePayloa
 
    return true;
 }
+#endif
 
+#if 0
 //! @brief Reclaim a free payload extent that sits at the current data high-water mark.
 static bool defrag_lower_bottom(NarfSector free_sector, const FreePayload *free_node) {
    NarfSector newroot;
@@ -3177,60 +3193,209 @@ static bool defrag_lower_bottom(NarfSector free_sector, const FreePayload *free_
 
    return true;
 }
+#endif
+
+//! @brief Helper function for defrag_squish_lowest_hole_after
+static bool dslha_helper(NarfSector sector, NarfSector target, NarfSector *node, NarfSector *hole, NarfSector *size) {
+   NarfSector left;
+   NarfSector right;
+
+   if (sector == END) return true;
+
+   if (!read_node(sector, &node_tmp)) return false; 
+
+   left = node_tmp.m_left;
+   right = node_tmp.m_right;
+
+   if (node_tmp.m_free.m_start != END &&
+       node_tmp.m_free.m_length != 0 &&
+       node_tmp.m_free.m_start >= target &&
+       node_tmp.m_free.m_start < *hole) {
+
+      *node = sector;
+      *hole = node_tmp.m_free.m_start;
+      *size = node_tmp.m_free.m_length;
+   }
+
+   return dslha_helper(left, target, node, hole, size) && dslha_helper(right, target, node, hole, size);
+}
+
+//! @brief Find the catalog sector for the lowest free hole at or after target
+static bool defrag_squish_lowest_hole_after(NarfSector target, NarfSector *node, NarfSector *hole, NarfSector *size) {
+   if (!node || !hole || !size) return false;
+   *node = END;
+   *hole = END;
+   *size = 0;
+
+   if (!dslha_helper(root.m_free_root, target, node, hole, size)) return false;
+
+   return true;
+}
+
+//! @brief Helper function for defrag_squish_highest_blob_after.
+static bool dshba_helper(NarfSector sector, NarfSector target, NarfSector size,
+                         NarfSector *node, NarfSector *blob, NarfSector *blob_size) {
+   NarfSector left;
+   NarfSector right;
+   NarfSector data_start;
+   NarfSector data_length;
+
+   if (sector == END) return true;
+   if (node == NULL || blob == NULL || blob_size == NULL) return false;
+
+   if (!read_node(sector, &node_tmp)) return false;
+
+   left = node_tmp.m_left;
+   right = node_tmp.m_right;
+   data_start = node_tmp.m_data.m_start;
+   data_length = node_tmp.m_data.m_length;
+
+   if (data_start != END &&
+       data_length != 0 &&
+       data_start >= target &&
+       data_length <= size &&
+       (data_length > *blob_size ||
+        (data_length == *blob_size && data_start > *blob))) {
+      *node = sector;
+      *blob = data_start;
+      *blob_size = data_length;
+   }
+
+   return dshba_helper(left, target, size, node, blob, blob_size) &&
+          dshba_helper(right, target, size, node, blob, blob_size);
+}
+
+//! @brief Find the largest later data blob that fits, preferring the highest sector on ties.
+static bool defrag_squish_highest_blob_after(NarfSector target, NarfSector size,
+                                             NarfSector *node, NarfSector *blob,
+                                             NarfSector *blob_size) {
+   if (node == NULL || blob == NULL || blob_size == NULL) return false;
+
+   *node = END;
+   *blob = 0;
+   *blob_size = 0;
+
+   if (!dshba_helper(root.m_data_root, target, size, node, blob, blob_size)) return false;
+
+   return true;
+}
 
 //! @brief Perform one power-loss-safe payload squish step.
 static bool defrag_squish_once(bool *changed) {
-   NarfSector free_sector = END;
-   NarfSector adj_sector;
-   FreePayload free_node = INIT_DEFRAG_SEARCH;
-   FreePayload adj_free;
-   DataPayload adj_data;
-   NarfSector successor;
-   NarfSector succlength;
-   bool ret;
+   NarfSector fnode;
+   NarfSector dnode;
+   NarfSector hole;
+   NarfSector blob;
+   NarfSector size;
+   NarfSector blob_size;
+   NarfSector target;
+   NarfSector search;
+   NarfSector old_start;
+   NarfSector old_length;
+   NarfSector newroot;
+   NarfSector removed_sector;
+   NarfSector leftover_start;
+   NarfSector leftover_length;
+   NarfSector i;
+   bool adjacent;
 
-   if (changed == NULL) return false;
+   if (!changed) return false;
    *changed = false;
+   search = 0;
 
-   if (!defrag_lowest_free_rec(root.m_free_root, &free_sector, &free_node)) {
-#ifdef DEFRAG_DEBUG
-      fprintf(stderr, "defrag_lowest_free_rec fails @ %d\n", __LINE__);
-#endif
-      return false;
+   while (search != END) {
+      if (!defrag_squish_lowest_hole_after(search, &fnode, &hole, &size)) return false;
+      if (fnode == END) return true;
+      if (size != 0 && hole <= END - size) {
+         target = hole + size;
+         if (!defrag_squish_highest_blob_after(target, size, &dnode, &blob, &blob_size)) return false;
+         if (dnode != END) {
+            if (!read_node(dnode, &node_work1)) return false;
+            old_start = node_work1.m_data.m_start;
+            old_length = node_work1.m_data.m_length;
+            strncpy(key_work, node_work1.m_key, sizeof(key_work));
+            key_work[sizeof(key_work) - 1] = 0;
+
+            if (old_start != blob || old_length != blob_size) return false;
+            if (old_start == END || old_length == 0 || old_length > size) return false;
+            if (old_start < target) return false;
+
+            adjacent = (old_start == target);
+            leftover_start = hole + old_length;
+            leftover_length = adjacent ? size : size - old_length;
+
+            if (old_start > root.m_total_sectors || old_length > root.m_total_sectors - old_start) return false;
+            if (hole > root.m_total_sectors || old_length > root.m_total_sectors - hole) return false;
+            for (i = 0; i < old_length; i++) {
+               if (!narf_io_read(root.m_origin + old_start + i, buffer)) return false;
+               if (!narf_io_write(root.m_origin + hole + i, buffer)) return false;
+            }
+
+            transaction_begin();
+            transaction_may_use_reserve = true;
+
+            if (!free_delete_rec(root.m_free_root, size, hole, fnode, &newroot,
+                                 &removed_sector, NULL)) {
+               transaction_rollback();
+               return false;
+            }
+            root.m_free_root = newroot;
+
+            if (!data_find_sector_rec(root.m_data_root, key_work, NULL, &node_work1)) {
+               transaction_rollback();
+               return false;
+            }
+            node_work1.m_data.m_start = hole;
+            if (!data_update_rec(root.m_data_root, key_work, &node_work1, &newroot)) {
+               transaction_rollback();
+               return false;
+            }
+            root.m_data_root = newroot;
+
+            if (leftover_length != 0) {
+               if (leftover_start + leftover_length == root.m_bottom) {
+                  root.m_bottom = leftover_start;
+               }
+               else if (!insert_free_extent_with_seed_sector(removed_sector,
+                                                              leftover_start,
+                                                              leftover_length)) {
+                  transaction_rollback();
+                  return false;
+               }
+               removed_sector = END;
+            }
+
+            if (!adjacent) {
+               if (old_start + old_length == root.m_bottom) {
+                  root.m_bottom = old_start;
+               }
+               else if (!insert_free_extent(old_start, old_length)) {
+                  transaction_rollback();
+                  return false;
+               }
+            }
+
+            if (removed_sector != END &&
+                !insert_free_extent_with_seed_sector(removed_sector, END, 0)) {
+               transaction_rollback();
+               return false;
+            }
+
+            if (!commit_user_transaction()) {
+               transaction_rollback();
+               return false;
+            }
+
+            *changed = true;
+            return true;
+         }
+      }
+
+      if (hole == END - 1) return true;
+      search = hole + 1;
    }
 
-   if (free_sector == END || free_node.m_start == END || free_node.m_length == 0) {
-      return true;
-   }
-
-   succlength = free_node.m_length;
-   successor = free_node.m_start + free_node.m_length;
-
-   if (defrag_find_free_start_rec(root.m_free_root, successor, &adj_sector, &adj_free)) {
-      if (!defrag_merge_free(free_sector, &free_node, adj_sector, &adj_free)) return false;
-      *changed = true;
-      return true;
-   }
-
-   adj_sector = END;
-   adj_data.m_start = END;
-   ret = defrag_find_data_start_rec(root.m_data_root, successor, succlength, root.m_top - root.m_bottom, &adj_sector, &adj_data, key_work);
-   if (ret || adj_sector != END) {
-      if (!defrag_move_data_after_free(free_sector, &free_node, &adj_data, key_work)) return false;
-      *changed = true;
-      return true;
-   }
-
-   if (successor == root.m_bottom) {
-      if (!defrag_lower_bottom(free_sector, &free_node)) return false;
-      *changed = true;
-      return true;
-   }
-
-#ifdef DEFRAG_DEBUG
-      fprintf(stderr, "defrag_lowest_free_rec fails @ %d\n", __LINE__);
-#endif
-   return false;
+   return true;
 }
 
 //! @brief Reclaim one parked catalog-node sector when it reaches root.m_top.
