@@ -3396,12 +3396,202 @@ static bool defrag_squish_once(bool *changed) {
    return true;
 }
 
+//! @brief Helper function for defrag_widen_find_data_start.
+static bool dwfds_helper(NarfSector sector, NarfSector target,
+                         NarfSector *node, NarfSector *size) {
+   NarfSector left;
+   NarfSector right;
+   NarfSector data_start;
+   NarfSector data_length;
+
+   if (node == NULL || size == NULL) return false;
+   if (sector == END) return true;
+
+   if (!read_node(sector, &node_tmp)) return false;
+
+   left = node_tmp.m_left;
+   right = node_tmp.m_right;
+   data_start = node_tmp.m_data.m_start;
+   data_length = node_tmp.m_data.m_length;
+
+   if (data_start == target && data_length != 0) {
+      *node = sector;
+      *size = data_length;
+      return true;
+   }
+
+   return dwfds_helper(left, target, node, size) &&
+          dwfds_helper(right, target, node, size);
+}
+
+//! @brief Find the catalog sector for a data extent starting at target.
+static bool defrag_widen_find_data_start(NarfSector target,
+                                         NarfSector *node,
+                                         NarfSector *size) {
+   if (node == NULL || size == NULL) return false;
+
+   *node = END;
+   *size = 0;
+
+   return dwfds_helper(root.m_data_root, target, node, size);
+}
+
+//! @brief Helper function for defrag_widen_find.
+static bool dwf_helper(NarfSector sector, NarfSector scratch,
+                       NarfSector *free_node, NarfSector *hole,
+                       NarfSector *hole_size, NarfSector *data_node,
+                       NarfSector *data_size) {
+   NarfSector left;
+   NarfSector right;
+   NarfSector free_start;
+   NarfSector free_length;
+   NarfSector node;
+   NarfSector size;
+
+   if (free_node == NULL || hole == NULL || hole_size == NULL ||
+       data_node == NULL || data_size == NULL) {
+      return false;
+   }
+   if (sector == END) return true;
+
+   if (!read_node(sector, &node_tmp)) return false;
+
+   left = node_tmp.m_left;
+   right = node_tmp.m_right;
+   free_start = node_tmp.m_free.m_start;
+   free_length = node_tmp.m_free.m_length;
+
+   if (free_start != END &&
+       free_length != 0 &&
+       free_start <= END - free_length) {
+      if (!defrag_widen_find_data_start(free_start + free_length,
+                                        &node, &size)) {
+         return false;
+      }
+      if (node != END &&
+          size <= scratch &&
+          (*data_node == END ||
+           size < *data_size ||
+           (size == *data_size && free_start < *hole))) {
+         *free_node = sector;
+         *hole = free_start;
+         *hole_size = free_length;
+         *data_node = node;
+         *data_size = size;
+      }
+   }
+
+   return dwf_helper(left, scratch, free_node, hole, hole_size,
+                    data_node, data_size) &&
+          dwf_helper(right, scratch, free_node, hole, hole_size,
+                     data_node, data_size);
+}
+
+//! @brief Find the cheapest adjacent data extent that can be moved to scratch.
+static bool defrag_widen_find(NarfSector *free_node, NarfSector *hole,
+                              NarfSector *hole_size, NarfSector *data_node,
+                              NarfSector *data_size) {
+   if (free_node == NULL || hole == NULL || hole_size == NULL ||
+       data_node == NULL || data_size == NULL) {
+      return false;
+   }
+
+   *free_node = END;
+   *hole = END;
+   *hole_size = 0;
+   *data_node = END;
+   *data_size = 0;
+
+   if (root.m_bottom > root.m_top) return false;
+
+   return dwf_helper(root.m_free_root, root.m_top - root.m_bottom,
+                     free_node, hole, hole_size, data_node, data_size);
+}
+
+//! @brief Perform one power-loss-safe payload widen step.
 static bool defrag_widen_once(bool *changed) {
+   NarfSector free_sector;
+   NarfSector data_sector;
+   NarfSector hole;
+   NarfSector hole_length;
+   NarfSector data_length;
+
    if (changed == NULL) return false;
    *changed = false;
 
-   // TODO perform a widen step
-   
+   if (!defrag_widen_find(&free_sector, &hole, &hole_length,
+                          &data_sector, &data_length)) {
+      return false;
+   }
+   if (free_sector == END) return true;
+
+   if (hole == END || hole_length == 0 || hole > END - hole_length) return false;
+   if (data_length == 0 || root.m_bottom > root.m_top) return false;
+   if (data_length > END - hole_length) return false;
+   if (data_length > root.m_top - root.m_bottom) return false;
+   if (hole + hole_length > root.m_total_sectors ||
+       data_length > root.m_total_sectors - (hole + hole_length)) {
+      return false;
+   }
+   if (root.m_bottom > root.m_total_sectors ||
+       data_length > root.m_total_sectors - root.m_bottom) {
+      return false;
+   }
+
+   if (!read_node(data_sector, &node_work1)) return false;
+   if (node_work1.m_data.m_start != hole + hole_length ||
+       node_work1.m_data.m_length != data_length) {
+      return false;
+   }
+   strncpy(key_work, node_work1.m_key, sizeof(key_work));
+   key_work[sizeof(key_work) - 1] = 0;
+
+   for (data_sector = 0; data_sector < data_length; data_sector++) {
+      if (!narf_io_read(root.m_origin + hole + hole_length + data_sector,
+                        buffer)) {
+         return false;
+      }
+      if (!narf_io_write(root.m_origin + root.m_bottom + data_sector,
+                         buffer)) {
+         return false;
+      }
+   }
+
+   transaction_begin();
+   transaction_may_use_reserve = true;
+
+   if (!free_delete_rec(root.m_free_root, hole_length, hole, free_sector,
+                        &data_sector, &free_sector, NULL)) {
+      transaction_rollback();
+      return false;
+   }
+   root.m_free_root = data_sector;
+
+   if (!data_find_sector_rec(root.m_data_root, key_work, NULL, &node_work1)) {
+      transaction_rollback();
+      return false;
+   }
+   node_work1.m_data.m_start = root.m_bottom;
+   root.m_bottom += data_length;
+
+   if (!data_update_rec(root.m_data_root, key_work, &node_work1, &data_sector)) {
+      transaction_rollback();
+      return false;
+   }
+   root.m_data_root = data_sector;
+
+   if (!insert_free_extent_with_seed_sector(free_sector, hole,
+                                            hole_length + data_length)) {
+      transaction_rollback();
+      return false;
+   }
+
+   if (!commit_user_transaction()) {
+      transaction_rollback();
+      return false;
+   }
+
+   *changed = true;
    return true;
 }
 
