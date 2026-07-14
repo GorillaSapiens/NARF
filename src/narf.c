@@ -56,6 +56,8 @@ typedef struct PACKED {
    NarfSector m_length;
 } FreePayload;
 
+#define INIT_DEFRAG_SEARCH ((FreePayload){ END, 0 })
+
 #define ROOT_FIELDS                        \
    union {                                 \
       uint32_t m_signature;                \
@@ -1103,6 +1105,8 @@ static bool insert_free_extent_with_ref(NarfRef ref, NarfSector start, NarfSecto
    if (length == 0) return true;
    if (start == END) return false;
    if (length > ((NarfSector) -1) - start) return false;
+
+   if (start + length == root.m_bottom) return true;
 
    /*
     * The free tree is ordered by length for best-fit allocation, not by
@@ -2785,40 +2789,32 @@ bool narf_append_key(const char *key, const void *data, NarfByteSize size) {
 static bool defrag_lowest_free_rec(NarfRef ref, NarfRef *bestref, FreePayload *bestfree) {
    NarfRef left;
    NarfRef right;
-   NarfSector free_start;
-   NarfSector free_length;
-   bool found = false;
 
    if (bestref == NULL || bestfree == NULL) return false;
 
    if (ref_is_null(ref)) {
-      return false;
+      return true;
    }
 
    if (!read_node(ref, &node_work0)) return false;
+
    left = node_work0.m_left;
    right = node_work0.m_right;
-   free_start = node_work0.m_free.m_start;
-   free_length = node_work0.m_free.m_length;
 
-   if (defrag_lowest_free_rec(left, bestref, bestfree)) {
-      found = true;
+   if (node_work0.m_free.m_start < bestfree->m_start) {
+      *bestref = ref;
+      *bestfree = node_work0.m_free;
    }
 
-   if (free_start != END && free_length != 0) {
-      if (!found || free_start < bestfree->m_start) {
-         *bestref = ref;
-         bestfree->m_start = free_start;
-         bestfree->m_length = free_length;
-         found = true;
-      }
+   if (!defrag_lowest_free_rec(left, bestref, bestfree)) {
+      return false;
    }
 
-   if (defrag_lowest_free_rec(right, bestref, bestfree)) {
-      found = true;
+   if (!defrag_lowest_free_rec(right, bestref, bestfree)) {
+      return false;
    }
 
-   return found;
+   return true;
 }
 
 //! @brief Find a real free payload extent by starting sector.
@@ -2850,7 +2846,7 @@ static bool defrag_find_free_start_rec(NarfRef ref, NarfSector start, NarfRef *f
 }
 
 //! @brief Find a data-tree entry by payload starting sector.
-static bool defrag_find_data_start_rec(NarfRef ref, NarfSector start, NarfRef *found,
+static bool defrag_find_data_start_rec(NarfRef ref, NarfSector start, NarfSector gaplength, NarfSector scratchlen, NarfRef *found,
                                        DataPayload *outdata, char *outkey) {
    NarfRef left;
    NarfRef right;
@@ -2865,7 +2861,8 @@ static bool defrag_find_data_start_rec(NarfRef ref, NarfSector start, NarfRef *f
    data_start = node_work0.m_data.m_start;
    data_length = node_work0.m_data.m_length;
 
-   if (data_start == start && data_length != 0) {
+#if 0
+   if (data_start == start && data_length != 0 && (data_length <= gaplength || data_length <= scratchlen)) {
       if (found) *found = ref;
       if (outdata) *outdata = node_work0.m_data;
       if (outkey) {
@@ -2874,9 +2871,18 @@ static bool defrag_find_data_start_rec(NarfRef ref, NarfSector start, NarfRef *f
       }
       return true;
    }
+#endif
+   if (data_start > start && (outdata->m_start == END || data_start > outdata->m_start) && data_length <= gaplength) {
+      if (found) *found = ref;
+      if (outdata) *outdata = node_work0.m_data;
+      if (outkey) {
+         strncpy(outkey, node_work0.m_key, KEYSIZE);
+         outkey[KEYSIZE - 1] = 0;
+      }
+   }
 
-   if (defrag_find_data_start_rec(left, start, found, outdata, outkey)) return true;
-   return defrag_find_data_start_rec(right, start, found, outdata, outkey);
+   if (defrag_find_data_start_rec(left, start, gaplength, scratchlen, found, outdata, outkey)) return true;
+   return defrag_find_data_start_rec(right, start, gaplength, scratchlen, found, outdata, outkey);
 }
 
 //! @brief Copy payload sectors between non-overlapping extents chosen by the caller.
@@ -2922,6 +2928,7 @@ static bool defrag_carve_rec(NarfRef ref, bool *changed) {
 
    if (ref_is_null(ref)) return true;
    if (changed == NULL) return false;
+
    if (!read_node(ref, &node_work0)) return false;
    left = node_work0.m_left;
 
@@ -2930,6 +2937,7 @@ static bool defrag_carve_rec(NarfRef ref, bool *changed) {
 
    if (!read_node(ref, &node_work0)) return false;
    right = node_work0.m_right;
+
    data_start = node_work0.m_data.m_start;
    data_length = node_work0.m_data.m_length;
    data_bytes = node_work0.m_data.m_bytes;
@@ -3063,6 +3071,7 @@ static bool defrag_move_data_after_free(NarfRef freeref, const FreePayload *free
    NarfSector new_start;
    NarfSector new_free_start;
    NarfSector new_free_length;
+   bool nonadjacent = false;
 
    if (free_node == NULL || data_node == NULL || data_key == NULL) return false;
 
@@ -3072,13 +3081,21 @@ static bool defrag_move_data_after_free(NarfRef freeref, const FreePayload *free
    old_length = data_node->m_length;
 
    if (free_start == END || old_start == END) return false;
-   if (free_start + free_length != old_start) return false;
+   //if (free_start + free_length != old_start) return false;
 
    if (free_length >= old_length) {
       // The destination is entirely inside the existing free hole.
       new_start = free_start;
       new_free_start = free_start + old_length;
-      new_free_length = free_length;
+      if (free_start + free_length == old_start) {
+         // adjacent case
+         new_free_length = free_length /* + old_length - old_length */;
+      }
+      else {
+         // non adjacent case
+         new_free_length = free_length - old_length;
+         nonadjacent = true;
+      }
    }
    else {
       // Do not slide through an overlapping too-small hole.  Copy to the
@@ -3098,6 +3115,7 @@ static bool defrag_move_data_after_free(NarfRef freeref, const FreePayload *free
    transaction_begin();
    transaction_may_use_reserve = true;
 
+   // TODO FIX removed_ref may not be used...
    if (!free_delete_rec(root.m_free_root, free_length, free_start,
                         freeref.m_sector, &newroot, &removed_ref, NULL)) {
       transaction_rollback();
@@ -3114,11 +3132,23 @@ static bool defrag_move_data_after_free(NarfRef freeref, const FreePayload *free
       return false;
    }
 
-   if (!insert_free_extent_with_ref(removed_ref, new_free_start, new_free_length)) {
+   if (new_free_start + new_free_length == root.m_bottom) {
+      root.m_bottom = new_free_start + new_free_length;
+   }
+   else if (!insert_free_extent_with_ref(removed_ref, new_free_start, new_free_length)) {
       transaction_rollback();
       return false;
    }
 
+   if (nonadjacent) {
+      if (old_start + old_length == root.m_bottom) {
+         root.m_bottom = old_start;
+      }
+      else if (!insert_free_extent(old_start, old_length)) {
+         transaction_rollback();
+         return false;
+      }
+   }
 
    if (!commit_user_transaction()) {
       transaction_rollback();
@@ -3169,20 +3199,27 @@ static bool defrag_lower_bottom(NarfRef freeref, const FreePayload *free_node) {
 
 //! @brief Perform one power-loss-safe payload squish step.
 static bool defrag_squish_once(bool *changed) {
-   NarfRef freeref;
+   NarfRef freeref = NULL_REF;
    NarfRef adjref;
-   FreePayload free_node;
+   FreePayload free_node = INIT_DEFRAG_SEARCH;
    FreePayload adj_free;
    DataPayload adj_data;
    NarfSector successor;
+   NarfSector succlength;
+   bool ret;
 
    if (changed == NULL) return false;
    *changed = false;
 
    if (!defrag_lowest_free_rec(root.m_free_root, &freeref, &free_node)) {
+      return false;
+   }
+
+   if (ref_is_null(freeref) || free_node.m_start == END || free_node.m_length == 0) {
       return true;
    }
 
+   succlength = free_node.m_length;
    successor = free_node.m_start + free_node.m_length;
 
    if (defrag_find_free_start_rec(root.m_free_root, successor, &adjref, &adj_free)) {
@@ -3191,7 +3228,10 @@ static bool defrag_squish_once(bool *changed) {
       return true;
    }
 
-   if (defrag_find_data_start_rec(root.m_data_root, successor, &adjref, &adj_data, key_work)) {
+   adjref = NULL_REF;
+   adj_data.m_start = END;
+   ret = defrag_find_data_start_rec(root.m_data_root, successor, succlength, root.m_top - root.m_bottom, &adjref, &adj_data, key_work);
+   if (ret || !ref_is_null(adjref)) {
       if (!defrag_move_data_after_free(freeref, &free_node, &adj_data, key_work)) return false;
       *changed = true;
       return true;
