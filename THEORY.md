@@ -139,6 +139,33 @@ allocates another node sector, writes the replacement, and marks the old sector
 as trash.  Trashed sectors are moved to the root-resident spare stack only after
 the transaction commits successfully.
 
+Catalog-node sectors therefore move through this lifecycle:
+
+```
+live
+  A committed root can reach the node through the data tree, free tree, or other
+  live catalog state.  The sector must not be overwritten in place.
+
+transaction-private
+  The node was newly allocated or COW-written during the current transaction.
+  No committed root can reach this exact version yet, so the transaction may
+  rewrite the sector in place.
+
+trash
+  The transaction has replaced or deleted the node, but the old committed root
+  may still need it if power fails before commit.  Trash is transaction-local and
+  is not reusable storage.
+
+spare
+  The transaction committed successfully, so old trash sectors are no longer
+  needed for rollback.  They are pushed onto the committed spare stack and may be
+  reused by a later catalog-node allocation.
+```
+
+The important rule is that **trash is not spare**.  A sector becomes safe to
+reuse only after the commit that made it unreachable from the previous committed
+root.
+
 Rollback on normal runtime failure restores the in-memory root state and clears
 transaction-local dirty/trash tracking.  It does not need to erase abandoned
 node sectors; committed roots decide what is reachable.
