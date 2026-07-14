@@ -236,13 +236,18 @@ bytes.  This is mostly a stress-test helper.
 
 ### `defrag`
 
-Call `narf_defrag()`.  When `NARF_USE_DEFRAG` is enabled, this compacts payload
-extents by moving data into lower free holes using small copy-on-write catalog-record
-commits.  When a lower free hole is too small, defrag copies the payload to
-the current payload frontier instead of doing an overlapping in-place slide.
-It also merges adjacent free extents, lowers the data frontier when
-the highest payload extent becomes free, and reclaims parked catalog-node
-sectors from the top of the catalog-node area.
+Call `narf_defrag()`.  When `NARF_USE_DEFRAG` is enabled, this repeatedly performs
+small copy-on-write catalog-record transactions until the current implementation
+finds no more safe local improvement.
+
+The internal implementation first trims over-allocated payload tails, then moves
+later data extents into lower free holes when they fit.  If that stalls, it may
+widen a free hole by moving the adjacent data extent to the current payload
+frontier; the following squish pass can then move data back down and leave the
+free space higher in the payload area.  Free-extent insertion coalesces adjacent
+holes and lowers `root.m_bottom` when a merged free extent reaches the payload
+frontier.  A final tidy pass exists for legacy parked catalog-node records, but
+current images usually have no such records.
 
 ### `debug`
 

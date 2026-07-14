@@ -3595,7 +3595,7 @@ static bool defrag_widen_once(bool *changed) {
    return true;
 }
 
-//! @brief Reclaim one parked catalog-node sector when it reaches root.m_top.
+//! @brief Try to reclaim one legacy parked catalog-node sector at root.m_top.
 static bool defrag_tidy_once(bool *changed) {
    NarfSector newroot;
    NarfSector removed_sector;
@@ -3628,7 +3628,7 @@ static bool defrag_tidy_once(bool *changed) {
    return true;
 }
 
-//! @brief Defragment the filesystem when defrag support is enabled.
+//! @brief Defragment the filesystem using internal carve/squish/widen/tidy passes.
 bool narf_defrag(void) {
    bool done = false;
    bool changed;

@@ -172,6 +172,12 @@ The important rule is that **trash is not spare**.  A sector becomes safe to
 reuse only after the commit that made it unreachable from the previous committed
 root.
 
+The current implementation stores spare catalog-node sectors in a fixed-size
+inline stack in the root block.  Transaction trash is tracked in a fixed-size RAM
+array while a transaction is open.  If either structure overflows, extra dead
+catalog sectors are safely leaked rather than reused too early.  There is not yet
+an on-disk spare linked list, trash-page list, or catalog-node garbage collector.
+
 Rollback on normal runtime failure restores the in-memory root state and clears
 transaction-local dirty/trash tracking.  It does not need to erase abandoned
 node sectors; committed roots decide what is reachable.
@@ -201,23 +207,40 @@ metadata updates.
 Defragmentation
 ---------------
 
-`narf_defrag()` is optional behind `NARF_USE_DEFRAG`.  It works in small
-power-loss-safe steps rather than doing one giant in-place rewrite.  A step may
-merge adjacent free payload extents, move a file payload into a lower free hole,
-or move that payload to the current payload frontier when the lower hole is too
-small.  The too-small-hole case deliberately avoids sliding a payload through an
-overlapping destination: old committed payload sectors are left intact until the
-new root points at the new copy.
+`narf_defrag()` is optional behind `NARF_USE_DEFRAG`.  It works as a loop of
+small power-loss-safe transactions rather than doing one giant in-place rewrite.
+The internal phases are implementation details, not public operations:
+
+1. **carve** trims unused sector tails from over-allocated data extents and
+   inserts the trimmed tail into the payload free tree.
+2. **squish** scans free holes from low addresses upward.  For a hole, it finds
+   the largest later data extent that fits, preferring the highest-addressed
+   extent on ties, copies that payload into the hole, updates the data node, and
+   frees the old location.
+3. **widen** runs only after squish cannot make progress.  It finds a
+   `[free][data]` pair whose adjacent data extent fits in the open scratch space
+   between `root.m_bottom` and `root.m_top`.  It chooses the smallest movable
+   adjacent data extent, using the lower hole as a tie breaker, copies that data
+   to the current payload frontier, advances `root.m_bottom`, and reinserts the
+   combined old hole plus old data location as a larger free extent.  The next
+   squish pass can then bubble that data back down as `[data][free]`.
+4. **tidy** is a legacy cleanup pass for zero-length parked catalog-node records
+   at `root.m_top`.  Current free-extent insertion discards zero-length extents,
+   so tidy normally has nothing to do on freshly-written images.
+
+A successful carve, squish, widen, or tidy action commits its own transaction.
+After a successful widen, `narf_defrag()` returns to squish so newly widened holes
+can be used immediately.  The public command still remains just `narf_defrag()`;
+callers do not choose individual phases.
 
 Each defrag step writes payload data before committing catalog state.  The old
 committed root therefore remains usable if power is lost before the step's new
 root is written.
 
-When a free payload extent reaches the current payload frontier, defrag lowers
+Free-extent insertion coalesces adjacent payload free extents.  When a merged
+free extent reaches the current payload frontier, insertion lowers
 `root.m_bottom`, turning that space back into the implicit free area between
-payload data and catalog-node storage.  Defrag also tidies catalog-node sectors
-that have become reclaimable at `root.m_top`, raising the catalog-node frontier
-when possible.
+payload data and catalog-node storage.
 
 Directory-style traversal
 -------------------------
