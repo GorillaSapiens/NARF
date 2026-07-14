@@ -99,8 +99,8 @@ typedef struct PACKED {
 static_assert(sizeof(Root) == NARF_SECTOR_SIZE, "Root wrong size");
 
 #define NODE_FIELDS             \
-   NarfSector      m_left;         \
-   NarfSector      m_right;        \
+   NarfSector   m_left;         \
+   NarfSector   m_right;        \
    uint8_t      m_height;       \
    union {                      \
       DataPayload m_data;       \
