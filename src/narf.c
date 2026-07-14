@@ -56,7 +56,7 @@ typedef struct PACKED {
       uint32_t m_signature;                \
       uint8_t  m_sigbytes[4];              \
    };                                      \
-   uint32_t     m_version;                 \
+   uint32_t     m_narf_version;            \
    NarfByteSize m_sector_size;             \
    NarfSector   m_total_sectors;           \
    NarfSector      m_data_root;               \
@@ -170,11 +170,10 @@ uint32_t crc32(uint32_t crc, const void *data, size_t length) {
    return ~crc;
 }
 
-//! @brief Return true when a versioned NARF reference is null.
+//! @brief Return true when a catalog-node sector reference is null.
 static bool ref_is_null(NarfSector ref) {
    return ref == END;
 }
-
 
 //! @brief Compare 32-bit root versions using wraparound ordering.
 static bool version_after(uint32_t a, uint32_t b) {
@@ -322,7 +321,7 @@ static uint32_t root_checksum(Root *r) {
 static void root_to_disk(Root *out) {
    memset(out, 0, sizeof(*out));
    out->m_signature = root.m_signature;
-   out->m_version = root.m_version;
+   out->m_narf_version = root.m_narf_version;
    out->m_sector_size = root.m_sector_size;
    out->m_total_sectors = root.m_total_sectors;
    out->m_data_root = root.m_data_root;
@@ -340,7 +339,7 @@ static void root_to_disk(Root *out) {
 //! @brief Load the compact in-memory root state from a validated on-disk sector.
 static void root_from_disk(const Root *in) {
    root.m_signature = in->m_signature;
-   root.m_version = in->m_version;
+   root.m_narf_version = in->m_narf_version;
    root.m_sector_size = in->m_sector_size;
    root.m_total_sectors = in->m_total_sectors;
    root.m_data_root = in->m_data_root;
@@ -362,7 +361,7 @@ static void root_from_disk(const Root *in) {
 static bool read_root_copy(NarfSector origin, int which, Root *out) {
    if (!narf_io_read(origin + (NarfSector) which, out)) return false;
    if (out->m_signature != SIGNATURE) return false;
-   if (out->m_version != VERSION) return false;
+   if (out->m_narf_version != VERSION) return false;
    if (out->m_sector_size != NARF_SECTOR_SIZE) return false;
    if (out->m_checksum != root_checksum(out)) return false;
    return true;
@@ -395,7 +394,7 @@ static bool commit_root(void) {
 static bool init_root(NarfSector origin, NarfSector size) {
    memset(&root, 0, sizeof(root));
    root.m_signature = SIGNATURE;
-   root.m_version = VERSION;
+   root.m_narf_version = VERSION;
    root.m_sector_size = NARF_SECTOR_SIZE;
    root.m_total_sectors = size;
    root.m_data_root = END;
@@ -504,7 +503,7 @@ static bool read_node_any(NarfSector sector, Node *out) {
    return true;
 }
 
-//! @brief Read the node matching an exact reference.
+//! @brief Read a catalog node by sector reference.
 static bool read_node(NarfSector ref, Node *out) {
    if (ref_is_null(ref)) return false;
    if (!valid_node_sector(ref)) return false;
@@ -512,7 +511,7 @@ static bool read_node(NarfSector ref, Node *out) {
    return true;
 }
 
-//! @brief Choose a new node version that does not collide with visible contents.
+//! @brief Choose a nonzero node version that differs from visible contents.
 static uint32_t new_node_version(uint32_t old, NarfSector sector) {
    uint32_t v;
    uint32_t current = 0;
@@ -535,23 +534,23 @@ static uint32_t new_node_version(uint32_t old, NarfSector sector) {
 //! committed sector is marked as trash for post-commit recycling.
 static bool write_node(NarfSector oldref, Node *n, NarfSector *newref) {
    uint32_t txver;
-   uint32_t oldver = 0; // TODO FIX SORT THIS OUT
-   NarfSector ref;
+   uint32_t oldver = 0;
+   NarfSector ref = END;
 
    if (n == NULL || newref == NULL) return false;
 
    txver = transaction_root_version();
-   ref = oldref;
 
-   if (oldref != END &&
-       valid_node_sector(oldref)) {
-      n->m_node_version = new_node_version(0, oldref);
+   if (!ref_is_null(oldref) && read_node(oldref, &node_tmp)) {
+      oldver = node_tmp.m_node_version;
+
+      if (node_tmp.m_root_version == txver) {
+         ref = oldref;
+         n->m_node_version = oldver;
+      }
    }
-   else if (!ref_is_null(oldref) && read_node(oldref, &node_tmp) &&
-            node_tmp.m_root_version == txver) {
-      n->m_node_version = node_tmp.m_node_version;
-   }
-   else {
+
+   if (ref_is_null(ref)) {
       if (!alloc_node_sector(&ref)) return false;
       n->m_node_version = new_node_version(oldver, ref);
       trash_node(oldref);
@@ -3427,7 +3426,7 @@ static void print_tree(NarfSector ref, int indent, uint64_t pattern, const char 
 //! @brief Print internal NARF root and tree state.
 void narf_debug(void) {
    printf("root.m_signature     = %08x '%.4s'\n", root.m_signature, root.m_sigbytes);
-   printf("root.m_version       = %08x\n", root.m_version);
+   printf("root.m_narf_version  = %08x\n", root.m_narf_version);
    printf("root.m_root_version  = %u copy=%d\n", root.m_root_version, root_copy);
    printf("root.m_total_sectors = %08x\n", root.m_total_sectors);
    printf("root.m_data_root     = [%08x]\n", root.m_data_root);

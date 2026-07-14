@@ -56,13 +56,13 @@ partition start sector.
 The first two sectors at the origin contain two copies of the root block.  A
 root block contains:
 
-* filesystem signature and current development format version
+* filesystem signature and `m_narf_version`, the current on-disk format version
 * sector size and total sector count
 * root references for the data tree and free tree
 * allocation frontier values: `m_bottom` for payload growth and `m_top` for catalog-node growth
 * a small root-resident stack of committed-safe spare catalog-node sectors
 * a persisted LFSR seed for node-version generation
-* a 32-bit root commit version
+* `m_root_version`, the 32-bit root commit/version counter
 * checksum
 
 At mount time, NARF reads both root copies, validates checksums, and chooses the
@@ -74,34 +74,39 @@ other version is nonzero and less than 2^31.
 Nodes and references
 --------------------
 
-Internal node references are not just sector numbers.  They are exact-version
-references:
+Internal node references are plain catalog-node sector numbers.  `END` is the
+null reference.  A referenced sector must contain a valid node checksum and a
+nonzero `m_node_version`, but tree links no longer carry an expected node
+version beside the sector number.
 
-```
-{ sector, node_version }
-```
+There are three similarly named version fields with deliberately different jobs:
 
-The sector identifies one 512-byte catalog-node sector.  The node version
-identifies the exact node contents expected at that sector.  A stale sector with
-the wrong node version is not the referenced node, even if its checksum is valid.
+* `Root.m_narf_version` is the on-disk NARF format version.  Mount rejects root
+  sectors whose format version does not match the compiled code.
+* `Root.m_root_version` is the committed-root generation counter.  The two root
+  copies are compared with this field to choose the newest valid root.
+* `Node.m_root_version` records the transaction/root generation that wrote that
+  catalog node.  During an open transaction, `write_node()` may rewrite a node in
+  place only when this field equals the current transaction root version.
+* `Node.m_node_version` is a nonzero per-node token used as a sanity/debugging
+  guard for node contents.  It is no longer part of child references.
 
 Each node contains:
 
-* left and right child references
+* left and right child sector references
 * AVL height
 * one tree-specific payload union:
   * data nodes store payload start sector, payload length, byte size, and `m_metadata`
   * free nodes store free-extent start sector and length
 * key string, used by data nodes and empty for free nodes
-* root version of the transaction that last wrote the node
-* random-looking 32-bit node version
+* `m_root_version`, the transaction/root generation that last wrote the node
+* `m_node_version`, a nonzero per-node version token
 * checksum
 
 Node versions come from a 32-bit LFSR.  The current LFSR state is stored in the
 root when a transaction commits, so remounting continues from the committed
-state.  When a node sector is written, NARF rejects version 0 and avoids the
-currently visible version in that sector.  That prevents abandoned copies from
-being mistaken for the exact node version referenced by committed catalog state.
+state.  When a node sector is written into a fresh/COW sector, NARF rejects
+version 0 and avoids the currently visible version in that sector.
 
 Trees
 -----
@@ -128,12 +133,13 @@ Transactions and power loss
 
 NARF uses copy-on-write catalog records.  A catalog update writes new or
 transaction-private node sectors first and writes the new root last.  If power
-is lost before the root write, the previous root still points to the old exact
-node versions.  The abandoned node sectors are just unreachable junk.  If power
-is lost after the root write, the new root points to the new exact node versions.
+is lost before the root write, the previous root still points to the old
+catalog-node sectors.  The abandoned node sectors are just unreachable junk.  If
+power is lost after the root write, the new root points to the new catalog-node
+sectors.
 
 A catalog node written earlier in the same open transaction may be rewritten in
-place because no committed root can point at that transaction-private version
+place because no committed root can point at that transaction-private sector
 yet.  A committed node is not overwritten in place; writing a changed version
 allocates another node sector, writes the replacement, and marks the old sector
 as trash.  Trashed sectors are moved to the root-resident spare stack only after
@@ -148,7 +154,7 @@ live
 
 transaction-private
   The node was newly allocated or COW-written during the current transaction.
-  No committed root can reach this exact version yet, so the transaction may
+  No committed root can reach this sector yet, so the transaction may
   rewrite the sector in place.
 
 trash
