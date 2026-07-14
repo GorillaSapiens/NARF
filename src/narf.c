@@ -1087,8 +1087,6 @@ static bool insert_free_extent_with_seed_sector(NarfSector sector, NarfSector st
    if (start == END) return false;
    if (length > ((NarfSector) -1) - start) return false;
 
-   if (start + length == root.m_bottom) return true;
-
    /*
     * The free tree is ordered by length for best-fit allocation, not by
     * address.  That makes adjacency lookup a linear tree walk, but free-space
@@ -1129,6 +1127,11 @@ static bool insert_free_extent_with_seed_sector(NarfSector sector, NarfSector st
          changed = true;
       }
    } while (changed);
+
+   if (start + length == root.m_bottom) {
+      root.m_bottom = start;
+      return true;
+   }
 
    if (sector != END) {
       seed = sector;
@@ -3353,12 +3356,9 @@ static bool defrag_squish_once(bool *changed) {
             root.m_data_root = newroot;
 
             if (leftover_length != 0) {
-               if (leftover_start + leftover_length == root.m_bottom) {
-                  root.m_bottom = leftover_start;
-               }
-               else if (!insert_free_extent_with_seed_sector(removed_sector,
-                                                              leftover_start,
-                                                              leftover_length)) {
+               if (!insert_free_extent_with_seed_sector(removed_sector,
+                                                        leftover_start,
+                                                        leftover_length)) {
                   transaction_rollback();
                   return false;
                }
@@ -3366,10 +3366,7 @@ static bool defrag_squish_once(bool *changed) {
             }
 
             if (!adjacent) {
-               if (old_start + old_length == root.m_bottom) {
-                  root.m_bottom = old_start;
-               }
-               else if (!insert_free_extent(old_start, old_length)) {
+               if (!insert_free_extent(old_start, old_length)) {
                   transaction_rollback();
                   return false;
                }
