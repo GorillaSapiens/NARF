@@ -3396,6 +3396,15 @@ static bool defrag_squish_once(bool *changed) {
    return true;
 }
 
+static bool defrag_widen_once(bool *changed) {
+   if (changed == NULL) return false;
+   *changed = false;
+
+   // TODO perform a widen step
+   
+   return true;
+}
+
 //! @brief Reclaim one parked catalog-node sector when it reaches root.m_top.
 static bool defrag_tidy_once(bool *changed) {
    NarfSector newroot;
@@ -3431,30 +3440,38 @@ static bool defrag_tidy_once(bool *changed) {
 
 //! @brief Defragment the filesystem when defrag support is enabled.
 bool narf_defrag(void) {
+   bool done = false;
    bool changed;
+   int state = 0;
 
    if (!verify()) return false;
 
-   do {
-      if (!defrag_carve_once(&changed)) return false;
-   } while (changed);
+   while (!done) {
 #ifdef DEFRAG_DEBUG
-   fprintf(stderr, "defrag carve success\n");
+      fprintf(stderr, "defrag state %d\n", state);
 #endif
-
-   do {
-      if (!defrag_squish_once(&changed)) return false;
-   } while (changed);
-#ifdef DEFRAG_DEBUG
-   fprintf(stderr, "defrag squish success\n");
-#endif
-
-   do {
-      if (!defrag_tidy_once(&changed)) return false;
-   } while (changed);
-#ifdef DEFRAG_DEBUG
-   fprintf(stderr, "defrag tidy success\n");
-#endif
+      switch (state) {
+         case 0:
+            if (!defrag_carve_once(&changed)) return false;
+            if (!changed) state++;
+            break;
+         case 1:
+            if (!defrag_squish_once(&changed)) return false;
+            if (!changed) state++;
+            break;
+         case 2:
+            if (!defrag_widen_once(&changed)) return false;
+            if (!changed) state++;
+            else state--;
+            break;
+         case 3:
+            if (!defrag_tidy_once(&changed)) return false;
+            if (!changed) state++;
+            break;
+         default:
+            done = true;
+      }
+   }
 
    return true;
 }
