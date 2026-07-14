@@ -3193,6 +3193,9 @@ static bool defrag_squish_once(bool *changed) {
    *changed = false;
 
    if (!defrag_lowest_free_rec(root.m_free_root, &free_sector, &free_node)) {
+#ifdef DEFRAG_DEBUG
+      fprintf(stderr, "defrag_lowest_free_rec fails @ %d\n", __LINE__);
+#endif
       return false;
    }
 
@@ -3224,6 +3227,9 @@ static bool defrag_squish_once(bool *changed) {
       return true;
    }
 
+#ifdef DEFRAG_DEBUG
+      fprintf(stderr, "defrag_lowest_free_rec fails @ %d\n", __LINE__);
+#endif
    return false;
 }
 
@@ -3269,14 +3275,23 @@ bool narf_defrag(void) {
    do {
       if (!defrag_carve_once(&changed)) return false;
    } while (changed);
+#ifdef DEFRAG_DEBUG
+   fprintf(stderr, "defrag carve success\n");
+#endif
 
    do {
       if (!defrag_squish_once(&changed)) return false;
    } while (changed);
+#ifdef DEFRAG_DEBUG
+   fprintf(stderr, "defrag squish success\n");
+#endif
 
    do {
       if (!defrag_tidy_once(&changed)) return false;
    } while (changed);
+#ifdef DEFRAG_DEBUG
+   fprintf(stderr, "defrag tidy success\n");
+#endif
 
    return true;
 }

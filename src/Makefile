@@ -1,6 +1,6 @@
 CC     := gcc
 ERR    := -Wall -Wextra -Wpedantic -Werror
-CFLAGS := $(ERR) -g
+CFLAGS := $(ERR) -g -DDEFRAG_DEBUG
 
 TSRC := narf_tester.c narf_io.c narf.c
 TOBJ := $(TSRC:.c=.o)
