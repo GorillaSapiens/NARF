@@ -17,7 +17,7 @@
 #endif
 
 #define SIGNATURE 0x4652414E // little endian 'NARF'
-#define VERSION 0x00000007
+#define VERSION 0x00000008
 #define END INVALID_NAF
 #define NARF_MIN_FS_SECTORS 4
 #define NARF_MAX_AVL_DEPTH 96
