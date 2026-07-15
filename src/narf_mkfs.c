@@ -70,7 +70,11 @@ bool narf_io_write(uint32_t sector, void *data) {
       return false;
    }
 
-   fsync(fd);
+   while (fsync(fd) == -1) {
+      if (errno == EINTR) continue;
+      return false;
+   }
+
    return true;
 }
 

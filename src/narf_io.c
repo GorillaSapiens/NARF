@@ -257,7 +257,14 @@ static bool exact_pio(bool write_op, uint32_t sector, void *data) {
 
 //! @see narf_io.h
 bool narf_io_write(uint32_t sector, void *data) {
-   return exact_pio(true, sector, data);
+   if (!exact_pio(true, sector, data)) return false;
+
+   while (fsync(fd) == -1) {
+      if (errno == EINTR) continue;
+      return false;
+   }
+
+   return true;
 }
 
 //! @see narf_io.h

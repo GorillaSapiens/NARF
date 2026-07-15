@@ -674,7 +674,14 @@ static bool exact_pio(bool write_op, uint32_t sector, void *data) {
 //! @param data Pointer to one sector of data to write.
 //! @return true on success.
 bool narf_io_write(uint32_t sector, void *data) {
-   return exact_pio(true, sector, data);
+   if (!exact_pio(true, sector, data)) return false;
+
+   while (fsync(fd) == -1) {
+      if (errno == EINTR) continue;
+      return false;
+   }
+
+   return true;
 }
 
 //! @brief Read one sector from the backing file.
