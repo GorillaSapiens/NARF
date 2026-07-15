@@ -78,7 +78,6 @@ static void cmd_ls(int argc, char **argv);
 static void cmd_mbr(int argc, char **argv);
 static void cmd_mkfs(int argc, char **argv);
 static void cmd_mount(int argc, char **argv);
-static void cmd_mvdir(int argc, char **argv);
 static void cmd_pack(int argc, char **argv);
 static void cmd_partition(int argc, char **argv);
 static void cmd_quit(int argc, char **argv);
@@ -156,9 +155,6 @@ static const TesterCommand commands[] = {
    { "mount", cmd_mount,
       "mount <n>\n"
       "Mount the selected NARF partition." },
-   { "mvdir", cmd_mvdir,
-      "mvdir <olddir> <newdir> [<sep>]\n"
-      "Rename a directory.  If sep is omitted, '/' is used." },
    { "pack", cmd_pack,
       "pack <host-directory>\n"
       "Recursively copy files from a host directory into NARF." },
@@ -890,17 +886,6 @@ static void cmd_mount(int argc, char **argv) {
          part, tf[narf_mount(part)]);
 }
 
-static void cmd_mvdir(int argc, char **argv) {
-   bool result;
-
-   if (argc != 3 && argc != 4) {
-      print_usage(argv[0]);
-      return;
-   }
-
-   printf("narf_rename(%s,%s,%s)=%d\n",
-         argv[1], argv[2], (argc == 4) ? argv[3] : "/", result ASSIGN narf_rename_dir(argv[1], argv[2], (argc == 4) ? argv[3] : "/"));
-}
 static void cmd_pack(int argc, char **argv) {
    if (argc != 2) {
       print_usage(argv[0]);
