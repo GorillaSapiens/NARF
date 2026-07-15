@@ -131,6 +131,11 @@ Current NARF catalog state is stored in two AVL trees:
    ordered for best-fit allocation, not for address lookup.  Defrag and
    coalescing therefore do address-based searches by walking the tree.
 
+AVL height recomputation and balance checks are fallible operations: every child
+height requires a validated catalog-node read.  A failed read aborts the current
+mutation and rolls the transaction back; it is never interpreted as an empty
+subtree with height zero.
+
 The core does not maintain a parent-pointer or directory index tree.  Directory
 traversal is a prefix/separator scan over the data tree.
 

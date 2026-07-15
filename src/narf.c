@@ -649,29 +649,48 @@ static bool initialize_spare(void) {
 }
 
 //! @brief Return the AVL height for a node sector.
-static int height(NarfSector sector) {
-   if (sector == END) return 0;
-   if (!read_node(sector, &node_tmp)) return 0;
-   return node_tmp.m_height;
+static bool node_height(NarfSector sector, int *result) {
+   if (result == NULL) return false;
+   if (sector == END) {
+      *result = 0;
+      return true;
+   }
+   if (!read_node(sector, &node_tmp)) return false;
+   *result = node_tmp.m_height;
+   return true;
 }
 
 //! @brief Recompute an AVL node height from its children.
-static void update_height(Node *n) {
-   int lh = height(n->m_left);
-   int rh = height(n->m_right);
+static bool update_height(Node *n) {
+   int lh;
+   int rh;
+
+   if (n == NULL) return false;
+   if (!node_height(n->m_left, &lh)) return false;
+   if (!node_height(n->m_right, &rh)) return false;
    n->m_height = (uint8_t)((lh > rh ? lh : rh) + 1);
+   return true;
 }
 
 //! @brief Compute the AVL balance factor for a node sector.
-static int balance_factor(NarfSector sector) {
+static bool balance_factor(NarfSector sector, int *result) {
    NarfSector left;
    NarfSector right;
+   int lh;
+   int rh;
 
-   if (sector == END) return 0;
-   if (!read_node(sector, &node_tmp)) return 0;
+   if (result == NULL) return false;
+   if (sector == END) {
+      *result = 0;
+      return true;
+   }
+   if (!read_node(sector, &node_tmp)) return false;
    left = node_tmp.m_left;
    right = node_tmp.m_right;
-   return height(left) - height(right);
+   if (!node_height(left, &lh)) return false;
+   if (!node_height(right, &rh)) return false;
+   *result = lh - rh;
+   return true;
 }
 
 //! @brief Perform a copy-on-write AVL right rotation.
@@ -685,11 +704,11 @@ static bool rotate_right(NarfSector y_sector, NarfSector *out) {
    if (!read_node(x_sector, &node_work1)) return false;
 
    node_work0.m_left = node_work1.m_right;
-   update_height(&node_work0);
+   if (!update_height(&node_work0)) return false;
    if (!write_node(y_sector, &node_work0, &y2)) return false;
 
    node_work1.m_right = y2;
-   update_height(&node_work1);
+   if (!update_height(&node_work1)) return false;
    if (!write_node(x_sector, &node_work1, &x2)) return false;
 
    *out = x2;
@@ -707,11 +726,11 @@ static bool rotate_left(NarfSector x_sector, NarfSector *out) {
    if (!read_node(y_sector, &node_work1)) return false;
 
    node_work0.m_right = node_work1.m_left;
-   update_height(&node_work0);
+   if (!update_height(&node_work0)) return false;
    if (!write_node(x_sector, &node_work0, &x2)) return false;
 
    node_work1.m_left = x2;
-   update_height(&node_work1);
+   if (!update_height(&node_work1)) return false;
    if (!write_node(y_sector, &node_work1, &y2)) return false;
 
    *out = y2;
@@ -729,36 +748,42 @@ static bool rebalance(NarfSector sector, NarfSector *out) {
       return true;
    }
 
-   bf = balance_factor(sector);
+   if (!balance_factor(sector, &bf)) return false;
 
    if (bf > 1) {
+      int child_bf;
+
       if (!read_node(sector, &node_work0)) return false;
       child = node_work0.m_left;
-      if (balance_factor(child) < 0) {
+      if (!balance_factor(child, &child_bf)) return false;
+      if (child_bf < 0) {
          if (!rotate_left(child, &tmp)) return false;
          if (!read_node(sector, &node_work0)) return false;
          node_work0.m_left = tmp;
-         update_height(&node_work0);
+         if (!update_height(&node_work0)) return false;
          if (!write_node(sector, &node_work0, &sector)) return false;
       }
       return rotate_right(sector, out);
    }
 
    if (bf < -1) {
+      int child_bf;
+
       if (!read_node(sector, &node_work0)) return false;
       child = node_work0.m_right;
-      if (balance_factor(child) > 0) {
+      if (!balance_factor(child, &child_bf)) return false;
+      if (child_bf > 0) {
          if (!rotate_right(child, &tmp)) return false;
          if (!read_node(sector, &node_work0)) return false;
          node_work0.m_right = tmp;
-         update_height(&node_work0);
+         if (!update_height(&node_work0)) return false;
          if (!write_node(sector, &node_work0, &sector)) return false;
       }
       return rotate_left(sector, out);
    }
 
    if (!read_node(sector, &node_work0)) return false;
-   update_height(&node_work0);
+   if (!update_height(&node_work0)) return false;
    return write_node(sector, &node_work0, out);
 }
 
@@ -817,7 +842,7 @@ static bool data_insert_rec(NarfSector root_sector, NarfSector item_sector, cons
       node_work0.m_right = child;
    }
 
-   update_height(&node_work0);
+   if (!update_height(&node_work0)) return false;
    if (!write_node(root_sector, &node_work0, &root_sector)) return false;
    return rebalance(root_sector, out);
 }
@@ -845,7 +870,7 @@ static bool delete_min_rec(NarfSector root_sector, NarfSector *out, NarfSector *
    if (!delete_min_rec(left, &child, min_sector)) return false;
    if (!read_node(root_sector, &node_work0)) return false;
    node_work0.m_left = child;
-   update_height(&node_work0);
+   if (!update_height(&node_work0)) return false;
    if (!write_node(root_sector, &node_work0, &root_sector)) return false;
    return rebalance(root_sector, out);
 }
@@ -897,12 +922,12 @@ static bool data_delete_rec(NarfSector root_sector, const char *key, NarfSector 
       if (!read_node(succ_sector, &node_work1)) return false;
       node_work1.m_left = left;
       node_work1.m_right = child;
-      update_height(&node_work1);
+      if (!update_height(&node_work1)) return false;
       if (!write_node(succ_sector, &node_work1, &root_sector)) return false;
       return rebalance(root_sector, out);
    }
 
-   update_height(&node_work0);
+   if (!update_height(&node_work0)) return false;
    if (!write_node(root_sector, &node_work0, &root_sector)) return false;
    return rebalance(root_sector, out);
 }
@@ -933,7 +958,7 @@ static bool data_update_rec(NarfSector root_sector, const char *key, const Node 
       node_work0 = *newnode;
    }
 
-   update_height(&node_work0);
+   if (!update_height(&node_work0)) return false;
    if (!write_node(root_sector, &node_work0, &root_sector)) return false;
    return rebalance(root_sector, out);
 }
@@ -964,7 +989,7 @@ static bool free_insert_rec(NarfSector root_sector, NarfSector item_sector, Narf
       node_work0.m_right = child;
    }
 
-   update_height(&node_work0);
+   if (!update_height(&node_work0)) return false;
    if (!write_node(root_sector, &node_work0, &root_sector)) return false;
    return rebalance(root_sector, out);
 }
@@ -1016,12 +1041,12 @@ static bool free_delete_rec(NarfSector root_sector, NarfSector length, NarfSecto
       if (!read_node(succ_sector, &node_work1)) return false;
       node_work1.m_left = left;
       node_work1.m_right = child;
-      update_height(&node_work1);
+      if (!update_height(&node_work1)) return false;
       if (!write_node(succ_sector, &node_work1, &root_sector)) return false;
       return rebalance(root_sector, out);
    }
 
-   update_height(&node_work0);
+   if (!update_height(&node_work0)) return false;
    if (!write_node(root_sector, &node_work0, &root_sector)) return false;
    return rebalance(root_sector, out);
 }
