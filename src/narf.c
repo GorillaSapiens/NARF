@@ -21,7 +21,7 @@
 #define END INVALID_NAF
 #define NARF_MIN_FS_SECTORS 4
 #define NARF_MAX_AVL_DEPTH 96
-#define TRASH_MAX (NARF_MAX_AVL_DEPTH * 4)
+#define RETIRED_MAX (NARF_MAX_AVL_DEPTH * 4)
 
 // Uncomment for unicode line drawing characters in debug functions
 #define USE_UTF8_LINE_DRAWING
@@ -154,9 +154,9 @@ static bool transaction_open = false;
 static bool spare_initialized = false;
 static bool spare_consumed_in_transaction = false;
 static NarfSector spare_head = END;
-static NarfSector trash_nodes[TRASH_MAX];
-static unsigned trash_node_count = 0;
-static bool trash_node_overflow = false;
+static NarfSector retired_nodes[RETIRED_MAX];
+static unsigned retired_node_count = 0;
+static bool retired_node_overflow = false;
 
 static bool initialize_spare(void);
 
@@ -203,8 +203,8 @@ static void transaction_begin(void) {
    saved_root.m_lfsr_state = lfsr_state;
    transaction_may_use_reserve = false;
    spare_consumed_in_transaction = false;
-   trash_node_count = 0;
-   trash_node_overflow = false;
+   retired_node_count = 0;
+   retired_node_overflow = false;
    transaction_open = true;
 }
 
@@ -218,8 +218,8 @@ static void transaction_rollback(void) {
       spare_initialized = false;
    }
    spare_consumed_in_transaction = false;
-   trash_node_count = 0;
-   trash_node_overflow = false;
+   retired_node_count = 0;
+   retired_node_overflow = false;
    transaction_open = false;
 }
 
@@ -436,24 +436,25 @@ static uint32_t node_checksum(Node *n) {
    return ck;
 }
 
-//! @brief Mark a committed catalog-node sector as transaction trash.
+//! @brief Mark a committed catalog-node sector as retired by this transaction.
 //!
-//! Trashed sectors are not reusable until after the new root commits.
+//! Retired sectors are not reusable until after the new root commits.
 //! After commit, they are linked onto the RAM spare list.
-static void trash_node(NarfSector sector) {
+static void retire_node(NarfSector sector) {
    if (!transaction_open) return;
    if (sector == END) return;
    if (!valid_node_sector(sector)) return;
+   if (retired_node_overflow) return;
 
-   for (unsigned i = 0; i < trash_node_count; i++) {
-      if (trash_nodes[i] == sector) return;
+   for (unsigned i = 0; i < retired_node_count; i++) {
+      if (retired_nodes[i] == sector) return;
    }
 
-   if (trash_node_count < TRASH_MAX) {
-      trash_nodes[trash_node_count++] = sector;
+   if (retired_node_count < RETIRED_MAX) {
+      retired_nodes[retired_node_count++] = sector;
    }
    else {
-      trash_node_overflow = true;
+      retired_node_overflow = true;
    }
 }
 
@@ -497,7 +498,7 @@ static uint32_t new_node_version(uint32_t old, NarfSector sector) {
 //!
 //! If old_sector names a node already written by this transaction, the same sector
 //! is rewritten.  Otherwise a fresh/spare sector is allocated and the old
-//! committed sector is marked as trash for post-commit recycling.
+//! committed sector is retired for post-commit recycling.
 static bool write_node(NarfSector old_sector, Node *n, NarfSector *new_sector) {
    uint32_t txver;
    uint32_t oldver = 0;
@@ -519,7 +520,7 @@ static bool write_node(NarfSector old_sector, Node *n, NarfSector *new_sector) {
    if (sector == END) {
       if (!alloc_node_sector(&sector)) return false;
       n->m_node_version = new_node_version(oldver, sector);
-      trash_node(old_sector);
+      retire_node(old_sector);
    }
 
    n->m_root_version = txver;
@@ -838,7 +839,7 @@ static bool delete_min_rec(NarfSector root_sector, NarfSector *out, NarfSector *
 
    if (left == END) {
       // Return the detached node still live.  The caller may reuse it as a
-      // successor, or trash it later if write_node() COWs it elsewhere.
+      // successor; write_node() retires it if copying it elsewhere.
       if (min_sector) *min_sector = root_sector;
       *out = right;
       return true;
@@ -882,7 +883,7 @@ static bool data_delete_rec(NarfSector root_sector, const char *key, NarfSector 
    }
    else {
       *removed_sector = root_sector;
-      trash_node(root_sector);
+      retire_node(root_sector);
       if (removed_data) *removed_data = node_work0.m_data;
       if (left == END) {
          *out = right;
@@ -901,9 +902,6 @@ static bool data_delete_rec(NarfSector root_sector, const char *key, NarfSector 
       node_work1.m_right = child;
       update_height(&node_work1);
       if (!write_node(succ_sector, &node_work1, &root_sector)) return false;
-      // If write_node() COWed the successor, its old sector is no longer live.
-      // If it rewrote in place, trashing it would corrupt the final tree.
-      if (root_sector != succ_sector) trash_node(succ_sector);
       return rebalance(root_sector, out);
    }
 
@@ -1004,7 +1002,7 @@ static bool free_delete_rec(NarfSector root_sector, NarfSector length, NarfSecto
    }
    else {
       *removed_sector = root_sector;
-      trash_node(root_sector);
+      retire_node(root_sector);
       if (removed_free) *removed_free = node_work0.m_free;
       if (left == END) {
          *out = right;
@@ -1023,9 +1021,6 @@ static bool free_delete_rec(NarfSector root_sector, NarfSector length, NarfSecto
       node_work1.m_right = child;
       update_height(&node_work1);
       if (!write_node(succ_sector, &node_work1, &root_sector)) return false;
-      // If write_node() COWed the successor, its old sector is no longer live.
-      // If it rewrote in place, trashing it would corrupt the final tree.
-      if (root_sector != succ_sector) trash_node(succ_sector);
       return rebalance(root_sector, out);
    }
 
@@ -1528,15 +1523,23 @@ static bool mount_root_copy(NarfSector start, int which) {
    return true;
 }
 
-//! @brief Link committed-dead trash sectors onto the RAM spare list.
-static void recycle_trash_after_commit(void) {
-   unsigned count = trash_node_count;
+//! @brief Recycle sectors retired by the just-committed transaction.
+static void recycle_retired_after_commit(void) {
+   unsigned count = retired_node_count;
+   bool overflow = retired_node_overflow;
 
-   trash_node_count = 0;
-   trash_node_overflow = false;
+   retired_node_count = 0;
+   retired_node_overflow = false;
+
+   if (overflow) {
+      // The fixed-size list is incomplete.  Rebuild from the committed trees
+      // rather than leaking unrecorded retired sectors until the next mount.
+      (void) initialize_spare();
+      return;
+   }
 
    for (unsigned i = 0; i < count; i++) {
-      if (!push_spare(trash_nodes[i])) {
+      if (!push_spare(retired_nodes[i])) {
          spare_head = END;
          spare_initialized = false;
          return;
@@ -1548,7 +1551,7 @@ static void recycle_trash_after_commit(void) {
 static bool commit_user_transaction(void) {
    if (!commit_root()) return false;
 
-   recycle_trash_after_commit();
+   recycle_retired_after_commit();
    spare_consumed_in_transaction = false;
    return true;
 }

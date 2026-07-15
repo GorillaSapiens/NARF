@@ -141,7 +141,7 @@ A catalog node written earlier in the same open transaction may be rewritten in
 place because no committed root can point at that transaction-private sector
 yet.  A committed node is not overwritten in place; writing a changed version
 allocates another node sector, writes the replacement, and marks the old sector
-as transaction-local trash.  Trashed sectors are not reusable until after the
+as transaction-local retired.  Retired sectors are not reusable until after the
 transaction commits successfully.
 
 Catalog-node sectors therefore move through this lifecycle:
@@ -156,18 +156,18 @@ transaction-private
   No committed root can reach this sector yet, so the transaction may
   rewrite the sector in place.
 
-trash
+retired
   The transaction has replaced or deleted the node, but the old committed root
-  may still need it if power fails before commit.  Trash is transaction-local and
-  is not reusable storage.
+  may still need it if power fails before commit.  Retired state is
+  transaction-local and is not reusable storage.
 
 spare
-  The transaction committed successfully, so old trash sectors are no longer
+  The transaction committed successfully, so old retired sectors are no longer
   needed for rollback.  They may be linked onto the RAM-only spare list and
   reused by a later catalog-node allocation.
 ```
 
-The important rule is that **trash is not spare**.  A sector becomes safe to
+The important rule is that **retired is not spare**.  A sector becomes safe to
 reuse only after the commit that made it unreachable from the previous committed
 root.
 
@@ -180,15 +180,17 @@ linking sectors that are not reachable from the committed data or free roots.
 During a transaction, NARF may pop from this RAM spare list and overwrite the
 popped sector before the root commit.  If the transaction rolls back after
 consuming a spare sector, the RAM spare list is discarded and rebuilt before it
-is trusted again.  Transaction trash is tracked in a fixed-size RAM array while
-a transaction is open; after a successful commit, those known-dead sectors are
-safely linked onto the RAM spare list.  If transaction trash overflows or spare
-recycling fails, extra dead catalog sectors are safely leaked until a later
-mount/rebuild finds them again.  There is not yet an on-disk trash-page list or
-full catalog-node garbage collector.
+is trusted again.  Transaction-retired sectors are tracked in a fixed-size RAM
+array while a transaction is open; after a successful commit, those known-dead
+sectors are safely linked onto the RAM spare list.  If the retired array
+overflows, NARF
+rebuilds the entire spare chain from the newly committed roots.  If spare
+recycling or rebuilding fails, the RAM spare cache is discarded and retried by a
+later transaction or mount.  There is no on-disk retired-page list or full
+catalog-node garbage collector.
 
 Rollback on normal runtime failure restores the in-memory root state and clears
-transaction-local dirty/trash tracking.  It does not need to erase abandoned
+transaction-local dirty/retired tracking.  It does not need to erase abandoned
 node sectors; committed roots decide what is reachable.
 
 Payload data writes follow the same commit rule.  Overwrites and most resizes
