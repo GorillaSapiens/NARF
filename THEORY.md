@@ -70,6 +70,13 @@ between the two root sectors.  Version comparison uses wraparound ordering:
 a root version is considered newer only when the forward distance from the
 other version is nonzero and less than 2^31.
 
+A root is accepted only when its stored origin exactly matches the origin the
+caller requested and its declared sector count fits in the available device
+range.  `narf_mount()` additionally restricts that range to the selected MBR
+partition.  Candidate roots are rejected before they can remain visible as a
+mounted filesystem; when neither copy is usable, the core clears its root,
+transaction, retired-sector, and spare-list state.
+
 Nodes and references
 --------------------
 

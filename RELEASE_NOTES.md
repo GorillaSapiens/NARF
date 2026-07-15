@@ -1,4 +1,7 @@
 === v3
+mount now requires the root's stored origin to match the requested origin,
+rejects filesystems extending past the device or selected MBR partition, and
+clears all mounted state when no root copy can be accepted
 recursive FUSE directory moves now use prefix iterators that enumerate every descendant key
 file-backed narf_io_write() implementations fsync each completed sector write so write ordering is durable without extending the platform I/O interface
 fixed power-loss and failure-path catalog corruption

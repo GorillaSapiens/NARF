@@ -160,6 +160,24 @@ static bool retired_node_overflow = false;
 
 static bool initialize_spare(void);
 
+//! @brief Clear all state that could make the core appear mounted.
+static void invalidate_mount_state(void) {
+   memset(&root, 0, sizeof(root));
+   root.m_data_root = END;
+   root.m_free_root = END;
+
+   memset(&saved_root, 0, sizeof(saved_root));
+   root_copy = 0;
+   lfsr_state = 1;
+   transaction_may_use_reserve = false;
+   transaction_open = false;
+   spare_initialized = false;
+   spare_consumed_in_transaction = false;
+   spare_head = END;
+   retired_node_count = 0;
+   retired_node_overflow = false;
+}
+
 //! @brief Compute a CRC-32 compatible with zlib/crc32().
 uint32_t crc32(uint32_t crc, const void *data, size_t length) {
    const uint8_t *p = data;
@@ -1471,9 +1489,12 @@ static bool validate_tree_rec(NarfSector sector) {
 }
 
 //! @brief Validate the mounted root and its authoritative metadata trees.
-static bool validate_mounted_root(void) {
+static bool validate_mounted_root(NarfSector expected_origin,
+                                  NarfSector available_sectors) {
    if (!verify()) return false;
+   if (root.m_origin != expected_origin) return false;
    if (root.m_total_sectors < NARF_MIN_FS_SECTORS) return false;
+   if (root.m_total_sectors > available_sectors) return false;
    if (root.m_bottom < 2) return false;
    if (root.m_top > root.m_total_sectors) return false;
    if (root.m_bottom > root.m_top) return false;
@@ -1485,11 +1506,18 @@ static bool validate_mounted_root(void) {
 }
 
 //! @brief Try to mount one root copy and reject roots pointing at torn authoritative nodes.
-static bool mount_root_copy(NarfSector start, int which) {
-   if (!read_root_copy(start, which, &root_tmp)) return false;
+static bool mount_root_copy(NarfSector start, NarfSector available_sectors,
+                            int which) {
+   if (!read_root_copy(start, which, &root_tmp)) {
+      invalidate_mount_state();
+      return false;
+   }
    root_from_disk(&root_tmp);
 
-   if (!validate_mounted_root()) return false;
+   if (!validate_mounted_root(start, available_sectors)) {
+      invalidate_mount_state();
+      return false;
+   }
 
    root_copy = which;
    lfsr_state = root.m_lfsr_seed;
@@ -1497,7 +1525,10 @@ static bool mount_root_copy(NarfSector start, int which) {
       lfsr_state = 0x1f2e3d4c;
    }
 
-   if (!initialize_spare()) return false;
+   if (!initialize_spare()) {
+      invalidate_mount_state();
+      return false;
+   }
 
    return true;
 }
@@ -1549,6 +1580,36 @@ static const uint8_t boot_code_stub[] = {
    0x00, 0xeb, 0xf6, 0xc3, 0xb4, 0x0e, 0xcd, 0x10,
    0xc3 };
 static const char boot_code_msg[] = "NARF! not bootable.\r\n";
+
+//! @brief Mount a NARF filesystem inside an already validated sector range.
+static bool mount_range(NarfSector start, NarfSector available_sectors) {
+   bool loval;
+   bool hival;
+   uint32_t loversion = 0;
+   uint32_t hiversion = 0;
+   int chosen;
+   int fallback;
+
+   invalidate_mount_state();
+   if (available_sectors < NARF_MIN_FS_SECTORS) return false;
+
+   loval = read_root_copy_version(start, 0, &loversion);
+   hival = read_root_copy_version(start, 1, &hiversion);
+
+   if (loval && hival) {
+      chosen = version_after(hiversion, loversion) ? 1 : 0;
+      fallback = 1 - chosen;
+      if (mount_root_copy(start, available_sectors, chosen)) return true;
+      return mount_root_copy(start, available_sectors, fallback);
+   }
+
+   if (loval) return mount_root_copy(start, available_sectors, 0);
+   if (hival) return mount_root_copy(start, available_sectors, 1);
+
+   invalidate_mount_state();
+   return false;
+}
+
 
 //! @brief Write a basic MBR sector containing NARF partition support.
 bool narf_mbr(const char *message) {
@@ -1634,13 +1695,26 @@ int narf_findpart(void) {
 //! @brief Mount a NARF MBR partition by number.
 bool narf_mount(int partition) {
    MBR *mbr;
+   NarfSector start;
+   NarfSector size;
+   NarfSector device_sectors;
+
+   invalidate_mount_state();
    if (!narf_io_open()) return false;
    if (partition < 1 || partition > 4) return false;
    mbr = (MBR *) buffer;
    if (!narf_io_read(0, buffer)) return false;
    --partition;
    if (mbr->partitions[partition].partition_type != NARF_PART_TYPE) return false;
-   return narf_init(mbr->partitions[partition].start_lba);
+
+   start = mbr->partitions[partition].start_lba;
+   size = mbr->partitions[partition].partition_size;
+   device_sectors = (NarfSector) narf_io_sectors();
+
+   if (start > device_sectors) return false;
+   if (size > device_sectors - start) return false;
+
+   return mount_range(start, size);
 }
 #endif
 
@@ -1655,28 +1729,15 @@ bool narf_mkfs(NarfSector start, NarfSector size) {
 
 //! @brief Mount a NARF filesystem at a sector origin.
 bool narf_init(NarfSector start) {
-   bool loval;
-   bool hival;
-   uint32_t loversion = 0;
-   uint32_t hiversion = 0;
-   int chosen;
-   int fallback;
+   NarfSector device_sectors;
 
+   invalidate_mount_state();
    if (!narf_io_open()) return false;
-   loval = read_root_copy_version(start, 0, &loversion);
-   hival = read_root_copy_version(start, 1, &hiversion);
 
-   if (loval && hival) {
-      chosen = version_after(hiversion, loversion) ? 1 : 0;
-      fallback = 1 - chosen;
-      if (mount_root_copy(start, chosen)) return true;
-      return mount_root_copy(start, fallback);
-   }
+   device_sectors = (NarfSector) narf_io_sectors();
+   if (start > device_sectors) return false;
 
-   if (loval) return mount_root_copy(start, 0);
-   if (hival) return mount_root_copy(start, 1);
-
-   return false;
+   return mount_range(start, device_sectors - start);
 }
 
 //! @brief Return basic filesystem capacity and key-count statistics.
