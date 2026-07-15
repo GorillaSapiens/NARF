@@ -133,7 +133,7 @@ static const TesterCommand commands[] = {
       "Delete a key and return its storage to the filesystem." },
    { "fsck", cmd_fsck,
       "fsck [deep]\n"
-      "Validate NARF structure. Default is fast; 'deep' also runs slow overlap scans." },
+      "Validate NARF structure. Default is linear; 'deep' also checks overlaps, duplicate references, and full allocation coverage." },
    { "gremlins", cmd_gremlins,
       "gremlins <seed> <count>\n"
       "Run randomized tester operations. The seed makes a run reproducible." },

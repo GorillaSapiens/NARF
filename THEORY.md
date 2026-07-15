@@ -304,6 +304,22 @@ exist, so callers may rename or delete the returned key before requesting the
 next match.  The FUSE directory-rename loop uses this property to move an
 entire subtree incrementally.
 
+Consistency checking
+--------------------
+
+Mount validation and ordinary `narf_fsck()` perform checks that require only
+linear tree walks and bounded recursion.  They verify catalog-sector bounds,
+child references, key termination, payload/free-extent ranges, data/free tree
+ordering, stored AVL heights and balance, direct cycles or duplicate sibling
+links, and the root data-node count.
+
+`narf_fsck_deep()` adds the checks that need whole-filesystem accounting.  It
+marks catalog sectors to detect repeated references, cross-tree sharing, cycles,
+and overlap with the spare chain.  It also builds payload coverage information
+to detect overlapping file/free extents, leaked payload sectors, and any gap or
+double allocation in the payload region.  The deep catalog map uses one byte
+per possible catalog-sector address while the check runs.
+
 MBR support
 -----------
 

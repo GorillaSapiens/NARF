@@ -82,13 +82,13 @@ bool narf_init(NarfSector start);
 //! @return true on success.
 bool narf_stat(NarfStat *stats);
 
-//! @brief Validate the mounted filesystem and return a small consistency report.
+//! @brief Validate the mounted filesystem with linear-time structural checks.
 //!
 //! @param report Optional destination for counters.
 //! @return true when no structural errors are found.
 bool narf_fsck(NarfFsckReport *report);
 
-//! @brief Validate the mounted filesystem with slow full overlap checks.
+//! @brief Validate the mounted filesystem with full overlap and allocation-map checks.
 //!
 //! @param report Optional destination for counters.
 //! @return true when no structural errors are found.

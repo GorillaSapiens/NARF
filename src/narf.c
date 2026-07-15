@@ -315,6 +315,50 @@ static bool valid_node_sector(NarfSector sector) {
    return true;
 }
 
+//! @brief Validate a catalog-node address against the current catalog region.
+static bool valid_catalog_node_sector(NarfSector sector) {
+   if (!valid_node_sector(sector)) return false;
+   if (sector < root.m_top) return false;
+   return true;
+}
+
+//! @brief Validate a catalog child pointer, including the END sentinel.
+static bool valid_catalog_child(NarfSector sector) {
+   return sector == END || valid_catalog_node_sector(sector);
+}
+
+//! @brief Return whether a data-tree key is terminated inside its node sector.
+static bool node_key_terminated(const Node *node) {
+   return node != NULL && memchr(node->m_key, 0, sizeof(node->m_key)) != NULL;
+}
+
+//! @brief Validate one data payload without scanning other extents.
+static bool valid_data_payload(const DataPayload *payload) {
+   NarfSector needed;
+
+   if (payload == NULL) return false;
+
+   if (payload->m_length == 0) {
+      return payload->m_start == END && payload->m_bytes == 0;
+   }
+
+   needed = BYTES2SECTORS(payload->m_bytes);
+   if (payload->m_start == END || payload->m_start < 2) return false;
+   if (payload->m_start >= root.m_bottom) return false;
+   if (payload->m_length > root.m_bottom - payload->m_start) return false;
+   if (needed != payload->m_length) return false;
+   return true;
+}
+
+//! @brief Validate one free payload without scanning other extents.
+static bool valid_free_payload(const FreePayload *payload) {
+   if (payload == NULL) return false;
+   if (payload->m_length == 0 || payload->m_start == END) return false;
+   if (payload->m_start < 2 || payload->m_start >= root.m_bottom) return false;
+   if (payload->m_length > root.m_bottom - payload->m_start) return false;
+   return true;
+}
+
 //! @brief Compute the checksum for a root block.
 static uint32_t root_checksum(Root *r) {
    uint32_t old = r->m_checksum;
@@ -1492,30 +1536,143 @@ static bool allocate_storage(NarfSector length, NarfSector *meta_sector, NarfSec
    return true;
 }
 
-//! @brief Validate an AVL tree by walking only one 512-byte node at a time.
-static bool validate_tree_rec_depth(NarfSector sector, unsigned depth) {
+typedef struct {
+   char m_prev_key[KEYSIZE];
+   bool m_have_prev_key;
+   FreePayload m_prev_free;
+   NarfSector m_prev_free_sector;
+   bool m_have_prev_free;
+} MountTreeContext;
+
+//! @brief Validate AVL shape and cheap per-node invariants during mount.
+static bool validate_tree_shape_rec(NarfSector sector, bool free_tree,
+                                    unsigned depth, NarfSector *path,
+                                    NarfSector *count, int *height) {
+   NarfSector left;
+   NarfSector right;
+   int left_height;
+   int right_height;
+   int expected_height;
+   uint8_t stored_height;
+
+   if (height == NULL || count == NULL || path == NULL) return false;
+   if (sector == END) {
+      *height = 0;
+      return true;
+   }
+   if (depth > NARF_MAX_AVL_DEPTH) return false;
+   if (!valid_catalog_node_sector(sector)) return false;
+
+   for (unsigned i = 0; i < depth; i++) {
+      if (path[i] == sector) return false;
+   }
+   path[depth] = sector;
+
+   if (!read_node(sector, &node_work0)) return false;
+   left = node_work0.m_left;
+   right = node_work0.m_right;
+   stored_height = node_work0.m_height;
+
+   if (!valid_catalog_child(left) || !valid_catalog_child(right)) return false;
+   if (left != END && left == right) return false;
+
+   if (free_tree) {
+      if (!valid_free_payload(&node_work0.m_free)) return false;
+   }
+   else {
+      if (!node_key_terminated(&node_work0)) return false;
+      if (!valid_data_payload(&node_work0.m_data)) return false;
+   }
+
+   if (!validate_tree_shape_rec(left, free_tree, depth + 1, path,
+                                count, &left_height)) return false;
+   if (!validate_tree_shape_rec(right, free_tree, depth + 1, path,
+                                count, &right_height)) return false;
+
+   expected_height = (left_height > right_height ? left_height : right_height) + 1;
+   if (stored_height != (uint8_t) expected_height) return false;
+   if (left_height - right_height > 1 || right_height - left_height > 1) return false;
+   if (*count == (NarfSector) -1) return false;
+   (*count)++;
+   *height = expected_height;
+   return true;
+}
+
+//! @brief Validate data-tree lexical order during mount.
+static bool validate_data_order_rec(NarfSector sector, unsigned depth,
+                                    MountTreeContext *ctx) {
    NarfSector left;
    NarfSector right;
 
    if (sector == END) return true;
-   if (depth > NARF_MAX_AVL_DEPTH) return false;
+   if (ctx == NULL || depth > NARF_MAX_AVL_DEPTH) return false;
    if (!read_node(sector, &node_work0)) return false;
-
    left = node_work0.m_left;
    right = node_work0.m_right;
 
-   if (!validate_tree_rec_depth(left, depth + 1)) return false;
-   return validate_tree_rec_depth(right, depth + 1);
+   if (!validate_data_order_rec(left, depth + 1, ctx)) return false;
+   if (!read_node(sector, &node_work0)) return false;
+   if (!node_key_terminated(&node_work0)) return false;
+   if (ctx->m_have_prev_key && strcmp(ctx->m_prev_key, node_work0.m_key) >= 0) {
+      return false;
+   }
+   strcpy(ctx->m_prev_key, node_work0.m_key);
+   ctx->m_have_prev_key = true;
+   return validate_data_order_rec(right, depth + 1, ctx);
 }
 
-//! @brief Validate an AVL tree from its root sector.
-static bool validate_tree_rec(NarfSector sector) {
-   return validate_tree_rec_depth(sector, 0);
+//! @brief Validate free-tree ordering during mount.
+static bool validate_free_order_rec(NarfSector sector, unsigned depth,
+                                    MountTreeContext *ctx) {
+   NarfSector left;
+   NarfSector right;
+
+   if (sector == END) return true;
+   if (ctx == NULL || depth > NARF_MAX_AVL_DEPTH) return false;
+   if (!read_node(sector, &node_work0)) return false;
+   left = node_work0.m_left;
+   right = node_work0.m_right;
+
+   if (!validate_free_order_rec(left, depth + 1, ctx)) return false;
+   if (!read_node(sector, &node_work0)) return false;
+   if (ctx->m_have_prev_free) {
+      int cmp = free_cmp_values(ctx->m_prev_free.m_length,
+                                ctx->m_prev_free.m_start,
+                                ctx->m_prev_free_sector,
+                                &node_work0, sector);
+      if (cmp >= 0) return false;
+   }
+   ctx->m_prev_free = node_work0.m_free;
+   ctx->m_prev_free_sector = sector;
+   ctx->m_have_prev_free = true;
+   return validate_free_order_rec(right, depth + 1, ctx);
+}
+
+//! @brief Validate one authoritative metadata tree during mount.
+static bool validate_tree(NarfSector sector, bool free_tree, NarfSector *count) {
+   MountTreeContext ctx;
+   NarfSector path[NARF_MAX_AVL_DEPTH + 1];
+   int height;
+
+   if (count == NULL) return false;
+   *count = 0;
+   memset(&ctx, 0, sizeof(ctx));
+
+   if (!validate_tree_shape_rec(sector, free_tree, 0, path, count, &height)) {
+      return false;
+   }
+   if (free_tree) {
+      return validate_free_order_rec(sector, 0, &ctx);
+   }
+   return validate_data_order_rec(sector, 0, &ctx);
 }
 
 //! @brief Validate the mounted root and its authoritative metadata trees.
 static bool validate_mounted_root(NarfSector expected_origin,
                                   NarfSector available_sectors) {
+   NarfSector data_count;
+   NarfSector free_count;
+
    if (!verify()) return false;
    if (root.m_origin != expected_origin) return false;
    if (root.m_total_sectors < NARF_MIN_FS_SECTORS) return false;
@@ -1523,9 +1680,13 @@ static bool validate_mounted_root(NarfSector expected_origin,
    if (root.m_bottom < 2) return false;
    if (root.m_top > root.m_total_sectors) return false;
    if (root.m_bottom > root.m_top) return false;
+   if (root.m_count > root.m_total_sectors - root.m_top) return false;
+   if (root.m_data_root != END && root.m_data_root == root.m_free_root) return false;
 
-   if (!validate_tree_rec(root.m_data_root)) return false;
-   if (!validate_tree_rec(root.m_free_root)) return false;
+   if (!validate_tree(root.m_data_root, false, &data_count)) return false;
+   if (!validate_tree(root.m_free_root, true, &free_count)) return false;
+   if (data_count != root.m_count) return false;
+   (void) free_count;
 
    return true;
 }
@@ -1796,10 +1957,18 @@ typedef struct {
    FreePayload m_prev_free;
    NarfSector m_prev_free_sector;
    bool m_have_prev_free;
+   uint8_t *m_catalog_marks;
+   size_t m_catalog_mark_count;
 } FsckContext;
 
 static FsckContext fsck_ctx;
 static bool fsck_deep_checks = false;
+
+enum {
+   FSCK_CATALOG_DATA = 1,
+   FSCK_CATALOG_FREE = 2,
+   FSCK_CATALOG_SPARE = 3
+};
 
 //! @brief Record one fsck error without aborting the whole scan.
 static void fsck_error(void) {
@@ -1824,8 +1993,9 @@ static bool extents_overlap(NarfSector a_start, NarfSector a_len,
    return a_start < b_end && b_start < a_end;
 }
 
-//! @brief Validate AVL shape, stored heights, and balance factors.
-static int fsck_tree_shape_rec(NarfSector sector, bool free_tree, unsigned depth) {
+//! @brief Validate AVL shape, stored heights, and cheap node invariants.
+static int fsck_tree_shape_rec(NarfSector sector, bool free_tree, unsigned depth,
+                               NarfSector *path) {
    NarfSector left;
    NarfSector right;
    int lh;
@@ -1840,6 +2010,19 @@ static int fsck_tree_shape_rec(NarfSector sector, bool free_tree, unsigned depth
       return 0;
    }
 
+   if (!valid_catalog_node_sector(sector)) {
+      fsck_error();
+      return 0;
+   }
+
+   for (unsigned i = 0; i < depth; i++) {
+      if (path[i] == sector) {
+         fsck_error();
+         return 0;
+      }
+   }
+   path[depth] = sector;
+
    if (!read_node(sector, &node_work0)) {
       fsck_error();
       return 0;
@@ -1849,6 +2032,19 @@ static int fsck_tree_shape_rec(NarfSector sector, bool free_tree, unsigned depth
    right = node_work0.m_right;
    stored_height = node_work0.m_height;
 
+   if (!valid_catalog_child(left) || !valid_catalog_child(right)) {
+      fsck_error();
+      return 0;
+   }
+   if (left != END && left == right) {
+      fsck_error();
+      return 0;
+   }
+   if (!free_tree && !node_key_terminated(&node_work0)) {
+      fsck_error();
+      return 0;
+   }
+
    if (free_tree) {
       fsck_ctx.m_report.free_nodes++;
    }
@@ -1856,8 +2052,8 @@ static int fsck_tree_shape_rec(NarfSector sector, bool free_tree, unsigned depth
       fsck_ctx.m_report.data_nodes++;
    }
 
-   lh = fsck_tree_shape_rec(left, free_tree, depth + 1);
-   rh = fsck_tree_shape_rec(right, free_tree, depth + 1);
+   lh = fsck_tree_shape_rec(left, free_tree, depth + 1, path);
+   rh = fsck_tree_shape_rec(right, free_tree, depth + 1, path);
    expected = (lh > rh ? lh : rh) + 1;
 
    if (stored_height != (uint8_t) expected) {
@@ -1882,6 +2078,11 @@ static void fsck_data_order_rec(NarfSector sector) {
       return;
    }
 
+   if (!node_key_terminated(&node_work0)) {
+      fsck_error();
+      return;
+   }
+
    left = node_work0.m_left;
    right = node_work0.m_right;
 
@@ -1896,8 +2097,7 @@ static void fsck_data_order_rec(NarfSector sector) {
       fsck_error();
    }
 
-   strncpy(fsck_ctx.m_prev_key, node_work0.m_key, sizeof(fsck_ctx.m_prev_key));
-   fsck_ctx.m_prev_key[sizeof(fsck_ctx.m_prev_key) - 1] = 0;
+   strcpy(fsck_ctx.m_prev_key, node_work0.m_key);
    fsck_ctx.m_have_prev_key = true;
 
    fsck_data_order_rec(right);
@@ -1955,27 +2155,6 @@ static void fsck_free_order_rec(NarfSector sector) {
    fsck_ctx.m_have_prev_free = true;
 
    fsck_free_order_rec(right);
-}
-
-//! @brief Count matching metadata node sectors in a tree.
-static NarfSector fsck_count_node_sector_rec(NarfSector tree_sector, NarfSector target_sector) {
-   NarfSector left;
-   NarfSector right;
-   NarfSector count = 0;
-
-   if (tree_sector == END) return 0;
-   if (!read_node(tree_sector, &node_work0)) {
-      fsck_error();
-      return 0;
-   }
-
-   left = node_work0.m_left;
-   right = node_work0.m_right;
-
-   if (tree_sector == target_sector) count++;
-   count += fsck_count_node_sector_rec(left, target_sector);
-   count += fsck_count_node_sector_rec(right, target_sector);
-   return count;
 }
 
 //! @brief Check whether one free extent overlaps a given payload extent.
@@ -2059,7 +2238,6 @@ static void fsck_data_extents_rec(NarfSector sector) {
    NarfSector left;
    NarfSector right;
    DataPayload dp;
-   NarfSector needed;
 
    if (sector == END) return;
    if (!read_node(sector, &node_work0)) {
@@ -2071,28 +2249,19 @@ static void fsck_data_extents_rec(NarfSector sector) {
    right = node_work0.m_right;
    dp = node_work0.m_data;
 
-   if (dp.m_length == 0) {
-      if (dp.m_start != END || dp.m_bytes != 0) {
-         fsck_error();
-      }
+   if (!valid_data_payload(&dp)) {
+      fsck_error();
    }
-   else {
-      needed = BYTES2SECTORS(dp.m_bytes);
-      if (dp.m_start == END || dp.m_start < 2 || dp.m_start >= root.m_bottom ||
-          dp.m_length > root.m_bottom - dp.m_start || needed != dp.m_length) {
-         fsck_error();
+   else if (dp.m_length != 0) {
+      if (fsck_ctx.m_report.payload_sectors <= ((NarfSector) -1) - dp.m_length) {
+         fsck_ctx.m_report.payload_sectors += dp.m_length;
       }
       else {
-         if (fsck_ctx.m_report.payload_sectors <= ((NarfSector) -1) - dp.m_length) {
-            fsck_ctx.m_report.payload_sectors += dp.m_length;
-         }
-         else {
-            fsck_error();
-         }
-         if (fsck_deep_checks) {
-            fsck_scan_free_overlap_rec(root.m_free_root, dp.m_start, dp.m_length);
-            fsck_scan_data_overlap_rec(root.m_data_root, sector, dp.m_start, dp.m_length);
-         }
+         fsck_error();
+      }
+      if (fsck_deep_checks) {
+         fsck_scan_free_overlap_rec(root.m_free_root, dp.m_start, dp.m_length);
+         fsck_scan_data_overlap_rec(root.m_data_root, sector, dp.m_start, dp.m_length);
       }
    }
 
@@ -2116,8 +2285,7 @@ static void fsck_free_extents_rec(NarfSector sector) {
    right = node_work0.m_right;
    fp = node_work0.m_free;
 
-   if (fp.m_length == 0 || fp.m_start == END || fp.m_start < 2 ||
-       fp.m_start >= root.m_bottom || fp.m_length > root.m_bottom - fp.m_start) {
+   if (!valid_free_payload(&fp)) {
       fsck_error();
    }
    else {
@@ -2144,12 +2312,6 @@ static void fsck_spare_list(void) {
          return;
       }
 
-      if (fsck_count_node_sector_rec(root.m_data_root, sector) != 0 ||
-          fsck_count_node_sector_rec(root.m_free_root, sector) != 0) {
-         fsck_error();
-         return;
-      }
-
       if (!read_node_any(sector, &node_work0)) {
          fsck_error();
          return;
@@ -2164,8 +2326,148 @@ static void fsck_spare_list(void) {
    }
 }
 
+//! @brief Mark one authoritative tree and detect duplicate catalog references.
+static void fsck_deep_mark_tree_rec(NarfSector sector, uint8_t kind) {
+   NarfSector left;
+   NarfSector right;
+   size_t index;
+
+   if (sector == END) return;
+   if (!valid_catalog_node_sector(sector)) {
+      fsck_error();
+      return;
+   }
+
+   index = (size_t) (sector - root.m_top);
+   if (index >= fsck_ctx.m_catalog_mark_count) {
+      fsck_error();
+      return;
+   }
+   if (fsck_ctx.m_catalog_marks[index] != 0) {
+      fsck_error();
+      return;
+   }
+   fsck_ctx.m_catalog_marks[index] = kind;
+
+   if (!read_node(sector, &node_work0)) {
+      fsck_error();
+      return;
+   }
+   left = node_work0.m_left;
+   right = node_work0.m_right;
+   fsck_deep_mark_tree_rec(left, kind);
+   fsck_deep_mark_tree_rec(right, kind);
+}
+
+//! @brief Mark the spare chain and detect cycles or overlap with live trees.
+static void fsck_deep_mark_spares(void) {
+   NarfSector sector = spare_head;
+   NarfSector guard = 0;
+
+   while (sector != END) {
+      size_t index;
+
+      if (!valid_catalog_node_sector(sector)) {
+         fsck_error();
+         return;
+      }
+      index = (size_t) (sector - root.m_top);
+      if (index >= fsck_ctx.m_catalog_mark_count) {
+         fsck_error();
+         return;
+      }
+      if (fsck_ctx.m_catalog_marks[index] != 0) {
+         fsck_error();
+         return;
+      }
+      fsck_ctx.m_catalog_marks[index] = FSCK_CATALOG_SPARE;
+
+      if (!read_node_any(sector, &node_work0)) {
+         fsck_error();
+         return;
+      }
+      sector = node_work0.m_spare.m_next;
+      guard++;
+      if (guard > root.m_total_sectors) {
+         fsck_error();
+         return;
+      }
+   }
+}
+
+//! @brief Perform whole-catalog reference and coverage checks for deep fsck.
+static void fsck_deep_catalog_map(void) {
+   NarfSector catalog_sectors;
+   NarfSector accounted;
+   bool missing = false;
+
+   catalog_sectors = root.m_total_sectors - root.m_top;
+   fsck_ctx.m_catalog_mark_count = (size_t) catalog_sectors;
+   if ((NarfSector) fsck_ctx.m_catalog_mark_count != catalog_sectors) {
+      fsck_error();
+      return;
+   }
+
+   if (fsck_ctx.m_catalog_mark_count != 0) {
+      fsck_ctx.m_catalog_marks = calloc(fsck_ctx.m_catalog_mark_count, 1);
+      if (fsck_ctx.m_catalog_marks == NULL) {
+         fsck_error();
+         return;
+      }
+   }
+
+   fsck_deep_mark_tree_rec(root.m_data_root, FSCK_CATALOG_DATA);
+   fsck_deep_mark_tree_rec(root.m_free_root, FSCK_CATALOG_FREE);
+   fsck_deep_mark_spares();
+
+   for (size_t i = 0; i < fsck_ctx.m_catalog_mark_count; i++) {
+      if (fsck_ctx.m_catalog_marks[i] == 0) {
+         missing = true;
+         break;
+      }
+   }
+   if (missing) fsck_error();
+
+   if (fsck_ctx.m_report.data_nodes > ((NarfSector) -1) - fsck_ctx.m_report.free_nodes) {
+      fsck_error();
+      return;
+   }
+   accounted = fsck_ctx.m_report.data_nodes + fsck_ctx.m_report.free_nodes;
+   if (accounted > ((NarfSector) -1) - fsck_ctx.m_report.spare_nodes) {
+      fsck_error();
+      return;
+   }
+   accounted += fsck_ctx.m_report.spare_nodes;
+   if (accounted != catalog_sectors) fsck_error();
+}
+
+//! @brief Ensure the payload region is covered exactly by data and free extents.
+static void fsck_deep_payload_accounting(void) {
+   NarfSector gap;
+   NarfSector explicit_free;
+   NarfSector payload_span;
+   NarfSector accounted;
+
+   gap = root.m_top - root.m_bottom;
+   if (fsck_ctx.m_report.free_sectors < gap) {
+      fsck_error();
+      return;
+   }
+   explicit_free = fsck_ctx.m_report.free_sectors - gap;
+   payload_span = root.m_bottom - 2;
+   if (fsck_ctx.m_report.payload_sectors > ((NarfSector) -1) - explicit_free) {
+      fsck_error();
+      return;
+   }
+   accounted = fsck_ctx.m_report.payload_sectors + explicit_free;
+   if (accounted != payload_span) fsck_error();
+}
+
 //! @brief Validate the mounted filesystem and return a small consistency report.
 static bool narf_fsck_impl(NarfFsckReport *report, bool deep_checks) {
+   NarfSector data_path[NARF_MAX_AVL_DEPTH + 1];
+   NarfSector free_path[NARF_MAX_AVL_DEPTH + 1];
+
    memset(&fsck_ctx, 0, sizeof(fsck_ctx));
    fsck_deep_checks = deep_checks;
 
@@ -2177,14 +2479,17 @@ static bool narf_fsck_impl(NarfFsckReport *report, bool deep_checks) {
       if (root.m_bottom < 2) fsck_error();
       if (root.m_top > root.m_total_sectors) fsck_error();
       if (root.m_bottom > root.m_top) fsck_error();
+      if (root.m_top <= root.m_total_sectors &&
+          root.m_count > root.m_total_sectors - root.m_top) fsck_error();
+      if (root.m_data_root != END && root.m_data_root == root.m_free_root) fsck_error();
       if (root.m_bottom <= root.m_top) {
          fsck_ctx.m_report.free_sectors = root.m_top - root.m_bottom;
       }
 
       NarfSector shape_errors = fsck_ctx.m_report.errors;
 
-      (void) fsck_tree_shape_rec(root.m_data_root, false, 0);
-      (void) fsck_tree_shape_rec(root.m_free_root, true, 0);
+      (void) fsck_tree_shape_rec(root.m_data_root, false, 0, data_path);
+      (void) fsck_tree_shape_rec(root.m_free_root, true, 0, free_path);
 
       if (fsck_ctx.m_report.errors == shape_errors) {
          fsck_ctx.m_have_prev_key = false;
@@ -2195,7 +2500,18 @@ static bool narf_fsck_impl(NarfFsckReport *report, bool deep_checks) {
 
          fsck_data_extents_rec(root.m_data_root);
          fsck_free_extents_rec(root.m_free_root);
-         fsck_spare_list();
+
+         if (deep_checks && !spare_initialized && !initialize_spare()) {
+            fsck_error();
+         }
+         if (spare_initialized) {
+            fsck_spare_list();
+         }
+
+         if (deep_checks && fsck_ctx.m_report.errors == shape_errors) {
+            fsck_deep_catalog_map();
+            fsck_deep_payload_accounting();
+         }
       }
 
       fsck_ctx.m_report.file_count = root.m_count;
@@ -2208,6 +2524,9 @@ static bool narf_fsck_impl(NarfFsckReport *report, bool deep_checks) {
       *report = fsck_ctx.m_report;
    }
 
+   free(fsck_ctx.m_catalog_marks);
+   fsck_ctx.m_catalog_marks = NULL;
+   fsck_ctx.m_catalog_mark_count = 0;
    fsck_deep_checks = false;
    return fsck_ctx.m_report.errors == 0;
 }

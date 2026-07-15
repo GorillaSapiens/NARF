@@ -1,4 +1,5 @@
 === v3
+mount and fast fsck now perform linear-time catalog bounds, key, payload, AVL, ordering, and count checks; fsck deep additionally checks duplicate references, cycles, overlaps, and complete allocation coverage
 mount now requires the root's stored origin to match the requested origin,
 rejects filesystems extending past the device or selected MBR partition, and
 clears all mounted state when no root copy can be accepted
