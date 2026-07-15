@@ -115,6 +115,20 @@ const char *narf_dirfirst(const char *dirname, const char *sep);
 //! @return Pointer to an internal key buffer, or NULL when no later entry exists.
 const char *narf_dirnext(const char *dirname, const char *sep, const char *previous_key);
 
+//! @brief Return the first key beginning with a prefix.
+//!
+//! @param prefix Key prefix to scan.
+//! @return Pointer to an internal key buffer, or NULL when no matching key exists.
+const char *narf_prefixfirst(const char *prefix);
+
+//! @brief Return the next key beginning with a prefix.
+//!
+//! @param prefix Key prefix to scan.
+//! @param previous_key Lexicographic cursor, normally a key returned by a previous prefix scan call.
+//! The key does not need to still exist.
+//! @return Pointer to an internal key buffer, or NULL when no later matching key exists.
+const char *narf_prefixnext(const char *prefix, const char *previous_key);
+
 //! @brief Create a key with zero-filled payload storage.
 //!
 //! @param key NUL-terminated key string.

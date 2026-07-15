@@ -1,4 +1,5 @@
 === v3
+recursive FUSE directory moves now use prefix iterators that enumerate every descendant key
 file-backed narf_io_write() implementations fsync each completed sector write so write ordering is durable without extending the platform I/O interface
 fixed power-loss and failure-path catalog corruption
 full FUSE support including mode, mtime, uid, gid, xattr

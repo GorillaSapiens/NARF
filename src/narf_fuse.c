@@ -998,11 +998,16 @@ static int my_rename(const char *oldpath, const char *newpath, unsigned int flag
 
    bool oldfile = narf_find(oldpath + 1);
    bool newfile = narf_find(newpath + 1);
-   bool olddirnaf = narf_find(olddir);
-   bool newdirnaf = narf_find(newdir);
+   bool olddirnaf = narf_prefixfirst(olddir) != NULL;
+   bool newdirnaf = narf_prefixfirst(newdir) != NULL;
 
    if (!oldfile && !olddirnaf) {
       ret = -ENOENT;
+      goto fini;
+   }
+
+   if (!strcmp(oldpath, newpath)) {
+      ret = 0;
       goto fini;
    }
 
@@ -1011,7 +1016,7 @@ static int my_rename(const char *oldpath, const char *newpath, unsigned int flag
       goto fini;
    }
 
-   if (oldfile) {
+   if (!olddirnaf) {
       ret = 0;
       if (!narf_rename_key(oldpath + 1, newpath + 1)) {
          ret = -EIO;
@@ -1019,13 +1024,19 @@ static int my_rename(const char *oldpath, const char *newpath, unsigned int flag
       goto fini;
    }
 
-   // olddir is a directory.  this will be tricky.
-   // this is only safe because i know what i'm doing...
+   // A directory cannot be moved into its own subtree.
    size_t olen = strlen(olddir);
+   if (!strncmp(newdir, olddir, olen)) {
+      ret = -EINVAL;
+      goto fini;
+   }
+
+   // Directory rename is intentionally incremental rather than atomic.
+   // Prefix iteration includes every descendant, not only immediate entries.
    const char *entry2;
    char prevkey[512];
    char buf[512];
-   entry2 = narf_dirfirst(olddir, "/");
+   entry2 = narf_prefixfirst(olddir);
    while (entry2 != NULL) {
       int n;
 
@@ -1050,7 +1061,7 @@ static int my_rename(const char *oldpath, const char *newpath, unsigned int flag
          ret = -EIO;
          goto fini;
       }
-      entry2 = narf_dirnext(olddir, "/", prevkey);
+      entry2 = narf_prefixnext(olddir, prevkey);
    }
    ret = 0;
 

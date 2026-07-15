@@ -2270,6 +2270,77 @@ const char *narf_dirnext(const char *dirname, const char *sep, const char *previ
    return dir_scan_next(dirname, sep, previous_key);
 }
 
+//! @brief Scan the data tree for the next key beginning with a prefix.
+static bool prefix_scan_rec(NarfSector sector, const char *prefix,
+                            const char *prefix_high, const char *after,
+                            const char **best) {
+   int cmp;
+
+   if (best == NULL) return false;
+   if (sector == END) return true;
+   if (!read_node(sector, &node_work0)) return false;
+
+   if (after != NULL && strcmp(node_work0.m_key, after) <= 0) {
+      return prefix_scan_rec(node_work0.m_right, prefix, prefix_high, after, best);
+   }
+
+   cmp = strcmp(node_work0.m_key, prefix);
+   if (cmp < 0) {
+      return prefix_scan_rec(node_work0.m_right, prefix, prefix_high, after, best);
+   }
+
+   if (prefix_high != NULL && strcmp(node_work0.m_key, prefix_high) >= 0) {
+      return prefix_scan_rec(node_work0.m_left, prefix, prefix_high, after, best);
+   }
+
+   if (!prefix_scan_rec(node_work0.m_left, prefix, prefix_high, after, best)) {
+      return false;
+   }
+
+   if (*best != NULL) return true;
+   if (!read_node(sector, &node_work0)) return false;
+
+   if (!strncmp(node_work0.m_key, prefix, strlen(prefix))) {
+      strncpy(dir_key, node_work0.m_key, sizeof(dir_key));
+      dir_key[sizeof(dir_key) - 1] = 0;
+      *best = dir_key;
+      return true;
+   }
+
+   return prefix_scan_rec(node_work0.m_right, prefix, prefix_high, after, best);
+}
+
+//! @brief Return the next key beginning with a prefix after an optional key.
+static const char *prefix_scan_next(const char *prefix, const char *after) {
+   const char *best = NULL;
+   const char *prefix_high = NULL;
+
+   if (prefix_upper_bound(prefix, key_work, sizeof(key_work))) {
+      prefix_high = key_work;
+   }
+
+   if (!prefix_scan_rec(root.m_data_root, prefix, prefix_high, after, &best)) {
+      return NULL;
+   }
+
+   return best;
+}
+
+//! @brief Return the first key beginning with a prefix.
+const char *narf_prefixfirst(const char *prefix) {
+   if (!verify()) return NULL;
+   if (!valid_key(prefix)) return NULL;
+   return prefix_scan_next(prefix, NULL);
+}
+
+//! @brief Return the next key beginning with a prefix after a previous key.
+const char *narf_prefixnext(const char *prefix, const char *previous_key) {
+   if (!verify()) return NULL;
+   if (!valid_key(prefix)) return NULL;
+   if (!valid_key(previous_key)) return NULL;
+   return prefix_scan_next(prefix, previous_key);
+}
+
 //! @brief Create a key with zero-filled payload storage.
 bool narf_alloc(const char *key, NarfByteSize bytes) {
    NarfSector length;

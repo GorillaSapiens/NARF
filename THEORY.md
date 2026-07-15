@@ -284,6 +284,14 @@ leading separator.  Neither spelling yields `groink/elephant` or
 directory-prefix request without requiring the keys themselves to start with
 `/`.
 
+`narf_prefixfirst(prefix)` and `narf_prefixnext(prefix, previous_key)` scan
+all keys beginning with an exact key prefix, including every nested descendant.
+Unlike the directory iterators, they do not stop at the next separator.  The
+`previous_key` argument is a lexicographic cursor and does not need to still
+exist, so callers may rename or delete the returned key before requesting the
+next match.  The FUSE directory-rename loop uses this property to move an
+entire subtree incrementally.
+
 MBR support
 -----------
 

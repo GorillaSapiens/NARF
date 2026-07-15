@@ -267,6 +267,11 @@ This works well for values such as `4K`, `sha256.deadbeef`, or `tile-17`; it is
 not an arbitrary binary xattr store.  That is a feature, not a bug wearing a
 fake mustache.
 
+Directory rename walks every key under the old directory prefix, including
+nested descendants.  Each key rename is a separate NARF transaction, so the
+operation is recursive but intentionally not atomic: interruption can leave
+part of the subtree under the old name and part under the new name.
+
 Rename preserves custom xattrs automatically because the same NARF node is
 renamed.  Copy preserves them only if the userspace copy tool asks for xattrs,
 for example:
