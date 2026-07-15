@@ -3370,14 +3370,36 @@ static bool defrag_tidy_once(bool *changed) {
 }
 
 #ifdef DEFRAG_DEBUG
-//! @brief Print the current defrag phase and post-carve payload packing.
-static void defrag_debug_status(int state) {
+//! @brief Sum file payload sectors.
+static bool defrag_data_size_rec(NarfSector sector,
+                                 NarfSector *total_file_sectors) {
+   NarfSector left;
+   NarfSector right;
+   NarfSector length;
+
+   if (total_file_sectors == NULL) return false;
+   if (sector == END) return true;
+   if (!read_node(sector, &node_work0)) return false;
+
+   left = node_work0.m_left;
+   right = node_work0.m_right;
+   length = node_work0.m_data.m_length;
+
+   if (!defrag_data_size_rec(left, total_file_sectors)) return false;
+   if (*total_file_sectors > ((NarfSector) -1) - length) return false;
+   *total_file_sectors += length;
+   return defrag_data_size_rec(right, total_file_sectors);
+}
+
+//! @brief Print progress as the lowest free hole advances toward compaction.
+static bool defrag_debug_status(int state, NarfSector start,
+                                NarfSector finish,
+                                bool have_progress_range) {
    const char *name;
-   NarfSector payload_span;
-   NarfSector free_sectors = 0;
-   NarfSector used_sectors;
-   NarfSector ideal_bottom;
-   double packed;
+   NarfSector free_sector;
+   NarfSector lowest_hole;
+   NarfSector hole_length;
+   double progress;
 
    switch (state) {
       case 0: name = "carve"; break;
@@ -3387,40 +3409,48 @@ static void defrag_debug_status(int state) {
       default: name = "done"; break;
    }
 
-   // Carve must finish before free space represents all reclaimable payload
-   // sectors.  Until then, only print the phase name.
-   if (state == 0) {
-      fprintf(stderr, "defrag state %d (%s)\n", state, name);
-      return;
+   // Carve may create holes, so establish the fixed range only after
+   // carve has completed.
+   if (state == 0 || !have_progress_range) {
+      fprintf(stderr, "defrag state %d (%6s)\n", state, name);
+      return true;
    }
 
-   if (root.m_bottom < 2) {
-      fprintf(stderr, "defrag state %d (%s): invalid bottom\n", state, name);
-      return;
+   if (!defrag_squish_lowest_hole_after(0, &free_sector, &lowest_hole,
+                                        &hole_length)) {
+      return false;
    }
 
-   payload_span = root.m_bottom - 2;
-   if (!free_sector_count_rec(root.m_free_root, &free_sectors) ||
-       free_sectors > payload_span) {
-      fprintf(stderr, "defrag state %d (%s): packing unavailable\n",
-              state, name);
-      return;
+   // Once no free extent remains below the compacted frontier, the moving
+   // position has reached finish.  Holes beyond finish are likewise done.
+   if (free_sector == END || lowest_hole >= finish) {
+      progress = 100.0;
+   } else if (finish <= start || lowest_hole <= start) {
+      progress = finish <= start ? 100.0 : 0.0;
+   } else {
+      progress = 100.0 * (double) (lowest_hole - start) /
+                          (double) (finish - start);
    }
 
-   used_sectors = payload_span - free_sectors;
-   ideal_bottom = root.m_bottom - free_sectors;
-   packed = payload_span == 0 ? 100.0 :
-            100.0 * (double) used_sectors / (double) payload_span;
-
-   fprintf(stderr,
-           "defrag state %d (%s): packed=%.1f%% free=%llu/%llu "
-           "bottom=%llu ideal=%llu excess=%llu\n",
-           state, name, packed,
-           (unsigned long long) free_sectors,
-           (unsigned long long) payload_span,
-           (unsigned long long) root.m_bottom,
-           (unsigned long long) ideal_bottom,
-           (unsigned long long) free_sectors);
+   if (free_sector == END) {
+      fprintf(stderr,
+              "defrag state %d (%6s): progress=%3.1f%% "
+              "lowest=none start=%llu finish=%llu bottom=%llu\n",
+              state, name, progress,
+              (unsigned long long) start,
+              (unsigned long long) finish,
+              (unsigned long long) root.m_bottom);
+   } else {
+      fprintf(stderr,
+              "defrag state %d (%6s): progress=%3.1f%% "
+              "lowest=%llu start=%llu finish=%llu bottom=%llu\n",
+              state, name, progress,
+              (unsigned long long) lowest_hole,
+              (unsigned long long) start,
+              (unsigned long long) finish,
+              (unsigned long long) root.m_bottom);
+   }
+   return true;
 }
 #endif
 
@@ -3429,12 +3459,42 @@ bool narf_defrag(void) {
    bool done = false;
    bool changed;
    int state = 0;
+#ifdef DEFRAG_DEBUG
+   NarfSector progress_start = 0;
+   NarfSector progress_finish = 0;
+   bool have_progress_range = false;
+#endif
 
    if (!verify()) return false;
 
    while (!done) {
 #ifdef DEFRAG_DEBUG
-      defrag_debug_status(state);
+      if (state != 0 && !have_progress_range) {
+         NarfSector total_file_sectors = 0;
+         NarfSector free_sector;
+         NarfSector hole_length;
+
+         if (!defrag_data_size_rec(root.m_data_root, &total_file_sectors)) {
+            return false;
+         }
+         if (total_file_sectors > ((NarfSector) -1) - 2) return false;
+
+         // m_bottom is an absolute sector, so include the two root sectors.
+         progress_finish = 2 + total_file_sectors;
+         if (!defrag_squish_lowest_hole_after(0, &free_sector,
+                                              &progress_start,
+                                              &hole_length)) {
+            return false;
+         }
+         if (free_sector == END || progress_start >= progress_finish) {
+            progress_start = progress_finish;
+         }
+         have_progress_range = true;
+      }
+      if (!defrag_debug_status(state, progress_start, progress_finish,
+                               have_progress_range)) {
+         return false;
+      }
 #endif
       switch (state) {
          case 0:
@@ -3458,6 +3518,9 @@ bool narf_defrag(void) {
             done = true;
       }
    }
+#ifdef DEFRAG_DEBUG
+   fprintf(stderr, "\n");
+#endif
 
    return true;
 }
