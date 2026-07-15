@@ -60,7 +60,6 @@ root block contains:
 * sector size and total sector count
 * root references for the data tree and free tree
 * allocation frontier values: `m_bottom` for payload growth and `m_top` for catalog-node growth
-* a small root-resident stack of committed-safe spare catalog-node sectors
 * a persisted LFSR seed for node-version generation
 * `m_root_version`, the 32-bit root commit/version counter
 * checksum
@@ -142,8 +141,8 @@ A catalog node written earlier in the same open transaction may be rewritten in
 place because no committed root can point at that transaction-private sector
 yet.  A committed node is not overwritten in place; writing a changed version
 allocates another node sector, writes the replacement, and marks the old sector
-as trash.  Trashed sectors are moved to the root-resident spare stack only after
-the transaction commits successfully.
+as transaction-local trash.  Trashed sectors are not reusable until after the
+transaction commits successfully.
 
 Catalog-node sectors therefore move through this lifecycle:
 
@@ -164,7 +163,7 @@ trash
 
 spare
   The transaction committed successfully, so old trash sectors are no longer
-  needed for rollback.  They are pushed onto the committed spare stack and may be
+  needed for rollback.  They may be linked onto the RAM-only spare list and
   reused by a later catalog-node allocation.
 ```
 
@@ -172,11 +171,21 @@ The important rule is that **trash is not spare**.  A sector becomes safe to
 reuse only after the commit that made it unreachable from the previous committed
 root.
 
-The current implementation stores spare catalog-node sectors in a fixed-size
-inline stack in the root block.  Transaction trash is tracked in a fixed-size RAM
-array while a transaction is open.  If either structure overflows, extra dead
-catalog sectors are safely leaked rather than reused too early.  There is not yet
-an on-disk spare linked list, trash-page list, or catalog-node garbage collector.
+The current implementation keeps the spare list head in RAM only.  Spare-list
+links are written into the spare sectors themselves, but the list is cache state,
+not durable filesystem truth.  On mount, NARF rebuilds the RAM spare list by
+scanning catalog-node sectors from `root.m_top` to `root.m_total_sectors` and
+linking sectors that are not reachable from the committed data or free roots.
+
+During a transaction, NARF may pop from this RAM spare list and overwrite the
+popped sector before the root commit.  If the transaction rolls back after
+consuming a spare sector, the RAM spare list is discarded and rebuilt before it
+is trusted again.  Transaction trash is tracked in a fixed-size RAM array while
+a transaction is open; after a successful commit, those known-dead sectors are
+safely linked onto the RAM spare list.  If transaction trash overflows or spare
+recycling fails, extra dead catalog sectors are safely leaked until a later
+mount/rebuild finds them again.  There is not yet an on-disk trash-page list or
+full catalog-node garbage collector.
 
 Rollback on normal runtime failure restores the in-memory root state and clears
 transaction-local dirty/trash tracking.  It does not need to erase abandoned
@@ -198,11 +207,11 @@ suitable free extent exists, NARF allocates from the open space between the low
 payload frontier and the high catalog-node frontier.
 
 Catalog nodes are allocated from the high end of the filesystem one sector at a
-time, or from the root-resident spare stack when a committed-safe node sector is
-available.  File payload data grows upward from the low end.  The root tracks
-the current bottom/top frontier values.  Normal allocations preserve a small
-metadata reserve so that a full medium can still perform delete/cleanup-style
-metadata updates.
+time, or from the RAM spare list when a committed-safe node sector is available.
+File payload data grows upward from the low end.  The root tracks the current
+bottom/top frontier values.  Normal allocations preserve a small metadata
+reserve so that a full medium can still perform delete/cleanup-style metadata
+updates.
 
 Defragmentation
 ---------------

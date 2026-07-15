@@ -251,7 +251,7 @@ current images usually have no such records.
 
 ### `debug`
 
-Print internal root/data-tree/free-tree/spare-stack information.  This requires `NARF_DEBUG` to
+Print internal root/data-tree/free-tree/RAM-spare-list information.  This requires `NARF_DEBUG` to
 be enabled in the build.
 
 ### `gremlins <seed> <count>`

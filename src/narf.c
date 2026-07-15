@@ -17,12 +17,11 @@
 #endif
 
 #define SIGNATURE 0x4652414E // little endian 'NARF'
-#define VERSION 0x00000008
+#define VERSION 0x00000009
 #define END INVALID_NAF
 #define NARF_MIN_FS_SECTORS 4
 #define NARF_MAX_AVL_DEPTH 96
 #define TRASH_MAX (NARF_MAX_AVL_DEPTH * 4)
-#define SPARE_MAX 64
 
 // Uncomment for unicode line drawing characters in debug functions
 #define USE_UTF8_LINE_DRAWING
@@ -49,6 +48,10 @@ typedef struct PACKED {
    NarfSector m_length;
 } FreePayload;
 
+typedef struct PACKED {
+   NarfSector m_next;
+} SparePayload;
+
 #define INIT_DEFRAG_SEARCH ((FreePayload){ END, 0 })
 
 #define ROOT_FIELDS                        \
@@ -61,9 +64,6 @@ typedef struct PACKED {
    NarfSector   m_total_sectors;           \
    NarfSector   m_data_root;               \
    NarfSector   m_free_root;               \
-                                           \
-   NarfSector   m_spare_count;             \
-   NarfSector   m_spare_inline[SPARE_MAX]; \
                                            \
    NarfSector   m_count;                   \
    NarfSector   m_bottom;                  \
@@ -79,13 +79,11 @@ typedef struct {
 // Spare catalog-node sectors.
 //
 // NARF stores AVL/catalog nodes in ordinary sectors near the high end
-// of the volume. Because catalog updates are copy-on-write, old node
-// sectors cannot be reused until after the new root has committed.
-//
-// After commit, trash node sectors are pushed here and may be reused
-// by later catalog-node allocations. These are NOT user-payload free
-// sectors and are intentionally separate from the payload free tree,
-// because the free tree is itself made of catalog nodes.
+// of the volume. Catalog-node sectors that are not reachable from the
+// committed data/free roots are reusable metadata space. The spare list
+// is a RAM-only cache rebuilt by scanning that catalog-node region; its
+// links are stored in the spare sectors themselves but are never durable
+// filesystem truth.
 
 // Bytes occupied by Root fields other than m_reserved. Keep this next to Root.
 #define ROOT_PREFIX_BYTES (sizeof(RootState))
@@ -103,8 +101,9 @@ static_assert(sizeof(Root) == NARF_SECTOR_SIZE, "Root wrong size");
    NarfSector   m_right;        \
    uint8_t      m_height;       \
    union {                      \
-      DataPayload m_data;       \
-      FreePayload m_free;       \
+      DataPayload  m_data;      \
+      FreePayload  m_free;      \
+      SparePayload m_spare;     \
    };                           \
    uint32_t     m_root_version; \
    uint32_t     m_node_version;
@@ -145,15 +144,21 @@ static RootState root;
 static RootSnapshot saved_root;
 static Node node_work0;
 static Node node_work1;
+static Node spare_work;
 static int root_copy = 0;
 static char dir_key[KEYSIZE];
 static char key_work[KEYSIZE];
 static uint32_t lfsr_state = 1;
 static bool transaction_may_use_reserve = false;
 static bool transaction_open = false;
+static bool spare_initialized = false;
+static bool spare_consumed_in_transaction = false;
+static NarfSector spare_head = END;
 static NarfSector trash_nodes[TRASH_MAX];
 static unsigned trash_node_count = 0;
 static bool trash_node_overflow = false;
+
+static bool initialize_spare(void);
 
 //! @brief Compute a CRC-32 compatible with zlib/crc32().
 uint32_t crc32(uint32_t crc, const void *data, size_t length) {
@@ -189,9 +194,15 @@ static uint32_t transaction_root_version(void) {
 
 //! @brief Save the current mutable root state before starting a public transaction.
 static void transaction_begin(void) {
+   if (!spare_initialized && !initialize_spare()) {
+      spare_head = END;
+      spare_initialized = false;
+   }
+
    saved_root.m_root = root;
    saved_root.m_lfsr_state = lfsr_state;
    transaction_may_use_reserve = false;
+   spare_consumed_in_transaction = false;
    trash_node_count = 0;
    trash_node_overflow = false;
    transaction_open = true;
@@ -202,6 +213,11 @@ static void transaction_rollback(void) {
    root = saved_root.m_root;
    lfsr_state = saved_root.m_lfsr_state;
    transaction_may_use_reserve = false;
+   if (spare_consumed_in_transaction) {
+      spare_head = END;
+      spare_initialized = false;
+   }
+   spare_consumed_in_transaction = false;
    trash_node_count = 0;
    trash_node_overflow = false;
    transaction_open = false;
@@ -321,8 +337,6 @@ static void root_to_disk(Root *out) {
    out->m_total_sectors = root.m_total_sectors;
    out->m_data_root = root.m_data_root;
    out->m_free_root = root.m_free_root;
-   out->m_spare_count = root.m_spare_count;
-   memcpy(out->m_spare_inline, root.m_spare_inline, sizeof(out->m_spare_inline));
    out->m_count = root.m_count;
    out->m_bottom = root.m_bottom;
    out->m_top = root.m_top;
@@ -339,11 +353,6 @@ static void root_from_disk(const Root *in) {
    root.m_total_sectors = in->m_total_sectors;
    root.m_data_root = in->m_data_root;
    root.m_free_root = in->m_free_root;
-   root.m_spare_count = in->m_spare_count;
-   if (root.m_spare_count > SPARE_MAX) {
-      root.m_spare_count = 0;
-   }
-   memcpy(root.m_spare_inline, in->m_spare_inline, sizeof(root.m_spare_inline));
    root.m_count = in->m_count;
    root.m_bottom = in->m_bottom;
    root.m_top = in->m_top;
@@ -394,10 +403,6 @@ static bool init_root(NarfSector origin, NarfSector size) {
    root.m_total_sectors = size;
    root.m_data_root = END;
    root.m_free_root = END;
-   root.m_spare_count = 0;
-   for (unsigned i = 0; i < SPARE_MAX; i++) {
-      root.m_spare_inline[i] = END;
-   }
    root.m_count = 0;
    root.m_bottom = 2;
    root.m_top = size;
@@ -431,7 +436,10 @@ static uint32_t node_checksum(Node *n) {
    return ck;
 }
 
-//! @brief Mark a committed catalog-node sector as trash until commit succeeds.
+//! @brief Mark a committed catalog-node sector as transaction trash.
+//!
+//! Trashed sectors are not reusable until after the new root commits.
+//! After commit, they are linked onto the RAM spare list.
 static void trash_node(NarfSector sector) {
    if (!transaction_open) return;
    if (sector == END) return;
@@ -447,43 +455,6 @@ static void trash_node(NarfSector sector) {
    else {
       trash_node_overflow = true;
    }
-}
-
-//! @brief Pop one sector from the rollback-safe root-resident spare stack.
-static bool pop_spare(NarfSector *out_sector) {
-   if (out_sector == NULL) return false;
-
-   while (root.m_spare_count > 0) {
-      NarfSector spare_sector = root.m_spare_inline[--root.m_spare_count];
-      root.m_spare_inline[root.m_spare_count] = END;
-
-      if (!valid_node_sector(spare_sector)) {
-         continue;
-      }
-
-      *out_sector = spare_sector;
-      return true;
-   }
-
-   return false;
-}
-
-//! @brief Add one committed-safe catalog-node sector to the spare stack.
-static bool push_spare(NarfSector sector) {
-   if (!valid_node_sector(sector)) return true;
-
-   for (NarfSector i = 0; i < root.m_spare_count && i < SPARE_MAX; i++) {
-      if (root.m_spare_inline[i] == sector) {
-         return true;
-      }
-   }
-
-   if (root.m_spare_count >= SPARE_MAX) {
-      return true;
-   }
-
-   root.m_spare_inline[root.m_spare_count++] = sector;
-   return true;
 }
 
 static bool alloc_node_sector(NarfSector *sector);
@@ -560,6 +531,122 @@ static bool write_node(NarfSector old_sector, Node *n, NarfSector *new_sector) {
    }
 
    *new_sector = sector;
+   return true;
+}
+
+//! @brief Push one unreachable catalog-node sector onto the RAM spare list.
+static bool push_spare(NarfSector sector) {
+   if (!valid_node_sector(sector)) return true;
+
+   memset(&spare_work, 0, sizeof(spare_work));
+   spare_work.m_left = END;
+   spare_work.m_right = END;
+   spare_work.m_height = 1;
+   spare_work.m_spare.m_next = spare_head;
+   spare_work.m_root_version = root.m_root_version;
+   spare_work.m_node_version = lfsr_next();
+   if (spare_work.m_node_version == 0) {
+      spare_work.m_node_version = 1;
+   }
+   spare_work.m_checksum = 0;
+   spare_work.m_checksum = crc32(0, &spare_work, NARF_SECTOR_SIZE - sizeof(uint32_t));
+
+   if (!narf_io_write(root.m_origin + sector, &spare_work)) return false;
+   spare_head = sector;
+   return true;
+}
+
+//! @brief Pop one sector from the RAM spare list.
+static bool pop_spare(NarfSector *result) {
+   if (!result) return false;
+
+   *result = spare_head;
+   if (spare_head == END) return true;
+
+   if (!read_node_any(spare_head, &spare_work)) return false;
+   spare_head = spare_work.m_spare.m_next;
+   if (transaction_open) {
+      spare_consumed_in_transaction = true;
+   }
+   return true;
+}
+
+//! @brief Mark an allocated catalog sector as transaction-private.
+static bool prepare_allocated_node_sector(NarfSector sector) {
+   if (!valid_node_sector(sector)) return false;
+
+   memset(&spare_work, 0, sizeof(spare_work));
+   spare_work.m_left = END;
+   spare_work.m_right = END;
+   spare_work.m_height = 1;
+   spare_work.m_spare.m_next = END;
+   spare_work.m_root_version = transaction_root_version();
+   spare_work.m_node_version = lfsr_next();
+   if (spare_work.m_node_version == 0) {
+      spare_work.m_node_version = 1;
+   }
+   spare_work.m_checksum = 0;
+   spare_work.m_checksum = crc32(0, &spare_work, NARF_SECTOR_SIZE - sizeof(uint32_t));
+
+   return narf_io_write(root.m_origin + sector, &spare_work);
+}
+
+//! @brief Return whether target occurs in this catalog-node tree.
+static bool reachable_tree_rec(NarfSector sector, NarfSector target, bool *result) {
+   NarfSector left;
+   NarfSector right;
+
+   if (result == NULL) return false;
+   if (*result) return true;
+   if (sector == END) return true;
+
+   if (sector == target) {
+      *result = true;
+      return true;
+   }
+
+   if (!read_node(sector, &spare_work)) return false;
+   left = spare_work.m_left;
+   right = spare_work.m_right;
+
+   if (!reachable_tree_rec(left, target, result)) return false;
+   return reachable_tree_rec(right, target, result);
+}
+
+//! @brief Return whether a sector is reachable from the committed data root.
+static bool reachable_data(NarfSector sector, bool *result) {
+   if (result == NULL) return false;
+   *result = false;
+   return reachable_tree_rec(root.m_data_root, sector, result);
+}
+
+//! @brief Return whether a sector is reachable from the committed free root.
+static bool reachable_free(NarfSector sector, bool *result) {
+   if (result == NULL) return false;
+   *result = false;
+   return reachable_tree_rec(root.m_free_root, sector, result);
+}
+
+//! @brief Rebuild the RAM spare list from unreachable catalog-node sectors.
+static bool initialize_spare(void) {
+   NarfSector sector;
+   bool in_data;
+   bool in_free;
+
+   spare_head = END;
+   spare_initialized = false;
+
+   for (sector = root.m_top; sector < root.m_total_sectors; sector++) {
+      if (!reachable_data(sector, &in_data)) return false;
+      if (in_data) continue;
+
+      if (!reachable_free(sector, &in_free)) return false;
+      if (in_free) continue;
+
+      if (!push_spare(sector)) return false;
+   }
+
+   spare_initialized = true;
    return true;
 }
 
@@ -1062,15 +1149,23 @@ static bool alloc_node_sector(NarfSector *sector) {
 
    if (sector == NULL) return false;
 
-   if (pop_spare(sector)) {
-      return true;
+   if (!spare_initialized) {
+      if (transaction_open) {
+         spare_head = END;
+      }
+      else if (!initialize_spare()) {
+         return false;
+      }
    }
+
+   if (!pop_spare(sector)) return false;
+   if (*sector != END) return prepare_allocated_node_sector(*sector);
 
    reserve = transaction_may_use_reserve ? 0 : metadata_reserve();
    if (root.m_top > root.m_bottom + reserve) {
       root.m_top--;
       *sector = root.m_top;
-      return true;
+      return prepare_allocated_node_sector(*sector);
    }
 
    return false;
@@ -1428,45 +1523,33 @@ static bool mount_root_copy(NarfSector start, int which) {
       lfsr_state = 0x1f2e3d4c;
    }
 
+   if (!initialize_spare()) return false;
+
    return true;
 }
 
-//! @brief Recycle metadata-node trash after a mutation commits successfully.
-static void move_trash_to_spare_after_commit(void) {
-   RootSnapshot committed;
+//! @brief Link committed-dead trash sectors onto the RAM spare list.
+static void recycle_trash_after_commit(void) {
    unsigned count = trash_node_count;
-
-   if (count == 0) {
-      trash_node_overflow = false;
-      return;
-   }
-
-   committed.m_root = root;
-   committed.m_lfsr_state = lfsr_state;
-
-   for (unsigned i = 0; i < count; i++) {
-      if (!push_spare(trash_nodes[i])) {
-         root = committed.m_root;
-         lfsr_state = committed.m_lfsr_state;
-         trash_node_count = 0;
-         trash_node_overflow = false;
-         return;
-      }
-   }
-
-   if (!commit_root()) {
-      root = committed.m_root;
-      lfsr_state = committed.m_lfsr_state;
-   }
 
    trash_node_count = 0;
    trash_node_overflow = false;
+
+   for (unsigned i = 0; i < count; i++) {
+      if (!push_spare(trash_nodes[i])) {
+         spare_head = END;
+         spare_initialized = false;
+         return;
+      }
+   }
 }
 
 //! @brief Commit a public mutation.
 static bool commit_user_transaction(void) {
    if (!commit_root()) return false;
-   move_trash_to_spare_after_commit();
+
+   recycle_trash_after_commit();
+   spare_consumed_in_transaction = false;
    return true;
 }
 
@@ -1979,36 +2062,36 @@ static void fsck_free_extents_rec(NarfSector sector) {
    fsck_free_extents_rec(right);
 }
 
-//! @brief Validate root-resident metadata-free stack entries.
-static void fsck_spare_stack(void) {
-   if (root.m_spare_count > SPARE_MAX) {
-      fsck_error();
-      return;
-   }
+//! @brief Count and lightly validate the RAM spare-list cache.
+static void fsck_spare_list(void) {
+   NarfSector sector = spare_head;
+   NarfSector guard = 0;
 
-   for (NarfSector i = 0; i < root.m_spare_count; i++) {
-      NarfSector sector = root.m_spare_inline[i];
-
+   while (sector != END) {
       fsck_ctx.m_report.spare_nodes++;
 
-      if (!valid_node_sector(sector)) {
+      if (!valid_node_sector(sector) || sector < root.m_top ||
+          sector >= root.m_total_sectors) {
          fsck_error();
-         continue;
-      }
-
-      if (sector < root.m_top || sector >= root.m_total_sectors) {
-         fsck_error();
-      }
-
-      for (NarfSector j = i + 1; j < root.m_spare_count; j++) {
-         if (root.m_spare_inline[j] == sector) {
-            fsck_error();
-         }
+         return;
       }
 
       if (fsck_count_node_sector_rec(root.m_data_root, sector) != 0 ||
           fsck_count_node_sector_rec(root.m_free_root, sector) != 0) {
          fsck_error();
+         return;
+      }
+
+      if (!read_node_any(sector, &node_work0)) {
+         fsck_error();
+         return;
+      }
+
+      sector = node_work0.m_spare.m_next;
+      guard++;
+      if (guard > root.m_total_sectors) {
+         fsck_error();
+         return;
       }
    }
 }
@@ -2044,7 +2127,7 @@ static bool narf_fsck_impl(NarfFsckReport *report, bool deep_checks) {
 
          fsck_data_extents_rec(root.m_data_root);
          fsck_free_extents_rec(root.m_free_root);
-         fsck_spare_stack();
+         fsck_spare_list();
       }
 
       fsck_ctx.m_report.file_count = root.m_count;
@@ -3811,7 +3894,7 @@ void narf_debug(void) {
    printf("root.m_total_sectors = %08x\n", root.m_total_sectors);
    printf("root.m_data_root     = [%08x]\n", root.m_data_root);
    printf("root.m_free_root     = [%08x]\n", root.m_free_root);
-   printf("root.m_spare_count   = %u\n", (unsigned)root.m_spare_count);
+   printf("spare_head           = [%08x]\n", spare_head);
    printf("root.m_lfsr_seed     = %08x\n", root.m_lfsr_seed);
    printf("root.m_count         = %08x\n", root.m_count);
    printf("root.m_bottom        = %08x\n", root.m_bottom);
