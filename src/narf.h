@@ -7,7 +7,7 @@
 #include "narf_conf.h"
 
 typedef NARF_SECTOR_ADDRESS_TYPE NarfSector;
-typedef NARF_SIZE_TYPE NarfByteSize;
+typedef NARF_SECTOR_ADDRESS_TYPE NarfByteSize;
 
 #define NARF_METADATA_SIZE 128
 

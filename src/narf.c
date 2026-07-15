@@ -20,7 +20,22 @@
 #define VERSION 0x00000009
 #define END INVALID_NAF
 #define NARF_MIN_FS_SECTORS 4
-#define NARF_MAX_AVL_DEPTH 96
+
+// NB: currently only 32 bit is supported,
+// other values are here in case someone
+// gets adventurous...
+#if NARF_SECTOR_ADDRESS_BITS == 8
+   #define NARF_MAX_AVL_DEPTH 10
+#elif NARF_SECTOR_ADDRESS_BITS == 16
+   #define NARF_MAX_AVL_DEPTH 21
+#elif NARF_SECTOR_ADDRESS_BITS == 32
+   #define NARF_MAX_AVL_DEPTH 44
+#elif NARF_SECTOR_ADDRESS_BITS == 64
+   #define NARF_MAX_AVL_DEPTH 90
+#else
+   #error "unrecognized NARF_SECTOR_ADDRESS_BITS value"
+#endif
+
 #define RETIRED_MAX (NARF_MAX_AVL_DEPTH * 4)
 
 // Uncomment for unicode line drawing characters in debug functions
@@ -2943,9 +2958,10 @@ bool narf_rename_key(const char *key, const char *newkey) {
 
    if (!verify()) return false;
    if (!valid_key(key) || !valid_key(newkey)) return false;
+   if (strcmp(key, newkey) == 0) return narf_find(key);
    if (narf_find(newkey)) return false;
-   if (strcmp(key, newkey) == 0) return true;
    transaction_begin();
+   transaction_may_use_reserve = true;
    if (!data_delete_rec(root.m_data_root, key, &newroot, &removed_sector, &renamed_data)) {
       transaction_rollback();
       return false;

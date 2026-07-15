@@ -13,7 +13,7 @@
 // Size of a sector in bytes
 // beware of large values, NARF keeps a sector sized
 // buffer in memory.
-#define NARF_SECTOR_SIZE 512
+#define NARF_SECTOR_SIZE 512u
 
 // Minimum virgin metadata sectors kept aside for COW deletes/GC.
 // Normal allocations may not consume this reserve; recovery-style
@@ -23,13 +23,27 @@
 #define NARF_METADATA_RESERVE_SECTORS 32
 #endif
 
-// Type used to store sector addresses
-// should be one of uint8_t, uint16_t, uint32_t, or uint64_t
-#define NARF_SECTOR_ADDRESS_TYPE uint32_t
+// Number of bits in a sector address
+// NB: currently only 32 is actually supported !!!
+#define NARF_SECTOR_ADDRESS_BITS 32
 
-// Type used to store NARF byte sizes
-// should be one of uint8_t, uint16_t, uint32_t, or uint64_t
-#define NARF_SIZE_TYPE uint32_t
+// DO NOT TOUCH THIS BLOCK
+#if NARF_SECTOR_ADDRESS_BITS != 32
+#error "Only 32-bit NARF sector addresses are currently supported"
+#endif
+
+// DO NOT TOUCH THIS BLOCK
+#if NARF_SECTOR_ADDRESS_BITS == 8
+   #define NARF_SECTOR_ADDRESS_TYPE uint8_t
+#elif NARF_SECTOR_ADDRESS_BITS == 16
+   #define NARF_SECTOR_ADDRESS_TYPE uint16_t
+#elif NARF_SECTOR_ADDRESS_BITS == 32
+   #define NARF_SECTOR_ADDRESS_TYPE uint32_t
+#elif NARF_SECTOR_ADDRESS_BITS == 64
+   #define NARF_SECTOR_ADDRESS_TYPE uint64_t
+#else
+   #error "unrecognized NARF_SECTOR_ADDRESS_BITS value"
+#endif
 
 // Uncomment this for MBR and partitioning functions
 // Useful for real removable media

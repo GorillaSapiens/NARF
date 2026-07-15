@@ -33,7 +33,7 @@ bootloader.bin: bootloader.asm
 	nasm -f bin bootloader.asm -o bootloader.bin
 
 clean:
-	rm -rf narf_details narf_tester narf_fuse narf_mkfs *.o *.d
+	rm -rf narf_details narf_tester narf_fuse narf_mkfs *.o *.d *.su
 
 %.o: %.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@

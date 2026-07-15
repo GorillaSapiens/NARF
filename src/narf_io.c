@@ -14,13 +14,14 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "narf_conf.h"
 #include "narf_io.h"
 
 // This is an example implementation using one 512-byte pread()/pwrite()
 // transfer per NARF sector.  Substitute your own implementation for your
 // hardware.
 
-#define SECTOR_SIZE 512u
+#define SECTOR_SIZE NARF_SECTOR_SIZE
 
 static const char *filename = NULL;
 static int fd = -1;

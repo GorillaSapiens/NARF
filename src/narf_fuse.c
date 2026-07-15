@@ -1385,7 +1385,14 @@ static int my_fsync(const char *path, int isdatasync, struct fuse_file_info *fi)
 
    if (!mounted) return -ENODEV;
 
-   if (fsync(fd) == -1) return -errno;
+   LOCK;
+
+   if (fsync(fd) == -1) {
+      UNLOCK;
+      return -errno;
+   }
+
+   UNLOCK;
    return 0;
 }
 
@@ -1625,7 +1632,14 @@ static int my_fsyncdir(const char *path, int isdatasync, struct fuse_file_info *
 
    if (!mounted) return -ENODEV;
 
-   if (fsync(fd) == -1) return -errno;
+   LOCK;
+
+   if (fsync(fd) == -1) {
+      UNLOCK;
+      return -errno;
+   }
+
+   UNLOCK;
    return 0;
 }
 
