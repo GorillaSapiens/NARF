@@ -3369,6 +3369,61 @@ static bool defrag_tidy_once(bool *changed) {
    return true;
 }
 
+#ifdef DEFRAG_DEBUG
+//! @brief Print the current defrag phase and post-carve payload packing.
+static void defrag_debug_status(int state) {
+   const char *name;
+   NarfSector payload_span;
+   NarfSector free_sectors = 0;
+   NarfSector used_sectors;
+   NarfSector ideal_bottom;
+   double packed;
+
+   switch (state) {
+      case 0: name = "carve"; break;
+      case 1: name = "squish"; break;
+      case 2: name = "widen"; break;
+      case 3: name = "tidy"; break;
+      default: name = "done"; break;
+   }
+
+   // Carve must finish before free space represents all reclaimable payload
+   // sectors.  Until then, only print the phase name.
+   if (state == 0) {
+      fprintf(stderr, "defrag state %d (%s)\n", state, name);
+      return;
+   }
+
+   if (root.m_bottom < 2) {
+      fprintf(stderr, "defrag state %d (%s): invalid bottom\n", state, name);
+      return;
+   }
+
+   payload_span = root.m_bottom - 2;
+   if (!free_sector_count_rec(root.m_free_root, &free_sectors) ||
+       free_sectors > payload_span) {
+      fprintf(stderr, "defrag state %d (%s): packing unavailable\n",
+              state, name);
+      return;
+   }
+
+   used_sectors = payload_span - free_sectors;
+   ideal_bottom = root.m_bottom - free_sectors;
+   packed = payload_span == 0 ? 100.0 :
+            100.0 * (double) used_sectors / (double) payload_span;
+
+   fprintf(stderr,
+           "defrag state %d (%s): packed=%.1f%% free=%llu/%llu "
+           "bottom=%llu ideal=%llu excess=%llu\n",
+           state, name, packed,
+           (unsigned long long) free_sectors,
+           (unsigned long long) payload_span,
+           (unsigned long long) root.m_bottom,
+           (unsigned long long) ideal_bottom,
+           (unsigned long long) free_sectors);
+}
+#endif
+
 //! @brief Defragment the filesystem using internal carve/squish/widen/tidy passes.
 bool narf_defrag(void) {
    bool done = false;
@@ -3379,7 +3434,7 @@ bool narf_defrag(void) {
 
    while (!done) {
 #ifdef DEFRAG_DEBUG
-      fprintf(stderr, "defrag state %d\n", state);
+      defrag_debug_status(state);
 #endif
       switch (state) {
          case 0:
