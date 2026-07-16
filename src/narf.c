@@ -202,7 +202,7 @@ static void invalidate_mount_state(void) {
 }
 
 //! @brief Compute a CRC-32 compatible with zlib/crc32().
-uint32_t crc32(uint32_t crc, const void *data, size_t length) {
+static uint32_t crc32(uint32_t crc, const void *data, size_t length) {
    const uint8_t *p = data;
 
    crc = ~crc;
@@ -3188,8 +3188,8 @@ const char *narf_prefixnext(const char *prefix, const char *previous_key) {
    return prefix_scan_next(prefix, previous_key);
 }
 
-//! @brief Create a key with zero-filled payload storage.
-bool narf_alloc(const char *key, NarfByteSize bytes) {
+//! @brief Create a key with zero-filled payload storage and optional metadata.
+static bool alloc_with_metadata(const char *key, NarfByteSize bytes, const char *metadata) {
    NarfSector length;
    NarfSector start = END;
    NarfSector meta_sector;
@@ -3221,6 +3221,11 @@ bool narf_alloc(const char *key, NarfByteSize bytes) {
    node_work1.m_height = 1;
    strcpy(node_work1.m_key, key);
 
+   if (metadata) {
+      strncpy((char *) node_work1.m_data.m_metadata, metadata,
+            sizeof(node_work1.m_data.m_metadata) - 1);
+   }
+
    if (!write_node(meta_sector, &node_work1, &written) ||
        !data_insert_rec(root.m_data_root, written, key, &newroot)) {
       transaction_rollback();
@@ -3236,8 +3241,13 @@ bool narf_alloc(const char *key, NarfByteSize bytes) {
    return true;
 }
 
-//! @brief Resize an existing key.
-bool narf_realloc(const char *key, NarfByteSize bytes) {
+//! @brief Create a key with zero-filled payload storage.
+bool narf_alloc(const char *key, NarfByteSize bytes) {
+   return alloc_with_metadata(key, bytes, NULL);
+}
+
+//! @brief Resize a key, creating it if absent, and optionally replace metadata.
+bool narf_realloc_with_metadata(const char *key, NarfByteSize bytes, const char *metadata) {
    NarfSector newroot;
    NarfSector old_start;
    NarfSector old_length;
@@ -3250,12 +3260,12 @@ bool narf_realloc(const char *key, NarfByteSize bytes) {
    if (!valid_key(key)) return false;
 
    if (!data_find_sector_rec(root.m_data_root, key, NULL, &node_work1)) {
-      return narf_alloc(key, bytes);
+      return alloc_with_metadata(key, bytes, metadata);
    }
 
    old_bytes = node_work1.m_data.m_bytes;
    if (bytes > old_bytes) {
-      return narf_write(key, NULL, bytes - old_bytes, old_bytes);
+      return narf_write_with_metadata(key, NULL, bytes - old_bytes, old_bytes, metadata);
    }
 
    old_start = node_work1.m_data.m_start;
@@ -3276,14 +3286,6 @@ bool narf_realloc(const char *key, NarfByteSize bytes) {
             return false;
          }
       }
-
-      if (!data_find_sector_rec(root.m_data_root, key, NULL, &node_work1)) {
-         transaction_rollback();
-         return false;
-      }
-      node_work1.m_data.m_start = END;
-      node_work1.m_data.m_length = 0;
-      node_work1.m_data.m_bytes = 0;
    }
    else if (new_length < old_length) {
       if (old_start == END) {
@@ -3303,20 +3305,29 @@ bool narf_realloc(const char *key, NarfByteSize bytes) {
          transaction_rollback();
          return false;
       }
-
-      if (!data_find_sector_rec(root.m_data_root, key, NULL, &node_work1)) {
-         transaction_rollback();
-         return false;
-      }
-      node_work1.m_data.m_length = new_length;
-      node_work1.m_data.m_bytes = bytes;
    }
-   else {
-      if (!data_find_sector_rec(root.m_data_root, key, NULL, &node_work1)) {
-         transaction_rollback();
-         return false;
-      }
-      node_work1.m_data.m_bytes = bytes;
+
+   /* Free-tree COW updates may have changed the data-tree root.  Re-read the
+    * current data node only after those updates, then apply both the new size
+    * and metadata to that current copy. */
+   if (!data_find_sector_rec(root.m_data_root, key, NULL, &node_work1)) {
+      transaction_rollback();
+      return false;
+   }
+
+   if (bytes == 0) {
+      node_work1.m_data.m_start = END;
+      node_work1.m_data.m_length = 0;
+   }
+   else if (new_length < old_length) {
+      node_work1.m_data.m_length = new_length;
+   }
+   node_work1.m_data.m_bytes = bytes;
+
+   if (metadata) {
+      memset(node_work1.m_data.m_metadata, 0, sizeof(node_work1.m_data.m_metadata));
+      strncpy((char *) node_work1.m_data.m_metadata, metadata,
+            sizeof(node_work1.m_data.m_metadata) - 1);
    }
 
    if (!data_update_rec(root.m_data_root, key, &node_work1, &newroot)) {
@@ -3326,7 +3337,6 @@ bool narf_realloc(const char *key, NarfByteSize bytes) {
 
    root.m_data_root = newroot;
 
-
    if (!commit_user_transaction()) {
       transaction_rollback();
       return false;
@@ -3335,9 +3345,9 @@ bool narf_realloc(const char *key, NarfByteSize bytes) {
    return true;
 }
 
-//! @brief Compatibility wrapper around narf_realloc().
-bool narf_realloc_key(const char *key, NarfByteSize bytes) {
-   return narf_realloc(key, bytes);
+//! @brief Resize an existing key.
+bool narf_realloc(const char *key, NarfByteSize bytes) {
+   return narf_realloc_with_metadata(key, bytes, NULL);
 }
 
 //! @brief Delete a key and return its payload extent to free storage.
@@ -3369,11 +3379,6 @@ bool narf_free(const char *key) {
       return false;
    }
    return true;
-}
-
-//! @brief Compatibility wrapper around narf_free().
-bool narf_free_key(const char *key) {
-   return narf_free(key);
 }
 
 //! @brief Rename one key without moving its payload extent.
@@ -3470,7 +3475,7 @@ bool narf_set_metadata(const char *key, void *data) {
 }
 
 //! @brief Atomically write bytes at an offset in a key payload.
-bool narf_write(const char *key, const void *data, NarfByteSize size, NarfByteSize offset) {
+bool narf_write_with_metadata(const char *key, const void *data, NarfByteSize size, NarfByteSize offset, const char *metadata) {
    NarfSector newroot;
    NarfByteSize write_end;
    NarfByteSize new_bytes;
@@ -3500,7 +3505,7 @@ bool narf_write(const char *key, const void *data, NarfByteSize size, NarfByteSi
 
    transaction_begin();
 
-   if (offset == old_bytes && new_bytes > old_bytes) {
+   if (!metadata && offset == old_bytes && new_bytes > old_bytes) {
       if (write_append_fast(key, src, size, old_bytes, old_start, old_length, new_bytes)) {
          if (!commit_user_transaction()) {
             transaction_rollback();
@@ -3593,6 +3598,11 @@ bool narf_write(const char *key, const void *data, NarfByteSize size, NarfByteSi
    node_work1.m_data.m_length = new_length;
    node_work1.m_data.m_bytes = new_bytes;
 
+   if (metadata) {
+      memset(node_work1.m_data.m_metadata, 0, sizeof(node_work1.m_data.m_metadata));
+      strncpy((char *) node_work1.m_data.m_metadata, metadata, sizeof(node_work1.m_data.m_metadata) - 1);
+   }
+
    if (!data_update_rec(root.m_data_root, key, &node_work1, &newroot)) {
       transaction_rollback();
       return false;
@@ -3609,6 +3619,11 @@ bool narf_write(const char *key, const void *data, NarfByteSize size, NarfByteSi
    return true;
 }
 
+//! @brief Atomically write bytes at an offset in a key payload.
+bool narf_write(const char *key, const void *data, NarfByteSize size, NarfByteSize offset) {
+   return narf_write_with_metadata(key, data, size, offset, NULL);
+}
+
 //! @brief Append bytes to a key payload.
 bool narf_append(const char *key, const void *data, NarfByteSize size) {
    NarfByteSize old_size;
@@ -3622,11 +3637,6 @@ bool narf_append(const char *key, const void *data, NarfByteSize size) {
    if (size > ((NarfByteSize) -1) - old_size) return false;
 
    return narf_write(key, data, size, old_size);
-}
-
-//! @brief Compatibility wrapper around narf_append().
-bool narf_append_key(const char *key, const void *data, NarfByteSize size) {
-   return narf_append(key, data, size);
 }
 
 #ifdef NARF_USE_DEFRAG
@@ -4779,11 +4789,15 @@ uint32_t narf_io_sectors(void) {
 
 //! @brief Stub I/O write used when building the standalone layout-details tool.
 bool narf_io_write(uint32_t sector, void *data) {
+   (void) sector;
+   (void) data;
    return false;
 }
 
 //! @brief Stub I/O read used when building the standalone layout-details tool.
 bool narf_io_read(uint32_t sector, void *data) {
+   (void) sector;
+   (void) data;
    return false;
 }
 
@@ -4792,6 +4806,7 @@ int main(int argc, char **argv) {
    (void) argc;
    (void) argv;
 
-   printf("key size : %d bytes\n", sizeof(((Node *) NULL)->m_key));
+   printf("key size : %zu bytes\n", sizeof(((Node *) NULL)->m_key));
+   return 0;
 }
 #endif

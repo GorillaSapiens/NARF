@@ -1,4 +1,6 @@
+narf_realloc() and narf_realloc_with_metadata() again create missing keys, including valid zero-length files, while preserving atomic metadata initialization
 === v3
+atomic FUSE write/truncate metadata updates now preserve metadata across all realloc paths; the successful write path releases the FUSE mutex, dead compatibility aliases are removed, and all C builds use -Wmissing-prototypes
 catalog defrag now includes a relax phase for 0 < spare_count < frontier path length: it stages the complete path in consecutive virgin sectors without consuming the protected reserve, then one ordinary squeeze recovers the staging range and advances m_top
 narf_tester debug output now reports the number of sectors in the active RAM spare list
 spare nodes now form an address-sorted doubly linked RAM cache using m_left as previous and m_right as next; m_next is reserved for transaction rollback linkage

@@ -174,7 +174,8 @@ append hello.txt " plus more"
 
 ### `realloc <key> <bytes>`
 
-Resize an existing key.  Growing a file exposes zero-filled bytes.  Shrinking
+Resize a key, creating it if absent. A missing key is created even when the
+requested length is zero. Growing a file exposes zero-filled bytes. Shrinking
 reduces the byte size and may release storage according to the current core
 implementation.
 

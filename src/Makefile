@@ -1,5 +1,5 @@
 CC     := gcc
-ERR    := -Wall -Wextra -Wpedantic -Werror
+ERR    := -Wall -Wextra -Wpedantic -Wmissing-prototypes -Werror
 CFLAGS := $(ERR) -g -DDEFRAG_DEBUG
 
 TSRC := narf_tester.c narf_io.c narf.c
@@ -17,7 +17,7 @@ MDEP := $(MOBJ:.o=.d)
 all: narf_details narf_tester narf_fuse narf_mkfs
 
 narf_details: narf.c
-	$(CC) -DNARF_DETAILS narf.c -o narf_details
+	$(CC) $(CPPFLAGS) $(CFLAGS) -DNARF_DETAILS narf.c -o narf_details
 
 narf_tester: $(TOBJ)
 	$(CC) $(TOBJ) -o $@ -lreadline

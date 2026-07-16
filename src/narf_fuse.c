@@ -30,7 +30,7 @@ static int partition = -1;
 static bool mounted = false;
 static time_t mount_time;
 
-char *xformpath(const char *path);
+static char *xformpath(const char *path);
 
 #define NARF_XATTR_PREFIX "user."
 #define NARF_META_VERSION "v1"
@@ -569,7 +569,7 @@ static int check_access_bits(const NarfFuseMeta *meta, int mask) {
 
 // Return a newly allocated NARF directory key: no leading slash, one trailing slash.
 // Caller must free the returned string.
-char *xformpath(const char *path) {
+static char *xformpath(const char *path) {
    size_t n;
    char *p;
 
@@ -889,7 +889,7 @@ static int my_mkdir(const char *path, mode_t mode) {
 
    ret = init_metadata_for_key(p, S_IFDIR | (mode & 07777));
    if (ret != 0) {
-      narf_free_key(p);
+      narf_free(p);
       free(p);
       UNLOCK;
       return ret;
@@ -907,7 +907,7 @@ static int my_unlink(const char *path) {
    LOCK;
 
    // Delete a file
-   if (narf_free_key(path + 1)) {
+   if (narf_free(path + 1)) {
       UNLOCK;
       return 0;
    }
@@ -951,7 +951,7 @@ static int my_rmdir(const char *path) {
       return -ENOTEMPTY;
    }
    else {
-      if (!narf_free_key(p)) {
+      if (!narf_free(p)) {
          free(p);
          UNLOCK;
          return -EIO;
@@ -1190,15 +1190,14 @@ static int my_truncate(const char *path, off_t size, struct fuse_file_info *fi) 
       return ret;
    }
 
-   if (!narf_realloc(path + 1, (NarfByteSize) size)) {
+   if (!narf_realloc_with_metadata(path + 1, (NarfByteSize) size, metadata)) {
       UNLOCK;
       return -EIO;
    }
 
-   // ignore metadata write failures
-   (void) write_metadata_string(path + 1, metadata);
    UNLOCK;
-   return ret;
+
+   return 0;
 }
 
 // --- File I/O ---
@@ -1312,15 +1311,12 @@ static int my_write(const char *path, const char *buf, size_t size, off_t offset
       return ret;
    }
 
-   if (!narf_write(path + 1, buf, (NarfByteSize) size, (NarfByteSize) offset)) {
+   if (!narf_write_with_metadata(path + 1, buf, (NarfByteSize) size, (NarfByteSize) offset, metadata)) {
       UNLOCK;
       return -EIO;
    }
 
-   // ignore metadata write failures
-   (void) write_metadata_string(path + 1, metadata);
    UNLOCK;
-
    return (int) size;
 }
 
@@ -1674,7 +1670,7 @@ static int my_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
 
    ret = init_metadata_for_key(path + 1, S_IFREG | (mode & 07777));
    if (ret != 0) {
-      narf_free_key(path + 1);
+      narf_free(path + 1);
       UNLOCK;
       return ret;
    }
@@ -2029,7 +2025,7 @@ static struct fuse_operations my_ops = {
 };
 
 //! @brief Print FUSE front-end usage help.
-void usage(const char *progname) {
+static void usage(const char *progname) {
     fprintf(stderr,
         "Usage: %s <backing_file[:N]> [FUSE options...]\n"
         "  <backing_file> : raw device or image file\n"

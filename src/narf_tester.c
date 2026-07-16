@@ -45,7 +45,7 @@ bool narf_defrag(void) {
 
 const char *tf[] = { "false", "true" };
 
-void gremlins(int s, int n);
+static void gremlins(int s, int n);
 
 typedef void (*TesterCommandFn)(int argc, char **argv);
 
@@ -166,7 +166,7 @@ static const TesterCommand commands[] = {
       "Leave the tester prompt." },
    { "realloc", cmd_realloc,
       "realloc <key> <bytes>\n"
-      "Resize an existing key." },
+      "Resize a key, creating it if absent." },
    { "rename", cmd_rename,
       "rename <old-key> <new-key>\n"
       "Rename a key." },
@@ -744,8 +744,8 @@ static void cmd_free(int argc, char **argv) {
       return;
    }
 
-   printf("narf_free_key(%s)=%s\n",
-         argv[1], tf[result ASSIGN narf_free_key(argv[1])]);
+   printf("narf_free(%s)=%s\n",
+         argv[1], tf[result ASSIGN narf_free(argv[1])]);
 }
 
 
@@ -925,9 +925,9 @@ static void cmd_realloc(int argc, char **argv) {
       return;
    }
 
-   printf("narf_realloc_key(%s,%lu)=%s\n",
+   printf("narf_realloc(%s,%lu)=%s\n",
          argv[1], (unsigned long) size,
-         tf[result ASSIGN narf_realloc_key(argv[1], size)]);
+         tf[result ASSIGN narf_realloc(argv[1], size)]);
 }
 
 static void cmd_rename(int argc, char **argv) {
@@ -1014,7 +1014,7 @@ static void cmd_touch(int argc, char **argv) {
 }
 
 //! @brief Parse and execute one tester command line.
-void process_cmd(const char *buffer) {
+static void process_cmd(const char *buffer) {
    char line[1024];
    char *argv[TESTER_MAX_ARGS];
    int argc;
@@ -1056,7 +1056,7 @@ void process_cmd(const char *buffer) {
    cmd->fn(argc, argv);
 }
 
-char *rname(int l) {
+static char *rname(int l) {
    static char buf[16];
    char *p;
    for (p = buf; p != buf + l; p++) {
@@ -1067,7 +1067,7 @@ char *rname(int l) {
 }
 
 //! @brief Run randomized tester operations for stress testing.
-void gremlins(int s, int n) {
+static void gremlins(int s, int n) {
    char buf[1024];
    int m;
    int l;
@@ -1155,7 +1155,7 @@ static bool line_has_text(const char *line) {
 }
 
 //! @brief Run the interactive tester prompt.
-void loop(void) {
+static void loop(void) {
    g_quit_requested = false;
 
    if (isatty(STDIN_FILENO)) {

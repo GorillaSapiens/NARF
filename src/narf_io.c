@@ -27,15 +27,7 @@ static const char *filename = NULL;
 static int fd = -1;
 static uint64_t total_bytes = 0;
 
-const char *strichr(const char *s, int c) {
-   while (*s) {
-      if (*s == c || *s == (c ^ 0x20)) { // ASSUMES ASCII !!!
-         return s;
-      }
-      s++;
-   }
-   return NULL;
-}
+void narf_io_configure(const char *file);
 
 //! @brief Parse a tester size specification of the form =16M,file.img.
 static bool parse_create_size(const char *file, uint64_t *bytes, const char **name) {

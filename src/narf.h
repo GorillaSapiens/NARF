@@ -136,15 +136,20 @@ const char *narf_prefixnext(const char *prefix, const char *previous_key);
 //! @return true on success.
 bool narf_alloc(const char *key, NarfByteSize bytes);
 
-//! @brief Resize an existing key.
+//! @brief Resize a key, creating it if absent.
 //!
 //! @param key NUL-terminated key string.
 //! @param bytes New byte size.
 //! @return true on success.
 bool narf_realloc(const char *key, NarfByteSize bytes);
 
-//! @brief Compatibility wrapper around narf_realloc().
-bool narf_realloc_key(const char *key, NarfByteSize bytes);
+//! @brief Resize a key, creating it if absent.
+//!
+//! @param key NUL-terminated key string.
+//! @param bytes New byte size.
+//! @param metadata New metadata string, or NULL to preserve existing metadata.
+//! @return true on success.
+bool narf_realloc_with_metadata(const char *key, NarfByteSize bytes, const char *metadata);
 
 //! @brief Rename an existing key.
 //!
@@ -158,9 +163,6 @@ bool narf_rename_key(const char *key, const char *newkey);
 //! @param key Existing key.
 //! @return true on success.
 bool narf_free(const char *key);
-
-//! @brief Compatibility wrapper around narf_free().
-bool narf_free_key(const char *key);
 
 #ifdef NARF_USE_DEFRAG
 //! @brief Defragment the filesystem when supported.
@@ -203,6 +205,16 @@ bool narf_set_metadata(const char *key, void *data);
 //! @return true on success.
 bool narf_write(const char *key, const void *data, NarfByteSize size, NarfByteSize offset);
 
+//! @brief Atomically write bytes at an offset in a key payload, overwriting existing metadata.
+//!
+//! @param key Existing key.
+//! @param data Bytes to write, or NULL to write zeroes.
+//! @param size Number of bytes to write.
+//! @param offset Byte offset in the payload.
+//! @param metadata New metadata string, or NULL to preserve existing metadata.
+//! @return true on success.
+bool narf_write_with_metadata(const char *key, const void *data, NarfByteSize size, NarfByteSize offset, const char *metadata);
+
 //! @brief Append bytes to a key payload.
 //!
 //! @param key Existing key.
@@ -210,9 +222,6 @@ bool narf_write(const char *key, const void *data, NarfByteSize size, NarfByteSi
 //! @param size Number of bytes to append.
 //! @return true on success.
 bool narf_append(const char *key, const void *data, NarfByteSize size);
-
-//! @brief Compatibility wrapper around narf_append().
-bool narf_append_key(const char *key, const void *data, NarfByteSize size);
 
 #ifdef NARF_DEBUG
 //! @brief Print internal NARF root and tree state.
