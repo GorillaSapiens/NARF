@@ -461,6 +461,8 @@ static void retire_node(NarfSector sector) {
 }
 
 static bool alloc_node_sector(NarfSector *sector, NarfSector *rollback_next);
+static bool alloc_spare_node_sector(NarfSector *sector,
+                                    NarfSector *rollback_next);
 
 //! @brief Read a raw single-sector node when its checksum is valid.
 static bool read_node_any(NarfSector sector, Node *out) {
@@ -513,6 +515,34 @@ static bool write_node(NarfSector old_sector, Node *n, NarfSector *new_sector) {
    if (!narf_io_write(root.m_origin + sector, n)) {
       return false;
    }
+
+   *new_sector = sector;
+   return true;
+}
+
+//! @brief COW one committed node using an existing spare sector only.
+//!
+//! Catalog squeeze must never lower m_top merely to move a catalog node away
+//! from the frontier.  This helper therefore refuses to allocate virgin
+//! catalog space.  The consumed spare is still linked into rollback_head, and
+//! the old committed sector is retired exactly as in write_node().
+static bool write_node_from_spare(NarfSector old_sector, Node *n,
+                                  NarfSector *new_sector) {
+   NarfSector sector;
+   NarfSector rollback_next;
+
+   if (!transaction_open || n == NULL || new_sector == NULL) return false;
+   if (old_sector == END || !valid_catalog_node_sector(old_sector)) return false;
+
+   if (!alloc_spare_node_sector(&sector, &rollback_next)) return false;
+   retire_node(old_sector);
+
+   n->m_root_version = transaction_root_version();
+   n->m_next = rollback_next;
+   n->m_checksum = 0;
+   n->m_checksum = crc32(0, n, NARF_SECTOR_SIZE - sizeof(uint32_t));
+
+   if (!narf_io_write(root.m_origin + sector, n)) return false;
 
    *new_sector = sector;
    return true;
@@ -1548,6 +1578,30 @@ static bool alloc_node_sector(NarfSector *sector, NarfSector *rollback_next) {
    }
 
    return false;
+}
+
+//! @brief Allocate one catalog sector from the spare tail, never from m_top.
+//!
+//! This is used by catalog squeeze.  Failure leaves ordinary transaction
+//! rollback responsible for returning any earlier consumed spares.
+static bool alloc_spare_node_sector(NarfSector *sector,
+                                    NarfSector *rollback_next) {
+   if (sector == NULL) return false;
+   if (rollback_next != NULL) *rollback_next = END;
+
+   if (!spare_initialized) {
+      if (transaction_open) return false;
+      if (!initialize_spare()) return false;
+   }
+
+   if (!pop_spare(sector)) return false;
+   if (*sector == END) return false;
+
+   if (!prepare_allocated_node_sector(*sector, rollback_next)) {
+      invalidate_spare_cache();
+      return false;
+   }
+   return true;
 }
 
 //! @brief Insert an extent into the free tree, coalescing adjacent free extents.
@@ -4027,29 +4081,172 @@ static bool defrag_widen_once(bool *changed) {
    return true;
 }
 
-//! @brief Try to reclaim one legacy parked catalog-node sector at root.m_top.
-static bool defrag_tidy_once(bool *changed) {
-   NarfSector newroot;
-   NarfSector removed_sector;
+//! @brief Persist any reclaimable spare prefix at the catalog frontier.
+//!
+//! initialize_spare() may already have raised the in-memory m_top after mount,
+//! while ordinary transaction commits reclaim a prefix as part of committing.
+//! This explicit defrag phase handles both cases: it commits when the active
+//! spare head is the frontier or when the selected on-disk root still contains
+//! an older, lower m_top.
+static bool defrag_reclaim_once(bool *changed) {
+   NarfSector persisted_top;
 
    if (changed == NULL) return false;
    *changed = false;
 
-   if (!valid_node_sector(root.m_top)) {
+   if (!spare_initialized && !initialize_spare()) return false;
+
+   if (!read_root_copy(root.m_origin, root_copy, &root_tmp)) return false;
+   persisted_top = root_tmp.m_top;
+
+   if (spare_head != root.m_top && persisted_top == root.m_top) {
       return true;
    }
 
    transaction_begin();
-   transaction_may_use_reserve = true;
-
-   if (!free_delete_rec(root.m_free_root, 0, END, root.m_top,
-                        &newroot, &removed_sector, NULL)) {
+   if (!commit_user_transaction()) {
       transaction_rollback();
+      return false;
+   }
+
+   *changed = true;
+   return true;
+}
+
+//! @brief Find a catalog-sector target and record its root-to-node path.
+//!
+//! Catalog trees are ordered by key/extent rather than catalog-sector number,
+//! so locating m_top requires a bounded full-tree traversal.  The shared node
+//! buffer is safe because child sectors are copied before recursion.
+static bool defrag_catalog_path_rec(NarfSector sector, NarfSector target,
+                                    NarfSector *path, unsigned depth,
+                                    unsigned *path_length, bool *found) {
+   NarfSector left;
+   NarfSector right;
+
+   if (path == NULL || path_length == NULL || found == NULL) return false;
+   if (sector == END || *found) return true;
+   if (depth > NARF_MAX_AVL_DEPTH) return false;
+   if (!read_node(sector, &node_work0)) return false;
+
+   path[depth] = sector;
+   left = node_work0.m_left;
+   right = node_work0.m_right;
+
+   if (sector == target) {
+      *path_length = depth + 1;
+      *found = true;
       return true;
    }
 
-   root.m_free_root = newroot;
-   root.m_top += 1;
+   if (!defrag_catalog_path_rec(left, target, path, depth + 1,
+                                path_length, found)) {
+      return false;
+   }
+   return defrag_catalog_path_rec(right, target, path, depth + 1,
+                                  path_length, found);
+}
+
+//! @brief Return whether the spare list contains at least count sectors.
+static bool defrag_have_spares(unsigned count, bool *enough) {
+   NarfSector sector;
+
+   if (enough == NULL) return false;
+   *enough = false;
+   if (!spare_initialized && !initialize_spare()) return false;
+
+   sector = spare_tail;
+   for (unsigned i = 0; i < count; i++) {
+      if (sector == END) return true;
+      if (!read_spare_record(sector, &node_tmp)) return false;
+      sector = node_tmp.m_left;
+   }
+
+   *enough = true;
+   return true;
+}
+
+//! @brief Relocate the live catalog node at m_top and its ancestor path.
+//!
+//! The tree shape, keys, payloads, heights, and ordering are unchanged.  Only
+//! the sector addresses on one root-to-node path change.  Every replacement is
+//! allocated from the high-address spare tail; m_top is never lowered.  The
+//! normal commit path then retires the old path and reclaims the old target at
+//! the frontier.
+static bool defrag_squeeze_once(bool *changed) {
+   NarfSector path[NARF_MAX_AVL_DEPTH + 1];
+   NarfSector replacement = END;
+   NarfSector target;
+   unsigned path_length = 0;
+   bool found = false;
+   bool free_tree = false;
+   bool enough;
+
+   if (changed == NULL) return false;
+   *changed = false;
+
+   if (!spare_initialized && !initialize_spare()) return false;
+   if (root.m_top >= root.m_total_sectors) return true;
+
+   target = root.m_top;
+
+   if (!defrag_catalog_path_rec(root.m_data_root, target, path, 0,
+                                &path_length, &found)) {
+      return false;
+   }
+   if (!found) {
+      if (!defrag_catalog_path_rec(root.m_free_root, target, path, 0,
+                                   &path_length, &found)) {
+         return false;
+      }
+      free_tree = found;
+   }
+
+   // An initialized spare cache accounts for every unreachable catalog sector.
+   // If m_top is neither spare nor reachable, the cache/tree state is invalid.
+   if (!found) return false;
+
+   if (!defrag_have_spares(path_length, &enough)) return false;
+   if (!enough) return true;
+
+   transaction_begin();
+
+   for (unsigned i = path_length; i > 0; i--) {
+      unsigned index = i - 1;
+      NarfSector old_sector = path[index];
+
+      if (!read_node(old_sector, &node_work0)) {
+         transaction_rollback();
+         return false;
+      }
+
+      if (index + 1 < path_length) {
+         NarfSector old_child = path[index + 1];
+
+         if (node_work0.m_left == old_child) {
+            node_work0.m_left = replacement;
+         }
+         else if (node_work0.m_right == old_child) {
+            node_work0.m_right = replacement;
+         }
+         else {
+            transaction_rollback();
+            return false;
+         }
+      }
+
+      if (!write_node_from_spare(old_sector, &node_work0, &replacement)) {
+         transaction_rollback();
+         return false;
+      }
+   }
+
+   if (free_tree) {
+      root.m_free_root = replacement;
+   }
+   else {
+      root.m_data_root = replacement;
+   }
 
    if (!commit_user_transaction()) {
       transaction_rollback();
@@ -4096,7 +4293,8 @@ static bool defrag_debug_status(int state, NarfSector start,
       case 0: name = "carve"; break;
       case 1: name = "squish"; break;
       case 2: name = "widen"; break;
-      case 3: name = "tidy"; break;
+      case 3: name = "reclaim"; break;
+      case 4: name = "squeeze"; break;
       default: name = "done"; break;
    }
 
@@ -4145,7 +4343,7 @@ static bool defrag_debug_status(int state, NarfSector start,
 }
 #endif
 
-//! @brief Defragment the filesystem using internal carve/squish/widen/tidy passes.
+//! @brief Defragment payload and catalog storage with bounded internal passes.
 bool narf_defrag(void) {
    bool done = false;
    bool changed;
@@ -4202,8 +4400,13 @@ bool narf_defrag(void) {
             else state--;
             break;
          case 3:
-            if (!defrag_tidy_once(&changed)) return false;
+            if (!defrag_reclaim_once(&changed)) return false;
             if (!changed) state++;
+            break;
+         case 4:
+            if (!defrag_squeeze_once(&changed)) return false;
+            if (!changed) state++;
+            else state--;
             break;
          default:
             done = true;

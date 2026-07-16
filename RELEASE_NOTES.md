@@ -15,7 +15,7 @@ recursive FUSE directory moves now use prefix iterators that enumerate every des
 file-backed narf_io_write() implementations fsync each completed sector write so write ordering is durable without extending the platform I/O interface
 fixed power-loss and failure-path catalog corruption
 full FUSE support including mode, mtime, uid, gid, xattr
-incremental defrag uses carve/squish/widen/tidy implementation phases internally
+incremental defrag replaces legacy tidy with catalog reclaim and squeeze phases: reclaim persists m_top contraction, while squeeze COW-relocates a live frontier node and its ancestor path into existing high-address spares without lowering m_top or consuming the reserve
 metadata spare reuse now uses a RAM-only spare list rebuilt from catalog-node reachability instead of a root inline spare stack
 redundant successor retirement is removed, and a retired-list overflow rebuilds the complete RAM spare chain after commit
 DEFRAG_DEBUG reports how far the lowest free hole has advanced from its

@@ -246,8 +246,11 @@ widen a free hole by moving the adjacent data extent to the current payload
 frontier; the following squish pass can then move data back down and leave the
 free space higher in the payload area.  Free-extent insertion coalesces adjacent
 holes and lowers `root.m_bottom` when a merged free extent reaches the payload
-frontier.  A final tidy pass exists for legacy parked catalog-node records, but
-current images usually have no such records.
+frontier.  Catalog reclaim then persists any contiguous spare prefix at
+`root.m_top`.  Finally, catalog squeeze may relocate the live node at `m_top`
+and its root-to-node path into existing high-address spares.  This lets `m_top`
+move upward without consuming virgin reserve space.  Squeeze stops safely when
+there are not enough spares for the complete path.
 
 ### `debug`
 

@@ -294,14 +294,26 @@ The internal phases are implementation details, not public operations:
    to the current payload frontier, advances `root.m_bottom`, and reinserts the
    combined old hole plus old data location as a larger free extent.  The next
    squish pass can then bubble that data back down as `[data][free]`.
-4. **tidy** is a legacy cleanup pass for zero-length parked catalog-node records
-   at `root.m_top`.  Current free-extent insertion discards zero-length extents,
-   so tidy normally has nothing to do on freshly-written images.
+4. **reclaim** persists upward movement of the catalog frontier.  The sorted
+   spare cache already exposes a contiguous low-address spare prefix, and normal
+   commits merge that prefix with catalog nodes retired by the transaction.
+   Reclaim also persists an `m_top` increase discovered by the mount-time spare
+   rebuild even when no payload move was needed.
+5. **squeeze** compacts live catalog nodes at the frontier.  If `root.m_top` is a
+   live data-tree or free-tree node, squeeze finds its root-to-node path.  When
+   at least one existing high-address spare is available for every node on that
+   path, it clones the path bottom-up into spare sectors and commits the new tree
+   root.  The old path is then retired, so the normal catalog-frontier contraction
+   can raise `m_top`.  Squeeze never lowers `m_top` and never consumes the virgin
+   metadata reserve merely to compact catalog storage.  If too few spares exist,
+   it stops without modifying the filesystem.
 
-A successful carve, squish, widen, or tidy action commits its own transaction.
-After a successful widen, `narf_defrag()` returns to squish so newly widened holes
-can be used immediately.  The public command still remains just `narf_defrag()`;
-callers do not choose individual phases.
+A successful carve, squish, widen, reclaim, or squeeze action commits its own
+transaction.  After a successful widen, `narf_defrag()` returns to squish so
+newly widened holes can be used immediately.  After a successful squeeze, it
+returns to reclaim and then tries the next live frontier node.  The public
+command still remains just `narf_defrag()`; callers do not choose individual
+phases.
 
 Each defrag step writes payload data before committing catalog state.  The old
 committed root therefore remains usable if power is lost before the step's new
