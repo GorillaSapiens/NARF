@@ -84,8 +84,7 @@ typedef struct PACKED {
    NarfSector   m_bottom;                  \
    NarfSector   m_top;                     \
    NarfSector   m_origin;                  \
-   uint32_t     m_root_version;            \
-   uint32_t     m_lfsr_seed;
+   uint32_t     m_root_version;
 
 typedef struct {
    ROOT_FIELDS
@@ -112,6 +111,8 @@ typedef struct PACKED {
 static_assert(sizeof(Root) == NARF_SECTOR_SIZE, "Root wrong size");
 
 #define NODE_FIELDS             \
+   uint32_t     m_root_version; \
+   NarfSector   m_next;         \
    NarfSector   m_left;         \
    NarfSector   m_right;        \
    uint8_t      m_height;       \
@@ -120,8 +121,6 @@ static_assert(sizeof(Root) == NARF_SECTOR_SIZE, "Root wrong size");
       FreePayload  m_free;      \
       SparePayload m_spare;     \
    };                           \
-   uint32_t     m_root_version; \
-   uint32_t     m_node_version;
 
 typedef struct PACKED {
    NODE_FIELDS
@@ -256,46 +255,6 @@ static void transaction_rollback(void) {
    transaction_open = false;
 }
 
-//! @brief Advance the persisted 32-bit LFSR and return the next token.
-static uint32_t lfsr_next(void) {
-   uint32_t lsb;
-
-   if (lfsr_state == 0) {
-      lfsr_state = 0x1f2e3d4c;
-   }
-
-   lsb = lfsr_state & 1;
-   lfsr_state >>= 1;
-
-   if (lsb) {
-      lfsr_state ^= 0x80200003u;
-   }
-
-   if (lfsr_state == 0) {
-      lfsr_state = 0x1f2e3d4c;
-   }
-
-   return lfsr_state;
-}
-
-//! @brief Build an initial nonzero LFSR seed for a new filesystem.
-static uint32_t mkfs_lfsr_seed(NarfSector origin, NarfSector size) {
-   uint32_t seed;
-
-   seed = (uint32_t) rand();
-   seed ^= (uint32_t) time(NULL);
-   seed ^= (uint32_t) getpid();
-   seed ^= (uint32_t) origin;
-   seed ^= (uint32_t) size;
-   seed ^= 0x1f2e3d4c;
-
-   if (seed == 0) {
-      seed = 0x1f2e3d4c;
-   }
-
-   return seed;
-}
-
 //! @brief Validate that the mounted root looks like a current NARF root.
 static bool verify(void) {
    if (root.m_signature != SIGNATURE) return false;
@@ -398,7 +357,6 @@ static void root_to_disk(Root *out) {
    out->m_top = root.m_top;
    out->m_origin = root.m_origin;
    out->m_root_version = root.m_root_version;
-   out->m_lfsr_seed = root.m_lfsr_seed;
 }
 
 //! @brief Load the compact in-memory root state from a validated on-disk sector.
@@ -414,7 +372,6 @@ static void root_from_disk(const Root *in) {
    root.m_top = in->m_top;
    root.m_origin = in->m_origin;
    root.m_root_version = in->m_root_version;
-   root.m_lfsr_seed = in->m_lfsr_seed;
 }
 
 //! @brief Read and validate one of the two root copies.
@@ -439,7 +396,6 @@ static bool read_root_copy_version(NarfSector origin, int which, uint32_t *versi
 static bool commit_root(void) {
    int dest = 1 - root_copy;
    root.m_root_version = transaction_root_version();
-   root.m_lfsr_seed = lfsr_next();
    root_to_disk(&root_tmp);
    root_tmp.m_checksum = 0;
    root_tmp.m_checksum = crc32(0, &root_tmp, NARF_SECTOR_SIZE - sizeof(uint32_t));
@@ -464,8 +420,6 @@ static bool init_root(NarfSector origin, NarfSector size) {
    root.m_top = size;
    root.m_origin = origin;
    root.m_root_version = 0;
-   root.m_lfsr_seed = mkfs_lfsr_seed(origin, size);
-   lfsr_state = root.m_lfsr_seed;
 
    root_to_disk(&root_tmp);
    root_tmp.m_checksum = 0;
@@ -522,7 +476,6 @@ static bool read_node_any(NarfSector sector, Node *out) {
    if (!valid_node_sector(sector)) return false;
    if (!narf_io_read(root.m_origin + sector, out)) return false;
    if (out->m_checksum != node_checksum(out)) return false;
-   if (out->m_node_version == 0) return false;
    return true;
 }
 
@@ -534,22 +487,6 @@ static bool read_node(NarfSector sector, Node *out) {
    return true;
 }
 
-//! @brief Choose a nonzero node version that differs from visible contents.
-static uint32_t new_node_version(uint32_t old, NarfSector sector) {
-   uint32_t v;
-   uint32_t current = 0;
-
-   if (valid_node_sector(sector) && read_node_any(sector, &node_tmp)) {
-      current = node_tmp.m_node_version;
-   }
-
-   do {
-      v = lfsr_next();
-   } while (v == 0 || v == old || v == current);
-
-   return v;
-}
-
 //! @brief Write a catalog node, reusing transaction-private sectors or COWing committed ones.
 //!
 //! If old_sector names a node already written by this transaction, the same sector
@@ -557,7 +494,6 @@ static uint32_t new_node_version(uint32_t old, NarfSector sector) {
 //! committed sector is retired for post-commit recycling.
 static bool write_node(NarfSector old_sector, Node *n, NarfSector *new_sector) {
    uint32_t txver;
-   uint32_t oldver = 0;
    NarfSector sector = END;
 
    if (n == NULL || new_sector == NULL) return false;
@@ -565,17 +501,13 @@ static bool write_node(NarfSector old_sector, Node *n, NarfSector *new_sector) {
    txver = transaction_root_version();
 
    if (old_sector != END && read_node(old_sector, &node_tmp)) {
-      oldver = node_tmp.m_node_version;
-
       if (node_tmp.m_root_version == txver) {
          sector = old_sector;
-         n->m_node_version = oldver;
       }
    }
 
    if (sector == END) {
       if (!alloc_node_sector(&sector)) return false;
-      n->m_node_version = new_node_version(oldver, sector);
       retire_node(old_sector);
    }
 
@@ -601,10 +533,6 @@ static bool push_spare(NarfSector sector) {
    spare_work.m_height = 1;
    spare_work.m_spare.m_next = spare_head;
    spare_work.m_root_version = root.m_root_version;
-   spare_work.m_node_version = lfsr_next();
-   if (spare_work.m_node_version == 0) {
-      spare_work.m_node_version = 1;
-   }
    spare_work.m_checksum = 0;
    spare_work.m_checksum = crc32(0, &spare_work, NARF_SECTOR_SIZE - sizeof(uint32_t));
 
@@ -638,10 +566,6 @@ static bool prepare_allocated_node_sector(NarfSector sector) {
    spare_work.m_height = 1;
    spare_work.m_spare.m_next = END;
    spare_work.m_root_version = transaction_root_version();
-   spare_work.m_node_version = lfsr_next();
-   if (spare_work.m_node_version == 0) {
-      spare_work.m_node_version = 1;
-   }
    spare_work.m_checksum = 0;
    spare_work.m_checksum = crc32(0, &spare_work, NARF_SECTOR_SIZE - sizeof(uint32_t));
 
@@ -1721,10 +1645,6 @@ static bool mount_root_copy(NarfSector start, NarfSector available_sectors,
    }
 
    root_copy = which;
-   lfsr_state = root.m_lfsr_seed;
-   if (lfsr_state == 0) {
-      lfsr_state = 0x1f2e3d4c;
-   }
 
    if (!initialize_spare()) {
       invalidate_mount_state();
@@ -4019,7 +3939,6 @@ void narf_debug(void) {
    printf("root.m_data_root     = [%08x]\n", root.m_data_root);
    printf("root.m_free_root     = [%08x]\n", root.m_free_root);
    printf("spare_head           = [%08x]\n", spare_head);
-   printf("root.m_lfsr_seed     = %08x\n", root.m_lfsr_seed);
    printf("root.m_count         = %08x\n", root.m_count);
    printf("root.m_bottom        = %08x\n", root.m_bottom);
    printf("root.m_top           = %08x\n", root.m_top);
