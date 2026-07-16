@@ -255,8 +255,9 @@ there are not enough spares for the complete path.
 ### `debug`
 
 Print internal root/data-tree/free-tree/RAM-spare-list information, including
-`spare_head`, `spare_tail`, and `root.m_top`.  This requires `NARF_DEBUG` to be
-enabled in the build.  The first mount after opening an image reconstructs the
+`spare_head`, `spare_tail`, the number of sectors currently in the spare list,
+and `root.m_top`.  This requires `NARF_DEBUG` to be enabled in the build.  The
+first mount after opening an image reconstructs the
 RAM-only, address-sorted doubly linked spare list with a 512-byte bitmap covering
 4096 catalog sectors per frame.  The highest spare is allocated first, while a
 contiguous spare prefix at `m_top` is returned to the open gap.  Unmounting and

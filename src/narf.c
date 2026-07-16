@@ -4556,8 +4556,34 @@ static void print_tree(NarfSector sector, int indent, uint64_t pattern, const ch
    print_tree(right, indent + 1, tree_right_pattern(pattern, indent), label);
 }
 
+//! @brief Count sectors in the active RAM spare-list cache for debug output.
+static bool debug_spare_sector_count(NarfSector *result) {
+   NarfSector sector = spare_head;
+   NarfSector previous = END;
+   NarfSector count = 0;
+
+   if (result == NULL) return false;
+   if ((spare_head == END) != (spare_tail == END)) return false;
+
+   while (sector != END) {
+      if (count >= root.m_total_sectors) return false;
+      if (!read_spare_record(sector, &node_work1)) return false;
+      if (node_work1.m_left != previous) return false;
+
+      previous = sector;
+      sector = node_work1.m_right;
+      count++;
+   }
+
+   if (previous != spare_tail) return false;
+   *result = count;
+   return true;
+}
+
 //! @brief Print internal NARF root and tree state.
 void narf_debug(void) {
+   NarfSector spare_sectors;
+   bool spare_count_valid = debug_spare_sector_count(&spare_sectors);
    printf("root.m_signature     = %08x '%.4s'\n", root.m_signature, root.m_sigbytes);
    printf("root.m_narf_version  = %08x\n", root.m_narf_version);
    printf("root.m_root_version  = %u copy=%d\n", root.m_root_version, root_copy);
@@ -4566,6 +4592,10 @@ void narf_debug(void) {
    printf("root.m_free_root     = [%08x]\n", root.m_free_root);
    printf("spare_head           = [%08x]\n", spare_head);
    printf("spare_tail           = [%08x]\n", spare_tail);
+   if (spare_count_valid)
+      printf("spare sectors        = %u\n", (unsigned) spare_sectors);
+   else
+      printf("spare sectors        = invalid\n");
    printf("rollback_head        = [%08x]\n", rollback_head);
    printf("root.m_count         = %08x\n", root.m_count);
    printf("root.m_bottom        = %08x\n", root.m_bottom);

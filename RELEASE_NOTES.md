@@ -1,4 +1,5 @@
 === v3
+narf_tester debug output now reports the number of sectors in the active RAM spare list
 spare nodes now form an address-sorted doubly linked RAM cache using m_left as previous and m_right as next; m_next is reserved for transaction rollback linkage
 catalog allocation consumes the highest-address spare first, and ordinary rollback appends the consumed high suffix back to the spare tail
 root.m_top now advances across contiguous low spare and retired catalog sectors, returning them to the virgin payload/catalog gap
