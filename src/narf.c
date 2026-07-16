@@ -4461,7 +4461,7 @@ static bool defrag_debug_status(int state, NarfSector start,
    // Carve may create holes, so establish the fixed range only after
    // carve has completed.
    if (state == 0 || !have_progress_range) {
-      fprintf(stderr, "defrag state %d (%6s)\n", state, name);
+      fprintf(stderr, "defrag state %d (%7s)\n", state, name);
       return true;
    }
 
@@ -4483,7 +4483,7 @@ static bool defrag_debug_status(int state, NarfSector start,
 
    if (free_sector == END) {
       fprintf(stderr,
-              "defrag state %d (%6s): progress=%3.1f%% "
+              "defrag state %d (%7s): progress=%3.1f%% "
               "lowest=none start=%llu finish=%llu bottom=%llu\n",
               state, name, progress,
               (unsigned long long) start,
@@ -4744,6 +4744,185 @@ static bool debug_spare_sector_count(NarfSector *result) {
    return true;
 }
 
+//! @brief Find the data extent with the lowest start at or after target.
+//! @param sector Current data-tree catalog sector.
+//! @param target Lowest payload start to consider.
+//! @param result_sector Catalog sector of the best match, or END if none.
+//! @param result_start Payload start of the best match, or END if none.
+static bool closest_payload_data(NarfSector sector, NarfSector target,
+                                 NarfSector *result_sector,
+                                 NarfSector *result_start) {
+   NarfSector left;
+   NarfSector right;
+   NarfSector start;
+
+   if (result_sector == NULL || result_start == NULL) return false;
+   if (sector == END) return true;
+   if (!read_node(sector, &node_work0)) return false;
+
+   left = node_work0.m_left;
+   right = node_work0.m_right;
+   start = node_work0.m_data.m_start;
+
+   // Zero-length files have no payload extent and use END as their start.
+   if (start != END && start >= target &&
+       (*result_sector == END || start < *result_start)) {
+      *result_sector = sector;
+      *result_start = start;
+   }
+
+   if (!closest_payload_data(left, target, result_sector, result_start)) {
+      return false;
+   }
+   if (!closest_payload_data(right, target, result_sector, result_start)) {
+      return false;
+   }
+
+   return true;
+}
+
+//! @brief Find the free extent with the lowest start at or after target.
+//! @param sector Current free-tree catalog sector.
+//! @param target Lowest payload start to consider.
+//! @param result_sector Catalog sector of the best match, or END if none.
+//! @param result_start Payload start of the best match, or END if none.
+static bool closest_payload_free(NarfSector sector, NarfSector target,
+                                 NarfSector *result_sector,
+                                 NarfSector *result_start) {
+   NarfSector left;
+   NarfSector right;
+   NarfSector start;
+
+   if (result_sector == NULL || result_start == NULL) return false;
+   if (sector == END) return true;
+   if (!read_node(sector, &node_work0)) return false;
+
+   left = node_work0.m_left;
+   right = node_work0.m_right;
+   start = node_work0.m_free.m_start;
+
+   if (start >= target &&
+       (*result_sector == END || start < *result_start)) {
+      *result_sector = sector;
+      *result_start = start;
+   }
+
+   if (!closest_payload_free(left, target, result_sector, result_start)) {
+      return false;
+   }
+   if (!closest_payload_free(right, target, result_sector, result_start)) {
+      return false;
+   }
+
+   return true;
+}
+
+//! @brief Print one data extent in the linear payload map.
+static void print_linear_data(const Node *node, bool overlap) {
+   printf("[%08x:%3u] data '%.*s' (%6u bytes)",
+          node->m_data.m_start, (unsigned) node->m_data.m_length,
+          (int) KEYSIZE, node->m_key, (unsigned) node->m_data.m_bytes);
+   print_debug_metadata(node->m_data.m_metadata);
+   if (overlap) printf(" OVERLAP");
+   printf("\n");
+}
+
+//! @brief Print payload allocation in ascending sector order.
+static void print_linear(void) {
+   NarfSector data_target = 2;
+   NarfSector free_target = 2;
+   NarfSector covered_until = 2;
+
+   printf("[%08x:%3u] root 0\n", 0u, 1u);
+   printf("[%08x:%3u] root 1\n", 1u, 1u);
+
+   for (;;) {
+      NarfSector data_sector = END;
+      NarfSector free_sector = END;
+      NarfSector data_start = END;
+      NarfSector free_start = END;
+      NarfSector extent_start;
+      NarfSector extent_length;
+      NarfSector extent_end;
+      bool is_data;
+      bool overlap;
+
+      if (!closest_payload_data(root.m_data_root, data_target,
+                                &data_sector, &data_start)) {
+         printf("(unable to read data tree)\n");
+         return;
+      }
+      if (!closest_payload_free(root.m_free_root, free_target,
+                                &free_sector, &free_start)) {
+         printf("(unable to read free tree)\n");
+         return;
+      }
+
+      if (data_sector == END && free_sector == END) break;
+
+      // Process equal starts as data first.  The free extent remains pending
+      // and will be printed as an overlap on the next iteration.
+      is_data = data_start <= free_start;
+      if (is_data) {
+         if (!read_node(data_sector, &node_work0)) {
+            printf("(unable to read data node [%08x])\n", data_sector);
+            return;
+         }
+         extent_start = node_work0.m_data.m_start;
+         extent_length = node_work0.m_data.m_length;
+      }
+      else {
+         if (!read_node(free_sector, &node_work0)) {
+            printf("(unable to read free node [%08x])\n", free_sector);
+            return;
+         }
+         extent_start = node_work0.m_free.m_start;
+         extent_length = node_work0.m_free.m_length;
+      }
+
+      if (extent_length == 0 || extent_start == END ||
+          extent_start > END - extent_length) {
+         printf("[%08x:%3u] invalid %s extent\n",
+                extent_start, (unsigned) extent_length,
+                is_data ? "data" : "free");
+         return;
+      }
+      extent_end = extent_start + extent_length;
+
+      if (extent_start > covered_until) {
+         printf("[%08x:%3u] unaccounted\n", covered_until,
+                (unsigned) (extent_start - covered_until));
+      }
+      overlap = extent_start < covered_until;
+
+      if (is_data) {
+         print_linear_data(&node_work0, overlap);
+         data_target = extent_start + 1;
+      }
+      else {
+         printf("[%08x:%3u] free%s\n", extent_start,
+                (unsigned) extent_length, overlap ? " OVERLAP" : "");
+         free_target = extent_start + 1;
+      }
+
+      if (extent_end > covered_until) covered_until = extent_end;
+   }
+
+   if (covered_until < root.m_bottom) {
+      printf("[%08x:%3u] unaccounted\n", covered_until,
+             (unsigned) (root.m_bottom - covered_until));
+   }
+   else if (covered_until > root.m_bottom) {
+      printf("(%08x) payload extends %u sector%s past bottom\n",
+             root.m_bottom, (unsigned) (covered_until - root.m_bottom),
+             covered_until - root.m_bottom == 1 ? "" : "s");
+   }
+
+   printf("(%08x) bottom\n", root.m_bottom);
+   printf("(%08x) top\n", root.m_top);
+   printf("(%08x) total\n", root.m_total_sectors);
+}
+
 //! @brief Print internal NARF root and tree state.
 void narf_debug(void) {
    NarfSector spare_sectors;
@@ -4768,6 +4947,8 @@ void narf_debug(void) {
    print_tree(root.m_data_root, 0, 0, "D");
    printf("free tree:\n");
    print_tree(root.m_free_root, 0, 0, "F");
+   printf("memory map:\n");
+   print_linear();
 }
 #endif
 
