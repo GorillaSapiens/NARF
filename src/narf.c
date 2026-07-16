@@ -4827,6 +4827,212 @@ static void print_linear_data(const Node *node, bool overlap) {
    printf("\n");
 }
 
+//! @brief Mark one catalog sector in a debug bitmap frame.
+static void print_linear_catalog_mark(uint8_t map[NARF_SECTOR_SIZE],
+                                      NarfSector frame_begin,
+                                      NarfSector sector) {
+   NarfSector offset = sector - frame_begin;
+
+   map[offset >> 3] |= (uint8_t) (1u << (offset & 7u));
+}
+
+//! @brief Return whether one catalog sector is marked in a debug bitmap frame.
+static bool print_linear_catalog_marked(const uint8_t map[NARF_SECTOR_SIZE],
+                                        NarfSector frame_begin,
+                                        NarfSector sector) {
+   NarfSector offset = sector - frame_begin;
+
+   return (map[offset >> 3] & (uint8_t) (1u << (offset & 7u))) != 0;
+}
+
+//! @brief Mark catalog sectors reachable from one tree inside one frame.
+static bool print_linear_catalog_mark_tree_rec(
+   NarfSector sector,
+   NarfSector frame_begin,
+   NarfSector frame_end,
+   uint8_t map[NARF_SECTOR_SIZE],
+   unsigned depth) {
+   NarfSector left;
+   NarfSector right;
+
+   if (sector == END) return true;
+   if (depth > NARF_MAX_AVL_DEPTH) return false;
+   if (sector < root.m_top || sector >= root.m_total_sectors) return false;
+   if (!read_node(sector, &node_work0)) return false;
+
+   left = node_work0.m_left;
+   right = node_work0.m_right;
+
+   if (sector >= frame_begin && sector < frame_end) {
+      print_linear_catalog_mark(map, frame_begin, sector);
+   }
+
+   if (!print_linear_catalog_mark_tree_rec(left, frame_begin, frame_end,
+                                            map, depth + 1)) {
+      return false;
+   }
+   return print_linear_catalog_mark_tree_rec(right, frame_begin, frame_end,
+                                              map, depth + 1);
+}
+
+//! @brief Mark spare-list sectors inside one catalog frame.
+static bool print_linear_catalog_mark_spares(
+   NarfSector frame_begin,
+   NarfSector frame_end,
+   uint8_t map[NARF_SECTOR_SIZE]) {
+   NarfSector sector = spare_head;
+   NarfSector previous = END;
+   NarfSector count = 0;
+
+   if (!spare_initialized) return false;
+   if ((spare_head == END) != (spare_tail == END)) return false;
+
+   while (sector != END) {
+      NarfSector next;
+
+      if (count >= root.m_total_sectors) return false;
+      if (!read_spare_record(sector, &node_work1)) return false;
+      if (node_work1.m_left != previous) return false;
+
+      next = node_work1.m_right;
+      if (sector >= frame_begin && sector < frame_end) {
+         print_linear_catalog_mark(map, frame_begin, sector);
+      }
+
+      previous = sector;
+      sector = next;
+      count++;
+   }
+
+   return previous == spare_tail;
+}
+
+//! @brief Print one live data-tree catalog node.
+static void print_linear_catalog_data(NarfSector sector,
+                                      const Node *node,
+                                      bool free_overlap,
+                                      bool spare_overlap) {
+   printf("[%08x] data node '%.*s' payload=[%08x:%u] bytes=%u "
+          "left=[%08x] right=[%08x] h=%u",
+          sector, (int) KEYSIZE, node->m_key,
+          node->m_data.m_start, (unsigned) node->m_data.m_length,
+          (unsigned) node->m_data.m_bytes,
+          node->m_left, node->m_right, node->m_height);
+   print_debug_metadata(node->m_data.m_metadata);
+   if (free_overlap) printf(" FREE-TREE OVERLAP");
+   if (spare_overlap) printf(" SPARE OVERLAP");
+   printf("\n");
+}
+
+//! @brief Print one live free-tree catalog node.
+static void print_linear_catalog_free(NarfSector sector,
+                                      const Node *node,
+                                      bool spare_overlap) {
+   printf("[%08x] free node payload=[%08x:%u] "
+          "left=[%08x] right=[%08x] h=%u",
+          sector, node->m_free.m_start, (unsigned) node->m_free.m_length,
+          node->m_left, node->m_right, node->m_height);
+   if (spare_overlap) printf(" SPARE OVERLAP");
+   printf("\n");
+}
+
+//! @brief Print every catalog sector as live-tree storage or spare storage.
+static void print_linear_catalog(void) {
+   static uint8_t data_map[NARF_SECTOR_SIZE];
+   static uint8_t free_map[NARF_SECTOR_SIZE];
+   static uint8_t spare_map[NARF_SECTOR_SIZE];
+   NarfSector frame_begin;
+
+   if (root.m_top > root.m_total_sectors) {
+      printf("(invalid catalog range: top is above total)\n");
+      return;
+   }
+
+   frame_begin = root.m_top;
+   while (frame_begin < root.m_total_sectors) {
+      NarfSector frame_end;
+      NarfSector sector;
+      bool spare_map_valid;
+
+      if (root.m_total_sectors - frame_begin < SPARE_FRAME_SECTORS) {
+         frame_end = root.m_total_sectors;
+      }
+      else {
+         frame_end = frame_begin + SPARE_FRAME_SECTORS;
+      }
+
+      memset(data_map, 0, sizeof(data_map));
+      memset(free_map, 0, sizeof(free_map));
+      memset(spare_map, 0, sizeof(spare_map));
+
+      if (!print_linear_catalog_mark_tree_rec(root.m_data_root,
+                                               frame_begin, frame_end,
+                                               data_map, 0)) {
+         printf("(unable to map data-tree catalog sectors)\n");
+         return;
+      }
+      if (!print_linear_catalog_mark_tree_rec(root.m_free_root,
+                                               frame_begin, frame_end,
+                                               free_map, 0)) {
+         printf("(unable to map free-tree catalog sectors)\n");
+         return;
+      }
+
+      spare_map_valid = print_linear_catalog_mark_spares(frame_begin,
+                                                          frame_end,
+                                                          spare_map);
+      if (!spare_map_valid) {
+         memset(spare_map, 0, sizeof(spare_map));
+         printf("(unable to map spare-list catalog sectors in "
+                "[%08x:%u])\n",
+                frame_begin, (unsigned) (frame_end - frame_begin));
+      }
+
+      for (sector = frame_begin; sector < frame_end; sector++) {
+         bool in_data = print_linear_catalog_marked(data_map,
+                                                     frame_begin, sector);
+         bool in_free = print_linear_catalog_marked(free_map,
+                                                     frame_begin, sector);
+         bool in_spare = spare_map_valid &&
+                          print_linear_catalog_marked(spare_map,
+                                                      frame_begin, sector);
+
+         if (in_data) {
+            if (!read_node(sector, &node_work0)) {
+               printf("[%08x] unreadable data node\n", sector);
+               continue;
+            }
+            print_linear_catalog_data(sector, &node_work0,
+                                      in_free, in_spare);
+         }
+         else if (in_free) {
+            if (!read_node(sector, &node_work0)) {
+               printf("[%08x] unreadable free node\n", sector);
+               continue;
+            }
+            print_linear_catalog_free(sector, &node_work0, in_spare);
+         }
+         else if (in_spare) {
+            if (!read_spare_record(sector, &node_work1)) {
+               printf("[%08x] unreadable spare\n", sector);
+               continue;
+            }
+            printf("[%08x] spare previous=[%08x] next=[%08x]\n",
+                   sector, node_work1.m_left, node_work1.m_right);
+         }
+         else if (spare_map_valid) {
+            printf("[%08x] unaccounted catalog sector\n", sector);
+         }
+         else {
+            printf("[%08x] catalog sector; spare membership unknown\n",
+                   sector);
+         }
+      }
+
+      frame_begin = frame_end;
+   }
+}
+
 //! @brief Print payload allocation in ascending sector order.
 static void print_linear(void) {
    NarfSector data_target = 2;
@@ -4920,6 +5126,7 @@ static void print_linear(void) {
 
    printf("(%08x) bottom\n", root.m_bottom);
    printf("(%08x) top\n", root.m_top);
+   print_linear_catalog();
    printf("(%08x) total\n", root.m_total_sectors);
 }
 
