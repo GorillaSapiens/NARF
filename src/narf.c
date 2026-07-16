@@ -154,7 +154,10 @@ static RootState root;
 static RootSnapshot saved_root;
 static Node node_work0;
 static Node node_work1;
-static Node spare_work;
+#define SPARE_FRAME_SECTORS ((NarfSector) (NARF_SECTOR_SIZE * 8u))
+static uint8_t spare_work[NARF_SECTOR_SIZE];
+static_assert(sizeof(spare_work) * 8u == SPARE_FRAME_SECTORS,
+              "spare bitmap frame size mismatch");
 static int root_copy = 0;
 static char dir_key[KEYSIZE];
 static char key_work[KEYSIZE];
@@ -505,22 +508,29 @@ static bool write_node(NarfSector old_sector, Node *n, NarfSector *new_sector) {
    return true;
 }
 
-//! @brief Push one unreachable catalog-node sector onto the RAM spare list.
-static bool push_spare(NarfSector sector) {
+//! @brief Push one unreachable catalog-node sector using the supplied scratch node.
+static bool push_spare_with_work(NarfSector sector, Node *spare) {
+   if (spare == NULL) return false;
    if (!valid_node_sector(sector)) return true;
 
-   memset(&spare_work, 0, sizeof(spare_work));
-   spare_work.m_left = END;
-   spare_work.m_right = END;
-   spare_work.m_height = 1;
-   spare_work.m_next = spare_head;
-   spare_work.m_root_version = root.m_root_version;
-   spare_work.m_checksum = 0;
-   spare_work.m_checksum = crc32(0, &spare_work, NARF_SECTOR_SIZE - sizeof(uint32_t));
+   memset(spare, 0, sizeof(*spare));
+   spare->m_left = END;
+   spare->m_right = END;
+   spare->m_height = 1;
+   spare->m_next = spare_head;
+   spare->m_root_version = root.m_root_version;
+   spare->m_checksum = 0;
+   spare->m_checksum = crc32(0, spare, NARF_SECTOR_SIZE - sizeof(uint32_t));
 
-   if (!narf_io_write(root.m_origin + sector, &spare_work)) return false;
+   if (!narf_io_write(root.m_origin + sector, spare)) return false;
    spare_head = sector;
    return true;
+}
+
+//! @brief Push one unreachable catalog-node sector onto the RAM spare list.
+static bool push_spare(NarfSector sector) {
+   /* Do not borrow node_work0/1 here: write_node() may own either one. */
+   return push_spare_with_work(sector, &node_tmp);
 }
 
 //! @brief Pop one sector from the RAM spare list.
@@ -530,29 +540,30 @@ static bool pop_spare(NarfSector *result) {
    *result = spare_head;
    if (spare_head == END) return true;
 
-   if (!read_node_any(spare_head, &spare_work)) return false;
-   spare_head = spare_work.m_next;
+   if (!read_node_any(spare_head, &node_tmp)) return false;
+   spare_head = node_tmp.m_next;
    return true;
 }
 
 //! @brief Mark an allocated catalog sector as transaction-private and link it for rollback.
 static bool prepare_allocated_node_sector(NarfSector sector, NarfSector *rollback_next) {
+   Node *node = &node_tmp;
    NarfSector next;
 
    if (!transaction_open) return false;
    if (!valid_node_sector(sector)) return false;
 
    next = rollback_head;
-   memset(&spare_work, 0, sizeof(spare_work));
-   spare_work.m_left = END;
-   spare_work.m_right = END;
-   spare_work.m_height = 1;
-   spare_work.m_next = next;
-   spare_work.m_root_version = transaction_root_version();
-   spare_work.m_checksum = 0;
-   spare_work.m_checksum = crc32(0, &spare_work, NARF_SECTOR_SIZE - sizeof(uint32_t));
+   memset(node, 0, sizeof(*node));
+   node->m_left = END;
+   node->m_right = END;
+   node->m_height = 1;
+   node->m_next = next;
+   node->m_root_version = transaction_root_version();
+   node->m_checksum = 0;
+   node->m_checksum = crc32(0, node, NARF_SECTOR_SIZE - sizeof(uint32_t));
 
-   if (!narf_io_write(root.m_origin + sector, &spare_work)) return false;
+   if (!narf_io_write(root.m_origin + sector, node)) return false;
 
    rollback_head = sector;
    if (rollback_next != NULL) *rollback_next = next;
@@ -577,11 +588,11 @@ static void transaction_rollback(void) {
    while (sector != END) {
       NarfSector next;
 
-      if (!read_node_any(sector, &spare_work)) {
+      if (!read_node_any(sector, &node_tmp)) {
          spare_restore_ok = false;
          break;
       }
-      next = spare_work.m_next;
+      next = node_tmp.m_next;
 
       if (sector >= saved_top && !push_spare(sector)) {
          spare_restore_ok = false;
@@ -607,59 +618,102 @@ static void transaction_rollback(void) {
    transaction_open = false;
 }
 
-//! @brief Return whether target occurs in this catalog-node tree.
-static bool reachable_tree_rec(NarfSector sector, NarfSector target, bool *result) {
+//! @brief Mark one sector as reachable in the current spare-rebuild frame.
+static void mark_spare_frame_sector(NarfSector frame_begin, NarfSector sector) {
+   NarfSector offset = sector - frame_begin;
+
+   spare_work[offset >> 3] |= (uint8_t) (1u << (offset & 7u));
+}
+
+//! @brief Return whether one sector is marked in the current spare-rebuild frame.
+static bool spare_frame_sector_marked(NarfSector frame_begin, NarfSector sector) {
+   NarfSector offset = sector - frame_begin;
+
+   return (spare_work[offset >> 3] & (uint8_t) (1u << (offset & 7u))) != 0;
+}
+
+//! @brief Walk one catalog tree and mark live nodes inside the current frame.
+//!
+//! Only node_work0 is needed. Child sectors are copied into local variables
+//! before recursion, so recursive reads may freely overwrite the shared buffer.
+static bool mark_spare_frame_tree_rec(NarfSector sector,
+                                      NarfSector frame_begin,
+                                      NarfSector frame_end,
+                                      unsigned depth) {
    NarfSector left;
    NarfSector right;
 
-   if (result == NULL) return false;
-   if (*result) return true;
    if (sector == END) return true;
+   if (depth > NARF_MAX_AVL_DEPTH) return false;
+   if (!read_node(sector, &node_work0)) return false;
 
-   if (sector == target) {
-      *result = true;
-      return true;
+   left = node_work0.m_left;
+   right = node_work0.m_right;
+
+   if (sector >= frame_begin && sector < frame_end) {
+      mark_spare_frame_sector(frame_begin, sector);
    }
 
-   if (!read_node(sector, &spare_work)) return false;
-   left = spare_work.m_left;
-   right = spare_work.m_right;
-
-   if (!reachable_tree_rec(left, target, result)) return false;
-   return reachable_tree_rec(right, target, result);
+   if (!mark_spare_frame_tree_rec(left, frame_begin, frame_end, depth + 1)) {
+      return false;
+   }
+   return mark_spare_frame_tree_rec(right, frame_begin, frame_end, depth + 1);
 }
 
-//! @brief Return whether a sector is reachable from the committed data root.
-static bool reachable_data(NarfSector sector, bool *result) {
-   if (result == NULL) return false;
-   *result = false;
-   return reachable_tree_rec(root.m_data_root, sector, result);
-}
-
-//! @brief Return whether a sector is reachable from the committed free root.
-static bool reachable_free(NarfSector sector, bool *result) {
-   if (result == NULL) return false;
-   *result = false;
-   return reachable_tree_rec(root.m_free_root, sector, result);
-}
-
-//! @brief Rebuild the RAM spare list from unreachable catalog-node sectors.
+//! @brief Rebuild the RAM spare list with a framed reachability bitmap.
+//!
+//! spare_work is a 512-byte bitmap representing 4096 catalog sectors. For each
+//! frame, both live trees are walked once and their in-frame nodes are marked;
+//! every unmarked catalog sector in the frame is unreachable and becomes spare.
 static bool initialize_spare(void) {
-   NarfSector sector;
-   bool in_data;
-   bool in_free;
+   NarfSector frame_begin;
 
    spare_head = END;
    spare_initialized = false;
 
-   for (sector = root.m_top; sector < root.m_total_sectors; sector++) {
-      if (!reachable_data(sector, &in_data)) return false;
-      if (in_data) continue;
+   if (root.m_top >= root.m_total_sectors) {
+      spare_initialized = true;
+      return true;
+   }
 
-      if (!reachable_free(sector, &in_free)) return false;
-      if (in_free) continue;
+   frame_begin = ((root.m_total_sectors - 1) / SPARE_FRAME_SECTORS) *
+                 SPARE_FRAME_SECTORS;
 
-      if (!push_spare(sector)) return false;
+   for (;;) {
+      NarfSector frame_end;
+      NarfSector scan_begin;
+      NarfSector sector;
+
+      if (root.m_total_sectors - frame_begin < SPARE_FRAME_SECTORS) {
+         frame_end = root.m_total_sectors;
+      }
+      else {
+         frame_end = frame_begin + SPARE_FRAME_SECTORS;
+      }
+
+      memset(spare_work, 0, sizeof(spare_work));
+
+      if (!mark_spare_frame_tree_rec(root.m_data_root,
+                                     frame_begin, frame_end, 0)) {
+         return false;
+      }
+      if (!mark_spare_frame_tree_rec(root.m_free_root,
+                                     frame_begin, frame_end, 0)) {
+         return false;
+      }
+
+      scan_begin = frame_begin < root.m_top ? root.m_top : frame_begin;
+
+      /* Scan downward so pushing produces a low-to-high spare chain. */
+      for (sector = frame_end; sector > scan_begin;) {
+         sector--;
+         if (!spare_frame_sector_marked(frame_begin, sector)) {
+            if (!push_spare_with_work(sector, &node_work1)) return false;
+         }
+      }
+
+      if (frame_begin <= root.m_top) break;
+      frame_begin -= SPARE_FRAME_SECTORS;
    }
 
    spare_initialized = true;

@@ -181,9 +181,28 @@ root.
 
 The current implementation keeps the spare list head in RAM only.  Spare-list
 links are written into the spare sectors themselves, but the list is cache state,
-not durable filesystem truth.  On mount, NARF rebuilds the RAM spare list by
-scanning catalog-node sectors from `root.m_top` to `root.m_total_sectors` and
-linking sectors that are not reachable from the committed data or free roots.
+not durable filesystem truth.  On mount, NARF rebuilds the RAM spare list with a
+framed reachability bitmap.  The 512-byte `spare_work` buffer is treated as 4096
+bits, representing one 4096-sector catalog frame.  For each frame, NARF clears
+the bitmap, walks the committed data and free trees once each, and marks every
+live catalog node whose sector falls inside the frame.  Unmarked sectors in the
+intersection of that frame and `[root.m_top, root.m_total_sectors)` are
+unreachable and are linked onto the spare list.  Frames are processed from the
+high end of the volume downward.
+
+Each tree walk uses only `node_work0`: after reading a node, the left and right
+child sectors are copied into local variables before recursion, so subsequent
+recursive reads may overwrite the shared buffer.  `node_work1` constructs and
+writes spare records while `spare_work` retains the frame bitmap.  General
+allocator paths use the existing sector scratch instead of borrowing either node
+work buffer, because `write_node()` may be holding its caller's node in `work0`
+or `work1`.  The rebuild therefore uses fixed sector-buffer memory.  If the
+catalog region has `C` sectors and the two live trees contain `L` nodes, the
+blocked scan costs
+approximately `O(C + L * ceil(C / 4096))`, rather than performing two complete
+tree searches for each of the `C` candidate sectors.  A damaged or cyclic tree
+is stopped by the catalog-read validation and AVL-depth bound; rebuild failure
+leaves the disposable spare cache uninitialized.
 
 During a transaction, every allocated catalog sector is linked through its
 `m_next` field onto a RAM-headed rollback chain.  Rewriting a transaction-private

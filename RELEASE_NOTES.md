@@ -1,6 +1,7 @@
 === v3
 on-disk format version is now 10 after removing the persisted node-version/LFSR fields and adding the generic node m_next field
 transaction-private catalog nodes now form a RAM-headed rollback chain through m_next, allowing ordinary rollback to restore consumed spares without rebuilding the whole spare cache
+initial spare-list reconstruction now uses spare_work as a 4096-sector reachability bitmap, walking each live tree once per frame instead of once per candidate catalog sector
 mount and fast fsck now perform linear-time catalog bounds, key, payload, AVL, ordering, and count checks; fsck deep additionally checks duplicate references, cycles, overlaps, and complete allocation coverage
 mount now requires the root's stored origin to match the requested origin,
 rejects filesystems extending past the device or selected MBR partition, and
