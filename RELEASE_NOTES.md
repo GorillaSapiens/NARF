@@ -1,4 +1,5 @@
 === v3
+catalog defrag now includes a relax phase for 0 < spare_count < frontier path length: it stages the complete path in consecutive virgin sectors without consuming the protected reserve, then one ordinary squeeze recovers the staging range and advances m_top
 narf_tester debug output now reports the number of sectors in the active RAM spare list
 spare nodes now form an address-sorted doubly linked RAM cache using m_left as previous and m_right as next; m_next is reserved for transaction rollback linkage
 catalog allocation consumes the highest-address spare first, and ordinary rollback appends the consumed high suffix back to the spare tail

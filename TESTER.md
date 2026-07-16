@@ -247,10 +247,15 @@ frontier; the following squish pass can then move data back down and leave the
 free space higher in the payload area.  Free-extent insertion coalesces adjacent
 holes and lowers `root.m_bottom` when a merged free extent reaches the payload
 frontier.  Catalog reclaim then persists any contiguous spare prefix at
-`root.m_top`.  Finally, catalog squeeze may relocate the live node at `m_top`
-and its root-to-node path into existing high-address spares.  This lets `m_top`
-move upward without consuming virgin reserve space.  Squeeze stops safely when
-there are not enough spares for the complete path.
+`root.m_top`.  Catalog relax handles a nonempty spare list that is shorter
+than the live root-to-`m_top` path: if the ordinary virgin gap can hold the
+complete path without entering the protected reserve, relax moves that path into
+consecutive virgin sectors while preserving every spare.  The immediately
+following catalog squeeze then relocates the temporary path into the now
+sufficient high-address spares, returns the temporary range to the gap, and
+raises `m_top` beyond its old position.  With zero spares the catalog is already
+compact; with too little virgin room, relax and squeeze stop safely without a
+partial move.
 
 ### `debug`
 

@@ -548,6 +548,36 @@ static bool write_node_from_spare(NarfSector old_sector, Node *n,
    return true;
 }
 
+//! @brief COW one committed node into a pre-reserved virgin catalog sector.
+//!
+//! Catalog relax reserves a contiguous range immediately below the old m_top
+//! and assigns exact destinations so the old frontier node lands at the new
+//! m_top.  No spare is consumed.  The new sector is still linked into the
+//! ordinary rollback chain, so failure restores the old root and makes the
+//! reserved range virgin again.
+static bool write_node_to_virgin(NarfSector old_sector, NarfSector sector,
+                                 Node *n, NarfSector *new_sector) {
+   NarfSector rollback_next;
+
+   if (!transaction_open || n == NULL || new_sector == NULL) return false;
+   if (old_sector == END || !valid_catalog_node_sector(old_sector)) return false;
+   if (!valid_catalog_node_sector(sector)) return false;
+   if (sector >= saved_root.m_root.m_top) return false;
+
+   rollback_next = rollback_head;
+   n->m_root_version = transaction_root_version();
+   n->m_next = rollback_next;
+   n->m_checksum = 0;
+   n->m_checksum = crc32(0, n, NARF_SECTOR_SIZE - sizeof(uint32_t));
+
+   if (!narf_io_write(root.m_origin + sector, n)) return false;
+
+   rollback_head = sector;
+   retire_node(old_sector);
+   *new_sector = sector;
+   return true;
+}
+
 //! @brief Write one spare-list record with explicit lower/higher neighbors.
 //!
 //! Spare nodes are not authoritative filesystem state.  They reuse m_left as
@@ -4147,22 +4177,141 @@ static bool defrag_catalog_path_rec(NarfSector sector, NarfSector target,
                                   path_length, found);
 }
 
-//! @brief Return whether the spare list contains at least count sectors.
-static bool defrag_have_spares(unsigned count, bool *enough) {
+//! @brief Count spare sectors up to a caller-supplied limit.
+//!
+//! Stopping at limit avoids a complete list walk when the caller only needs to
+//! distinguish zero, insufficient, and sufficient spare capacity.
+static bool defrag_count_spares_up_to(unsigned limit, unsigned *count) {
    NarfSector sector;
 
-   if (enough == NULL) return false;
-   *enough = false;
+   if (count == NULL) return false;
+   *count = 0;
    if (!spare_initialized && !initialize_spare()) return false;
 
    sector = spare_tail;
-   for (unsigned i = 0; i < count; i++) {
-      if (sector == END) return true;
+   while (sector != END && *count < limit) {
       if (!read_spare_record(sector, &node_tmp)) return false;
       sector = node_tmp.m_left;
+      (*count)++;
    }
 
-   *enough = true;
+   return true;
+}
+
+//! @brief Return whether the spare list contains at least count sectors.
+static bool defrag_have_spares(unsigned count, bool *enough) {
+   unsigned available;
+
+   if (enough == NULL) return false;
+   if (!defrag_count_spares_up_to(count, &available)) return false;
+   *enough = available >= count;
+   return true;
+}
+
+//! @brief Temporarily move the frontier path wholly into virgin catalog space.
+//!
+//! Relax is used only when there is at least one spare but fewer spares than
+//! the path length.  It reserves path_length consecutive virgin sectors below
+//! m_top without consuming the metadata reserve, then clones the path so the
+//! old frontier node occupies the new m_top and the tree root occupies the
+//! highest reserved sector.  The old path becomes spare after commit.  One
+//! following squeeze then has path_length plus the original spare count
+//! available, returns the temporary range to the gap, and advances beyond the
+//! old frontier.
+static bool defrag_relax_once(bool *changed) {
+   NarfSector path[NARF_MAX_AVL_DEPTH + 1];
+   NarfSector replacement = END;
+   NarfSector target;
+   NarfSector old_top;
+   NarfSector new_top;
+   NarfSector gap;
+   NarfSector reserve;
+   unsigned path_length = 0;
+   unsigned spare_count;
+   bool found = false;
+   bool free_tree = false;
+
+   if (changed == NULL) return false;
+   *changed = false;
+
+   if (!spare_initialized && !initialize_spare()) return false;
+   if (root.m_top >= root.m_total_sectors) return true;
+
+   target = root.m_top;
+   if (!defrag_catalog_path_rec(root.m_data_root, target, path, 0,
+                                &path_length, &found)) {
+      return false;
+   }
+   if (!found) {
+      if (!defrag_catalog_path_rec(root.m_free_root, target, path, 0,
+                                   &path_length, &found)) {
+         return false;
+      }
+      free_tree = found;
+   }
+   if (!found || path_length == 0) return false;
+
+   if (!defrag_count_spares_up_to(path_length, &spare_count)) return false;
+   if (spare_count == 0 || spare_count >= path_length) return true;
+
+   if (root.m_top < root.m_bottom) return false;
+   gap = root.m_top - root.m_bottom;
+   reserve = metadata_reserve();
+   if ((NarfSector) path_length > gap) return true;
+   if (gap - (NarfSector) path_length < reserve) return true;
+
+   old_top = root.m_top;
+   new_top = old_top - (NarfSector) path_length;
+
+   transaction_begin();
+   root.m_top = new_top;
+
+   for (unsigned i = path_length; i > 0; i--) {
+      unsigned index = i - 1;
+      NarfSector old_sector = path[index];
+      NarfSector destination =
+         new_top + (NarfSector) (path_length - 1 - index);
+
+      if (!read_node(old_sector, &node_work0)) {
+         transaction_rollback();
+         return false;
+      }
+
+      if (index + 1 < path_length) {
+         NarfSector old_child = path[index + 1];
+
+         if (node_work0.m_left == old_child) {
+            node_work0.m_left = replacement;
+         }
+         else if (node_work0.m_right == old_child) {
+            node_work0.m_right = replacement;
+         }
+         else {
+            transaction_rollback();
+            return false;
+         }
+      }
+
+      if (!write_node_to_virgin(old_sector, destination, &node_work0,
+                                &replacement)) {
+         transaction_rollback();
+         return false;
+      }
+   }
+
+   if (free_tree) {
+      root.m_free_root = replacement;
+   }
+   else {
+      root.m_data_root = replacement;
+   }
+
+   if (!commit_user_transaction()) {
+      transaction_rollback();
+      return false;
+   }
+
+   *changed = true;
    return true;
 }
 
@@ -4294,7 +4443,8 @@ static bool defrag_debug_status(int state, NarfSector start,
       case 1: name = "squish"; break;
       case 2: name = "widen"; break;
       case 3: name = "reclaim"; break;
-      case 4: name = "squeeze"; break;
+      case 4: name = "relax"; break;
+      case 5: name = "squeeze"; break;
       default: name = "done"; break;
    }
 
@@ -4404,9 +4554,13 @@ bool narf_defrag(void) {
             if (!changed) state++;
             break;
          case 4:
+            if (!defrag_relax_once(&changed)) return false;
+            state++;
+            break;
+         case 5:
             if (!defrag_squeeze_once(&changed)) return false;
             if (!changed) state++;
-            else state--;
+            else state = 3;
             break;
          default:
             done = true;
