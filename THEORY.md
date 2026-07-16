@@ -60,7 +60,6 @@ root block contains:
 * sector size and total sector count
 * root references for the data tree and free tree
 * allocation frontier values: `m_bottom` for payload growth and `m_top` for catalog-node growth
-* a persisted LFSR seed for node-version generation
 * `m_root_version`, the 32-bit root commit/version counter
 * checksum
 
@@ -81,11 +80,10 @@ Nodes and references
 --------------------
 
 Internal node references are plain catalog-node sector numbers.  `END` is the
-null reference.  A referenced sector must contain a valid node checksum and a
-nonzero `m_node_version`, but tree links no longer carry an expected node
-version beside the sector number.
+null reference.  A referenced sector must contain a valid node checksum; tree
+links carry only the sector number.
 
-There are three similarly named version fields with deliberately different jobs:
+There are three version fields with deliberately different jobs:
 
 * `Root.m_narf_version` is the on-disk NARF format version.  Mount rejects root
   sectors whose format version does not match the compiled code.
@@ -94,8 +92,6 @@ There are three similarly named version fields with deliberately different jobs:
 * `Node.m_root_version` records the transaction/root generation that wrote that
   catalog node.  During an open transaction, `write_node()` may rewrite a node in
   place only when this field equals the current transaction root version.
-* `Node.m_node_version` is a nonzero per-node token used as a sanity/debugging
-  guard for node contents.  It is no longer part of child references.
 
 Each node contains:
 
@@ -106,13 +102,13 @@ Each node contains:
   * free nodes store free-extent start sector and length
 * key string, used by data nodes and empty for free nodes
 * `m_root_version`, the transaction/root generation that last wrote the node
-* `m_node_version`, a nonzero per-node version token
+* `m_next`, a generic non-tree link used by allocator cache state
 * checksum
 
-Node versions come from a 32-bit LFSR.  The current LFSR state is stored in the
-root when a transaction commits, so remounting continues from the committed
-state.  When a node sector is written into a fresh/COW sector, NARF rejects
-version 0 and avoids the currently visible version in that sector.
+For a committed live tree node, `m_next` is ignored.  In an unreachable spare
+node it links the RAM-headed spare chain.  In a node allocated by the current
+transaction it links the RAM-headed transaction rollback chain.  A node cannot
+be both spare and transaction-private, so the two uses do not conflict.
 
 Trees
 -----
@@ -189,21 +185,32 @@ not durable filesystem truth.  On mount, NARF rebuilds the RAM spare list by
 scanning catalog-node sectors from `root.m_top` to `root.m_total_sectors` and
 linking sectors that are not reachable from the committed data or free roots.
 
-During a transaction, NARF may pop from this RAM spare list and overwrite the
-popped sector before the root commit.  If the transaction rolls back after
-consuming a spare sector, the RAM spare list is discarded and rebuilt before it
-is trusted again.  Transaction-retired sectors are tracked in a fixed-size RAM
-array while a transaction is open; after a successful commit, those known-dead
-sectors are safely linked onto the RAM spare list.  If the retired array
-overflows, NARF
+During a transaction, every allocated catalog sector is linked through its
+`m_next` field onto a RAM-headed rollback chain.  Rewriting a transaction-private
+node in place preserves that link.  On ordinary software rollback, NARF walks
+the chain: sectors that were already inside the saved catalog region are put
+back on the spare list, while sectors obtained by lowering `m_top` become virgin
+again when the saved root frontier is restored.  If a rollback-chain node cannot
+be read or rewritten, the disposable spare cache is invalidated and rebuilt
+later.
+
+The rollback head is not persistent.  After power loss, the committed root still
+determines the correct live set, but mount must rebuild the spare list from
+reachability.  After a successful commit, the rollback head is simply discarded;
+its stale `m_next` values in newly committed live nodes are ignored.
+
+Transaction-retired sectors are tracked in a fixed-size RAM array while a
+transaction is open; after a successful commit, those known-dead sectors are
+safely linked onto the RAM spare list.  If the retired array overflows, NARF
 rebuilds the entire spare chain from the newly committed roots.  If spare
 recycling or rebuilding fails, the RAM spare cache is discarded and retried by a
 later transaction or mount.  There is no on-disk retired-page list or full
 catalog-node garbage collector.
 
-Rollback on normal runtime failure restores the in-memory root state and clears
-transaction-local dirty/retired tracking.  It does not need to erase abandoned
-node sectors; committed roots decide what is reachable.
+Rollback on normal runtime failure restores the in-memory root state, restores
+consumed spares through the rollback chain, and clears transaction-local retired
+tracking.  It does not need to erase virgin abandoned node sectors; the restored
+`m_top` places them outside the catalog region again.
 
 Payload data writes follow the same commit rule.  Overwrites and most resizes
 allocate/write a fresh extent, copy any unchanged old data, write the new bytes,

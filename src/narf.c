@@ -17,7 +17,7 @@
 #endif
 
 #define SIGNATURE 0x4652414E // little endian 'NARF'
-#define VERSION 0x00000009
+#define VERSION 0x0000000A
 #define END INVALID_NAF
 #define NARF_MIN_FS_SECTORS 4
 
@@ -106,6 +106,8 @@ typedef struct PACKED {
 } Root;
 static_assert(sizeof(Root) == NARF_SECTOR_SIZE, "Root wrong size");
 
+// m_next is ignored for committed live nodes.  It links either the spare
+// chain or the open transaction's rollback chain for noncommitted nodes.
 #define NODE_FIELDS             \
    uint32_t     m_root_version; \
    NarfSector   m_next;         \
@@ -141,7 +143,6 @@ static_assert(sizeof(SectorScratch) == NARF_SECTOR_SIZE, "Node sector scratch si
 
 typedef struct {
    RootState m_root;
-   uint32_t  m_lfsr_state;
 } RootSnapshot;
 
 static SectorScratch sector_work;
@@ -157,17 +158,17 @@ static Node spare_work;
 static int root_copy = 0;
 static char dir_key[KEYSIZE];
 static char key_work[KEYSIZE];
-static uint32_t lfsr_state = 1;
 static bool transaction_may_use_reserve = false;
 static bool transaction_open = false;
 static bool spare_initialized = false;
-static bool spare_consumed_in_transaction = false;
 static NarfSector spare_head = END;
+static NarfSector rollback_head = END;
 static NarfSector retired_nodes[RETIRED_MAX];
 static unsigned retired_node_count = 0;
 static bool retired_node_overflow = false;
 
 static bool initialize_spare(void);
+static void transaction_rollback(void);
 
 //! @brief Clear all state that could make the core appear mounted.
 static void invalidate_mount_state(void) {
@@ -177,12 +178,11 @@ static void invalidate_mount_state(void) {
 
    memset(&saved_root, 0, sizeof(saved_root));
    root_copy = 0;
-   lfsr_state = 1;
    transaction_may_use_reserve = false;
    transaction_open = false;
    spare_initialized = false;
-   spare_consumed_in_transaction = false;
    spare_head = END;
+   rollback_head = END;
    retired_node_count = 0;
    retired_node_overflow = false;
 }
@@ -227,27 +227,11 @@ static void transaction_begin(void) {
    }
 
    saved_root.m_root = root;
-   saved_root.m_lfsr_state = lfsr_state;
    transaction_may_use_reserve = false;
-   spare_consumed_in_transaction = false;
+   rollback_head = END;
    retired_node_count = 0;
    retired_node_overflow = false;
    transaction_open = true;
-}
-
-//! @brief Restore the root state saved by transaction_begin().
-static void transaction_rollback(void) {
-   root = saved_root.m_root;
-   lfsr_state = saved_root.m_lfsr_state;
-   transaction_may_use_reserve = false;
-   if (spare_consumed_in_transaction) {
-      spare_head = END;
-      spare_initialized = false;
-   }
-   spare_consumed_in_transaction = false;
-   retired_node_count = 0;
-   retired_node_overflow = false;
-   transaction_open = false;
 }
 
 //! @brief Validate that the mounted root looks like a current NARF root.
@@ -463,7 +447,7 @@ static void retire_node(NarfSector sector) {
    }
 }
 
-static bool alloc_node_sector(NarfSector *sector);
+static bool alloc_node_sector(NarfSector *sector, NarfSector *rollback_next);
 
 //! @brief Read a raw single-sector node when its checksum is valid.
 static bool read_node_any(NarfSector sector, Node *out) {
@@ -490,6 +474,7 @@ static bool read_node(NarfSector sector, Node *out) {
 static bool write_node(NarfSector old_sector, Node *n, NarfSector *new_sector) {
    uint32_t txver;
    NarfSector sector = END;
+   NarfSector rollback_next = END;
 
    if (n == NULL || new_sector == NULL) return false;
 
@@ -498,15 +483,17 @@ static bool write_node(NarfSector old_sector, Node *n, NarfSector *new_sector) {
    if (old_sector != END && read_node(old_sector, &node_tmp)) {
       if (node_tmp.m_root_version == txver) {
          sector = old_sector;
+         rollback_next = node_tmp.m_next;
       }
    }
 
    if (sector == END) {
-      if (!alloc_node_sector(&sector)) return false;
+      if (!alloc_node_sector(&sector, &rollback_next)) return false;
       retire_node(old_sector);
    }
 
    n->m_root_version = txver;
+   n->m_next = rollback_next;
    n->m_checksum = 0;
    n->m_checksum = crc32(0, n, NARF_SECTOR_SIZE - sizeof(uint32_t));
 
@@ -545,26 +532,79 @@ static bool pop_spare(NarfSector *result) {
 
    if (!read_node_any(spare_head, &spare_work)) return false;
    spare_head = spare_work.m_next;
-   if (transaction_open) {
-      spare_consumed_in_transaction = true;
-   }
    return true;
 }
 
-//! @brief Mark an allocated catalog sector as transaction-private.
-static bool prepare_allocated_node_sector(NarfSector sector) {
+//! @brief Mark an allocated catalog sector as transaction-private and link it for rollback.
+static bool prepare_allocated_node_sector(NarfSector sector, NarfSector *rollback_next) {
+   NarfSector next;
+
+   if (!transaction_open) return false;
    if (!valid_node_sector(sector)) return false;
 
+   next = rollback_head;
    memset(&spare_work, 0, sizeof(spare_work));
    spare_work.m_left = END;
    spare_work.m_right = END;
    spare_work.m_height = 1;
-   spare_work.m_next = END;
+   spare_work.m_next = next;
    spare_work.m_root_version = transaction_root_version();
    spare_work.m_checksum = 0;
    spare_work.m_checksum = crc32(0, &spare_work, NARF_SECTOR_SIZE - sizeof(uint32_t));
 
-   return narf_io_write(root.m_origin + sector, &spare_work);
+   if (!narf_io_write(root.m_origin + sector, &spare_work)) return false;
+
+   rollback_head = sector;
+   if (rollback_next != NULL) *rollback_next = next;
+   return true;
+}
+
+//! @brief Restore catalog sectors consumed by the open transaction.
+//!
+//! Allocated sectors are linked through Node.m_next.  Sectors at or above the
+//! saved catalog frontier were preexisting spares and are returned to the RAM
+//! spare list.  Sectors below that frontier came from lowering m_top and become
+//! virgin again when the saved root is restored.
+static void transaction_rollback(void) {
+   NarfSector sector = rollback_head;
+   NarfSector saved_top = saved_root.m_root.m_top;
+   NarfSector guard = 0;
+   bool spare_restore_ok = true;
+
+   root = saved_root.m_root;
+   transaction_may_use_reserve = false;
+
+   while (sector != END) {
+      NarfSector next;
+
+      if (!read_node_any(sector, &spare_work)) {
+         spare_restore_ok = false;
+         break;
+      }
+      next = spare_work.m_next;
+
+      if (sector >= saved_top && !push_spare(sector)) {
+         spare_restore_ok = false;
+         break;
+      }
+
+      sector = next;
+      guard++;
+      if (guard > root.m_total_sectors) {
+         spare_restore_ok = false;
+         break;
+      }
+   }
+
+   rollback_head = END;
+   if (!spare_restore_ok) {
+      spare_head = END;
+      spare_initialized = false;
+   }
+
+   retired_node_count = 0;
+   retired_node_overflow = false;
+   transaction_open = false;
 }
 
 //! @brief Return whether target occurs in this catalog-node tree.
@@ -1139,10 +1179,11 @@ static NarfSector metadata_reserve(void) {
 }
 
 //! @brief Allocate a single-sector catalog node from spare or high-end space.
-static bool alloc_node_sector(NarfSector *sector) {
+static bool alloc_node_sector(NarfSector *sector, NarfSector *rollback_next) {
    NarfSector reserve;
 
    if (sector == NULL) return false;
+   if (rollback_next != NULL) *rollback_next = END;
 
    if (!spare_initialized) {
       if (transaction_open) {
@@ -1154,13 +1195,20 @@ static bool alloc_node_sector(NarfSector *sector) {
    }
 
    if (!pop_spare(sector)) return false;
-   if (*sector != END) return prepare_allocated_node_sector(*sector);
+   if (*sector != END) {
+      if (!prepare_allocated_node_sector(*sector, rollback_next)) {
+         spare_head = END;
+         spare_initialized = false;
+         return false;
+      }
+      return true;
+   }
 
    reserve = transaction_may_use_reserve ? 0 : metadata_reserve();
    if (root.m_top > root.m_bottom + reserve) {
       root.m_top--;
       *sector = root.m_top;
-      return prepare_allocated_node_sector(*sector);
+      return prepare_allocated_node_sector(*sector, rollback_next);
    }
 
    return false;
@@ -1450,7 +1498,7 @@ static bool allocate_storage(NarfSector length, NarfSector *meta_sector, NarfSec
                            &newroot, &removed_sector, &removed_free)) return false;
       root.m_free_root = newroot;
       (void) removed_sector;
-      if (!alloc_node_sector(meta_sector)) return false;
+      if (!alloc_node_sector(meta_sector, NULL)) return false;
       *start = removed_free.m_start;
       if (removed_free.m_length > length) {
          if (!insert_free_extent(removed_free.m_start + length,
@@ -1464,7 +1512,7 @@ static bool allocate_storage(NarfSector length, NarfSector *meta_sector, NarfSec
    if (root.m_top - root.m_bottom - length < 1) return false;
    if (!transaction_may_use_reserve &&
        root.m_top - root.m_bottom - length <= metadata_reserve()) return false;
-   if (!alloc_node_sector(meta_sector)) return false;
+   if (!alloc_node_sector(meta_sector, NULL)) return false;
    *start = root.m_bottom;
    root.m_bottom += length;
    return true;
@@ -1677,8 +1725,8 @@ static void recycle_retired_after_commit(void) {
 static bool commit_user_transaction(void) {
    if (!commit_root()) return false;
 
+   rollback_head = END;
    recycle_retired_after_commit();
-   spare_consumed_in_transaction = false;
    return true;
 }
 
@@ -3934,6 +3982,7 @@ void narf_debug(void) {
    printf("root.m_data_root     = [%08x]\n", root.m_data_root);
    printf("root.m_free_root     = [%08x]\n", root.m_free_root);
    printf("spare_head           = [%08x]\n", spare_head);
+   printf("rollback_head        = [%08x]\n", rollback_head);
    printf("root.m_count         = %08x\n", root.m_count);
    printf("root.m_bottom        = %08x\n", root.m_bottom);
    printf("root.m_top           = %08x\n", root.m_top);
