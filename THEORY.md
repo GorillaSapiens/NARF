@@ -102,13 +102,14 @@ Each node contains:
   * free nodes store free-extent start sector and length
 * key string, used by data nodes and empty for free nodes
 * `m_root_version`, the transaction/root generation that last wrote the node
-* `m_next`, a generic non-tree link used by allocator cache state
+* `m_next`, used only to link transaction-private nodes onto the RAM rollback chain
 * checksum
 
-For a committed live tree node, `m_next` is ignored.  In an unreachable spare
-node it links the RAM-headed spare chain.  In a node allocated by the current
-transaction it links the RAM-headed transaction rollback chain.  A node cannot
-be both spare and transaction-private, so the two uses do not conflict.
+For a committed live tree node, `m_next` is ignored.  In a node allocated by the
+current transaction it links the RAM-headed transaction rollback chain.  Spare
+nodes do not use `m_next`: because they are not AVL-tree members, they reuse
+`m_left` as the previous/lower-sector spare link and `m_right` as the
+next/higher-sector spare link.
 
 Trees
 -----
@@ -179,16 +180,23 @@ The important rule is that **retired is not spare**.  A sector becomes safe to
 reuse only after the commit that made it unreachable from the previous committed
 root.
 
-The current implementation keeps the spare list head in RAM only.  Spare-list
-links are written into the spare sectors themselves, but the list is cache state,
-not durable filesystem truth.  On mount, NARF rebuilds the RAM spare list with a
-framed reachability bitmap.  The 512-byte `spare_work` buffer is treated as 4096
-bits, representing one 4096-sector catalog frame.  For each frame, NARF clears
-the bitmap, walks the committed data and free trees once each, and marks every
-live catalog node whose sector falls inside the frame.  Unmarked sectors in the
-intersection of that frame and `[root.m_top, root.m_total_sectors)` are
-unreachable and are linked onto the spare list.  Frames are processed from the
-high end of the volume downward.
+The current implementation keeps both ends of the spare list in RAM only.  The
+list is sorted by sector address and doubly linked through the spare nodes:
+`m_left` points to the previous/lower spare and `m_right` points to the
+next/higher spare.  `spare_head` therefore names the lowest spare and
+`spare_tail` names the highest.  Catalog allocation removes nodes from the tail,
+which preserves low spares and maximizes the chance that the catalog frontier can
+contract upward.  Spare-list links are cache state, not durable filesystem truth.
+
+On mount, NARF rebuilds the RAM spare list with a framed reachability bitmap.  The
+512-byte `spare_work` buffer is treated as 4096 bits, representing one
+4096-sector catalog frame.  For each frame, NARF clears the bitmap, walks the
+committed data and free trees once each, and marks every live catalog node whose
+sector falls inside the frame.  Unmarked sectors in the intersection of that
+frame and `[root.m_top, root.m_total_sectors)` are unreachable.  Frames and
+sectors are scanned from high to low.  One pending spare is delayed until the
+next lower spare is known, allowing each rebuilt doubly linked record to be
+written exactly once.
 
 Each tree walk uses only `node_work0`: after reading a node, the left and right
 child sectors are copied into local variables before recursion, so subsequent
@@ -198,20 +206,29 @@ allocator paths use the existing sector scratch instead of borrowing either node
 work buffer, because `write_node()` may be holding its caller's node in `work0`
 or `work1`.  The rebuild therefore uses fixed sector-buffer memory.  If the
 catalog region has `C` sectors and the two live trees contain `L` nodes, the
-blocked scan costs
-approximately `O(C + L * ceil(C / 4096))`, rather than performing two complete
-tree searches for each of the `C` candidate sectors.  A damaged or cyclic tree
-is stopped by the catalog-read validation and AVL-depth bound; rebuild failure
-leaves the disposable spare cache uninitialized.
+blocked scan costs approximately `O(C + L * ceil(C / 4096))`, rather than
+performing two complete tree searches for each of the `C` candidate sectors.  A
+damaged or cyclic tree is stopped by the catalog-read validation and AVL-depth
+bound; rebuild failure leaves the disposable spare cache uninitialized.
+
+Whenever the lowest catalog sectors are unreachable, NARF returns them to the
+virgin gap by advancing `root.m_top`.  For a normal transaction, the new frontier
+is calculated from the sorted low spare prefix plus sectors retired by that
+transaction, and is included in the new root commit.  Only after that root commit
+succeeds are the disposable list links adjusted.  Mount-time reconstruction may
+also raise the in-memory frontier; the next successful root commit persists it.
+Thus committed catalog growth is reversible when all catalog sectors at the low
+boundary become unused.
 
 During a transaction, every allocated catalog sector is linked through its
 `m_next` field onto a RAM-headed rollback chain.  Rewriting a transaction-private
-node in place preserves that link.  On ordinary software rollback, NARF walks
-the chain: sectors that were already inside the saved catalog region are put
-back on the spare list, while sectors obtained by lowering `m_top` become virgin
-again when the saved root frontier is restored.  If a rollback-chain node cannot
-be read or rewritten, the disposable spare cache is invalidated and rebuilt
-later.
+node in place preserves that link.  Because normal allocation consumes the
+highest spare first, consumed preexisting spares are a high suffix of the sorted
+list.  The rollback chain presents that suffix in ascending order, so ordinary
+software rollback can append it back to the tail in `O(k)` work for `k` consumed
+spares.  Sectors obtained by lowering `m_top` are skipped and become virgin again
+when the saved root frontier is restored.  If a rollback-chain node cannot be
+read or rewritten, the disposable spare cache is invalidated and rebuilt later.
 
 The rollback head is not persistent.  After power loss, the committed root still
 determines the correct live set, but mount must rebuild the spare list from
@@ -219,8 +236,10 @@ reachability.  After a successful commit, the rollback head is simply discarded;
 its stale `m_next` values in newly committed live nodes are ignored.
 
 Transaction-retired sectors are tracked in a fixed-size RAM array while a
-transaction is open; after a successful commit, those known-dead sectors are
-safely linked onto the RAM spare list.  If the retired array overflows, NARF
+transaction is open.  After a successful commit, any retired sectors not reclaimed
+by raising `m_top` are inserted into sector order in the spare list.  Locating an
+insertion point can require a read-only list scan, but only the new spare and its
+two immediate neighbors are rewritten.  If the retired array overflows, NARF
 rebuilds the entire spare chain from the newly committed roots.  If spare
 recycling or rebuilding fails, the RAM spare cache is discarded and retried by a
 later transaction or mount.  There is no on-disk retired-page list or full
@@ -247,11 +266,13 @@ suitable free extent exists, NARF allocates from the open space between the low
 payload frontier and the high catalog-node frontier.
 
 Catalog nodes are allocated from the high end of the filesystem one sector at a
-time, or from the RAM spare list when a committed-safe node sector is available.
-File payload data grows upward from the low end.  The root tracks the current
-bottom/top frontier values.  Normal allocations preserve a small metadata
-reserve so that a full medium can still perform delete/cleanup-style metadata
-updates.
+time, or from the highest-address entry in the RAM spare list when a
+committed-safe node sector is available.  File payload data grows upward from
+the low end.  The root tracks the current bottom/top frontier values.  When a
+contiguous low-address prefix of the catalog region becomes spare, `m_top` moves
+up and returns those sectors to the open gap.  Normal allocations preserve a
+small metadata reserve so that a full medium can still perform
+delete/cleanup-style metadata updates.
 
 Defragmentation
 ---------------

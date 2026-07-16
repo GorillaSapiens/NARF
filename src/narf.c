@@ -106,8 +106,10 @@ typedef struct PACKED {
 } Root;
 static_assert(sizeof(Root) == NARF_SECTOR_SIZE, "Root wrong size");
 
-// m_next is ignored for committed live nodes.  It links either the spare
-// chain or the open transaction's rollback chain for noncommitted nodes.
+// m_next is ignored for committed live nodes and spare nodes.  For a node
+// allocated by the open transaction, it links the RAM rollback chain.  Spare
+// nodes reuse m_left/m_right as previous/next links in a sorted doubly linked
+// list.
 #define NODE_FIELDS             \
    uint32_t     m_root_version; \
    NarfSector   m_next;         \
@@ -165,6 +167,7 @@ static bool transaction_may_use_reserve = false;
 static bool transaction_open = false;
 static bool spare_initialized = false;
 static NarfSector spare_head = END;
+static NarfSector spare_tail = END;
 static NarfSector rollback_head = END;
 static NarfSector retired_nodes[RETIRED_MAX];
 static unsigned retired_node_count = 0;
@@ -172,6 +175,13 @@ static bool retired_node_overflow = false;
 
 static bool initialize_spare(void);
 static void transaction_rollback(void);
+
+//! @brief Discard the disposable RAM spare-list cache.
+static void invalidate_spare_cache(void) {
+   spare_head = END;
+   spare_tail = END;
+   spare_initialized = false;
+}
 
 //! @brief Clear all state that could make the core appear mounted.
 static void invalidate_mount_state(void) {
@@ -185,6 +195,7 @@ static void invalidate_mount_state(void) {
    transaction_open = false;
    spare_initialized = false;
    spare_head = END;
+   spare_tail = END;
    rollback_head = END;
    retired_node_count = 0;
    retired_node_overflow = false;
@@ -225,8 +236,7 @@ static uint32_t transaction_root_version(void) {
 //! @brief Save the current mutable root state before starting a public transaction.
 static void transaction_begin(void) {
    if (!spare_initialized && !initialize_spare()) {
-      spare_head = END;
-      spare_initialized = false;
+      invalidate_spare_cache();
    }
 
    saved_root.m_root = root;
@@ -508,41 +518,287 @@ static bool write_node(NarfSector old_sector, Node *n, NarfSector *new_sector) {
    return true;
 }
 
-//! @brief Push one unreachable catalog-node sector using the supplied scratch node.
-static bool push_spare_with_work(NarfSector sector, Node *spare) {
+//! @brief Write one spare-list record with explicit lower/higher neighbors.
+//!
+//! Spare nodes are not authoritative filesystem state.  They reuse m_left as
+//! the previous/lower-sector link and m_right as the next/higher-sector link.
+//! m_next is reserved exclusively for the transaction rollback chain and is
+//! therefore END in a spare record.
+static bool write_spare_record_with_work(NarfSector sector,
+                                         NarfSector previous,
+                                         NarfSector next,
+                                         Node *spare) {
    if (spare == NULL) return false;
-   if (!valid_node_sector(sector)) return true;
+   if (!valid_node_sector(sector) || sector < root.m_top) return false;
+   if (previous != END && (!valid_node_sector(previous) ||
+                           previous < root.m_top || previous >= sector)) {
+      return false;
+   }
+   if (next != END && (!valid_node_sector(next) ||
+                       next < root.m_top || next <= sector)) return false;
 
    memset(spare, 0, sizeof(*spare));
-   spare->m_left = END;
-   spare->m_right = END;
-   spare->m_height = 1;
-   spare->m_next = spare_head;
    spare->m_root_version = root.m_root_version;
+   spare->m_next = END;
+   spare->m_left = previous;
+   spare->m_right = next;
+   spare->m_height = 0;
    spare->m_checksum = 0;
    spare->m_checksum = crc32(0, spare, NARF_SECTOR_SIZE - sizeof(uint32_t));
 
-   if (!narf_io_write(root.m_origin + sector, spare)) return false;
-   spare_head = sector;
+   return narf_io_write(root.m_origin + sector, spare);
+}
+
+//! @brief Write one spare-list record using the general node scratch buffer.
+static bool write_spare_record(NarfSector sector,
+                               NarfSector previous,
+                               NarfSector next) {
+   return write_spare_record_with_work(sector, previous, next, &node_tmp);
+}
+
+//! @brief Read and lightly validate one record from the active spare cache.
+static bool read_spare_record(NarfSector sector, Node *out) {
+   if (sector < root.m_top || !read_node_any(sector, out)) return false;
+   if (out->m_height != 0) return false;
+   if (out->m_next != END) return false;
+   if (out->m_left != END &&
+       (out->m_left < root.m_top || out->m_left >= sector)) return false;
+   if (out->m_right != END &&
+       (out->m_right < root.m_top || out->m_right <= sector)) return false;
    return true;
 }
 
-//! @brief Push one unreachable catalog-node sector onto the RAM spare list.
-static bool push_spare(NarfSector sector) {
-   /* Do not borrow node_work0/1 here: write_node() may own either one. */
-   return push_spare_with_work(sector, &node_tmp);
+//! @brief Rewrite one spare node's lower-sector link.
+static bool set_spare_previous(NarfSector sector, NarfSector previous) {
+   NarfSector next;
+
+   if (!read_spare_record(sector, &node_tmp)) return false;
+   next = node_tmp.m_right;
+   return write_spare_record(sector, previous, next);
 }
 
-//! @brief Pop one sector from the RAM spare list.
+//! @brief Rewrite one spare node's higher-sector link.
+static bool set_spare_next(NarfSector sector, NarfSector next) {
+   NarfSector previous;
+
+   if (!read_spare_record(sector, &node_tmp)) return false;
+   previous = node_tmp.m_left;
+   return write_spare_record(sector, previous, next);
+}
+
+//! @brief Detach a surviving head after root.m_top has moved above its old predecessor.
+static bool detach_spare_head_after_contraction(NarfSector sector) {
+   NarfSector next;
+
+   if (sector < root.m_top) return false;
+   if (!read_node_any(sector, &node_tmp)) return false;
+   if (node_tmp.m_height != 0 || node_tmp.m_next != END) return false;
+   next = node_tmp.m_right;
+   if (next != END && (next < root.m_top || next <= sector)) return false;
+   return write_spare_record(sector, END, next);
+}
+
+//! @brief Insert one unreachable sector into the sorted spare list.
+//!
+//! Locating the insertion point may require a read-only list walk, but only the
+//! new node and its immediate neighbors are rewritten.
+static bool insert_spare_sorted(NarfSector sector) {
+   NarfSector current;
+   NarfSector previous;
+
+   if (!valid_node_sector(sector)) return false;
+   if (sector < root.m_top) return true;
+
+   if (spare_head == END) {
+      if (spare_tail != END) return false;
+      if (!write_spare_record(sector, END, END)) return false;
+      spare_head = sector;
+      spare_tail = sector;
+      return true;
+   }
+   if (spare_tail == END) return false;
+
+   if (sector == spare_head || sector == spare_tail) return true;
+
+   if (sector < spare_head) {
+      if (!write_spare_record(sector, END, spare_head)) return false;
+      if (!set_spare_previous(spare_head, sector)) return false;
+      spare_head = sector;
+      return true;
+   }
+
+   if (sector > spare_tail) {
+      NarfSector old_tail = spare_tail;
+
+      if (!write_spare_record(sector, old_tail, END)) return false;
+      if (!set_spare_next(old_tail, sector)) return false;
+      spare_tail = sector;
+      return true;
+   }
+
+   previous = spare_head;
+   current = spare_head;
+   for (;;) {
+      NarfSector next;
+
+      if (!read_spare_record(current, &node_tmp)) return false;
+      next = node_tmp.m_right;
+      if (next == END) return false;
+      if (next == sector) return true;
+      if (next > sector) {
+         previous = current;
+         current = next;
+         break;
+      }
+      current = next;
+   }
+
+   if (!write_spare_record(sector, previous, current)) return false;
+   if (!set_spare_next(previous, sector)) return false;
+   if (!set_spare_previous(current, sector)) return false;
+   return true;
+}
+
+//! @brief Append one restored spare above the current tail.
+//!
+//! Allocating from the tail means rollback encounters consumed preexisting
+//! spares in ascending order, so ordinary rollback can append them in O(k).
+static bool append_spare_high(NarfSector sector) {
+   NarfSector old_tail;
+
+   if (!valid_node_sector(sector)) return false;
+   if (sector < root.m_top) return true;
+
+   if (spare_tail == END) {
+      if (spare_head != END) return false;
+      if (!write_spare_record(sector, END, END)) return false;
+      spare_head = sector;
+      spare_tail = sector;
+      return true;
+   }
+
+   if (sector <= spare_tail) return insert_spare_sorted(sector);
+
+   old_tail = spare_tail;
+   if (!write_spare_record(sector, old_tail, END)) return false;
+   if (!set_spare_next(old_tail, sector)) return false;
+   spare_tail = sector;
+   return true;
+}
+
+//! @brief Pop the highest-address sector from the RAM spare list.
 static bool pop_spare(NarfSector *result) {
-   if (!result) return false;
+   NarfSector sector;
+   NarfSector previous;
 
-   *result = spare_head;
-   if (spare_head == END) return true;
+   if (result == NULL) return false;
 
-   if (!read_node_any(spare_head, &node_tmp)) return false;
-   spare_head = node_tmp.m_next;
+   sector = spare_tail;
+   *result = sector;
+   if (sector == END) return spare_head == END;
+
+   if (!read_spare_record(sector, &node_tmp)) return false;
+   if (node_tmp.m_right != END) return false;
+   previous = node_tmp.m_left;
+
+   if (previous == END) {
+      if (spare_head != sector) return false;
+      spare_head = END;
+      spare_tail = END;
+      return true;
+   }
+
+   if (!read_spare_record(previous, &node_tmp)) return false;
+   if (node_tmp.m_right != sector) return false;
+   if (!write_spare_record(previous, node_tmp.m_left, END)) return false;
+   spare_tail = previous;
    return true;
+}
+
+//! @brief Return whether the transaction retired a particular catalog sector.
+static bool retired_contains(NarfSector sector) {
+   for (unsigned i = 0; i < retired_node_count; i++) {
+      if (retired_nodes[i] == sector) return true;
+   }
+   return false;
+}
+
+//! @brief Plan maximal safe upward contraction of the catalog frontier.
+//!
+//! The active spare cache is sorted, so its low prefix can be merged with the
+//! transaction's retired set without modifying any spare links before commit.
+static bool plan_catalog_contraction(NarfSector *new_top,
+                                     NarfSector *surviving_head) {
+   NarfSector candidate;
+   NarfSector cursor;
+
+   if (new_top == NULL || surviving_head == NULL) return false;
+
+   candidate = root.m_top;
+   cursor = spare_initialized ? spare_head : END;
+
+   while (candidate < root.m_total_sectors) {
+      if (cursor != END && cursor < candidate) return false;
+
+      if (cursor == candidate) {
+         if (!read_spare_record(cursor, &node_tmp)) return false;
+         cursor = node_tmp.m_right;
+         candidate++;
+         continue;
+      }
+
+      if (retired_contains(candidate)) {
+         candidate++;
+         continue;
+      }
+
+      break;
+   }
+
+   *new_top = candidate;
+   *surviving_head = cursor;
+   return true;
+}
+
+//! @brief Apply the already-committed removal of a low spare-list prefix.
+static bool apply_catalog_contraction(NarfSector surviving_head) {
+   if (!spare_initialized) return true;
+   if (surviving_head == spare_head) return true;
+
+   spare_head = surviving_head;
+   if (spare_head == END) {
+      spare_tail = END;
+      return true;
+   }
+
+   return detach_spare_head_after_contraction(spare_head);
+}
+
+//! @brief Raise the in-memory catalog frontier across a contiguous spare prefix.
+//!
+//! This is used after mount-time rebuild.  The newer frontier is persisted by
+//! the next successful root commit; using the reclaimed sectors before then is
+//! still safe because the selected committed root reaches none of them.
+static bool reclaim_spare_prefix_in_memory(void) {
+   NarfSector cursor = spare_head;
+   NarfSector new_top = root.m_top;
+
+   while (cursor != END && cursor == new_top) {
+      if (!read_spare_record(cursor, &node_tmp)) return false;
+      cursor = node_tmp.m_right;
+      new_top++;
+   }
+
+   if (cursor == spare_head) return true;
+
+   root.m_top = new_top;
+   spare_head = cursor;
+   if (spare_head == END) {
+      spare_tail = END;
+      return true;
+   }
+
+   return detach_spare_head_after_contraction(spare_head);
 }
 
 //! @brief Mark an allocated catalog sector as transaction-private and link it for rollback.
@@ -594,7 +850,7 @@ static void transaction_rollback(void) {
       }
       next = node_tmp.m_next;
 
-      if (sector >= saved_top && !push_spare(sector)) {
+      if (sector >= saved_top && !append_spare_high(sector)) {
          spare_restore_ok = false;
          break;
       }
@@ -608,10 +864,7 @@ static void transaction_rollback(void) {
    }
 
    rollback_head = END;
-   if (!spare_restore_ok) {
-      spare_head = END;
-      spare_initialized = false;
-   }
+   if (!spare_restore_ok) invalidate_spare_cache();
 
    retired_node_count = 0;
    retired_node_overflow = false;
@@ -667,8 +920,12 @@ static bool mark_spare_frame_tree_rec(NarfSector sector,
 //! every unmarked catalog sector in the frame is unreachable and becomes spare.
 static bool initialize_spare(void) {
    NarfSector frame_begin;
+   NarfSector pending = END;
+   NarfSector pending_right = END;
+   NarfSector highest = END;
 
    spare_head = END;
+   spare_tail = END;
    spare_initialized = false;
 
    if (root.m_top >= root.m_total_sectors) {
@@ -704,11 +961,24 @@ static bool initialize_spare(void) {
 
       scan_begin = frame_begin < root.m_top ? root.m_top : frame_begin;
 
-      /* Scan downward so pushing produces a low-to-high spare chain. */
+      /*
+       * Discover spares from high to low.  A node is written only after the
+       * next lower spare is known, so every rebuilt doubly linked record is
+       * written exactly once.
+       */
       for (sector = frame_end; sector > scan_begin;) {
          sector--;
          if (!spare_frame_sector_marked(frame_begin, sector)) {
-            if (!push_spare_with_work(sector, &node_work1)) return false;
+            if (pending == END) {
+               highest = sector;
+            }
+            else if (!write_spare_record_with_work(pending, sector,
+                                                    pending_right,
+                                                    &node_work1)) {
+               return false;
+            }
+            pending_right = pending;
+            pending = sector;
          }
       }
 
@@ -716,7 +986,20 @@ static bool initialize_spare(void) {
       frame_begin -= SPARE_FRAME_SECTORS;
    }
 
+   if (pending != END) {
+      if (!write_spare_record_with_work(pending, END, pending_right,
+                                        &node_work1)) {
+         return false;
+      }
+      spare_head = pending;
+      spare_tail = highest;
+   }
+
    spare_initialized = true;
+   if (!reclaim_spare_prefix_in_memory()) {
+      invalidate_spare_cache();
+      return false;
+   }
    return true;
 }
 
@@ -1241,7 +1524,7 @@ static bool alloc_node_sector(NarfSector *sector, NarfSector *rollback_next) {
 
    if (!spare_initialized) {
       if (transaction_open) {
-         spare_head = END;
+         invalidate_spare_cache();
       }
       else if (!initialize_spare()) {
          return false;
@@ -1251,8 +1534,7 @@ static bool alloc_node_sector(NarfSector *sector, NarfSector *rollback_next) {
    if (!pop_spare(sector)) return false;
    if (*sector != END) {
       if (!prepare_allocated_node_sector(*sector, rollback_next)) {
-         spare_head = END;
-         spare_initialized = false;
+         invalidate_spare_cache();
          return false;
       }
       return true;
@@ -1759,17 +2041,17 @@ static void recycle_retired_after_commit(void) {
    retired_node_count = 0;
    retired_node_overflow = false;
 
-   if (overflow) {
-      // The fixed-size list is incomplete.  Rebuild from the committed trees
-      // rather than leaking unrecorded retired sectors until the next mount.
-      (void) initialize_spare();
+   if (overflow || !spare_initialized) {
+      // The fixed-size list is incomplete, or the disposable cache was damaged.
+      // Rebuild from the newly committed trees rather than leaking sectors.
+      if (!initialize_spare()) invalidate_spare_cache();
       return;
    }
 
    for (unsigned i = 0; i < count; i++) {
-      if (!push_spare(retired_nodes[i])) {
-         spare_head = END;
-         spare_initialized = false;
+      if (retired_nodes[i] < root.m_top) continue;
+      if (!insert_spare_sorted(retired_nodes[i])) {
+         invalidate_spare_cache();
          return;
       }
    }
@@ -1777,9 +2059,28 @@ static void recycle_retired_after_commit(void) {
 
 //! @brief Commit a public mutation.
 static bool commit_user_transaction(void) {
-   if (!commit_root()) return false;
+   NarfSector original_top = root.m_top;
+   NarfSector contracted_top = root.m_top;
+   NarfSector surviving_head = spare_head;
+   bool contraction_ok;
+
+   contraction_ok = plan_catalog_contraction(&contracted_top, &surviving_head);
+   if (contraction_ok) root.m_top = contracted_top;
+
+   if (!commit_root()) {
+      root.m_top = original_top;
+      return false;
+   }
 
    rollback_head = END;
+
+   if (!contraction_ok) {
+      invalidate_spare_cache();
+   }
+   else if (!apply_catalog_contraction(surviving_head)) {
+      invalidate_spare_cache();
+   }
+
    recycle_retired_after_commit();
    return true;
 }
@@ -2333,7 +2634,13 @@ static void fsck_free_extents_rec(NarfSector sector) {
 //! @brief Count and lightly validate the RAM spare-list cache.
 static void fsck_spare_list(void) {
    NarfSector sector = spare_head;
+   NarfSector previous = END;
    NarfSector guard = 0;
+
+   if ((spare_head == END) != (spare_tail == END)) {
+      fsck_error();
+      return;
+   }
 
    while (sector != END) {
       fsck_ctx.m_report.spare_nodes++;
@@ -2344,18 +2651,29 @@ static void fsck_spare_list(void) {
          return;
       }
 
-      if (!read_node_any(sector, &node_work0)) {
+      if (!read_spare_record(sector, &node_work0)) {
+         fsck_error();
+         return;
+      }
+      if (node_work0.m_left != previous) {
+         fsck_error();
+         return;
+      }
+      if (node_work0.m_right != END && node_work0.m_right <= sector) {
          fsck_error();
          return;
       }
 
-      sector = node_work0.m_next;
+      previous = sector;
+      sector = node_work0.m_right;
       guard++;
       if (guard > root.m_total_sectors) {
          fsck_error();
          return;
       }
    }
+
+   if (previous != spare_tail) fsck_error();
 }
 
 //! @brief Mark one authoritative tree and detect duplicate catalog references.
@@ -2394,6 +2712,7 @@ static void fsck_deep_mark_tree_rec(NarfSector sector, uint8_t kind) {
 //! @brief Mark the spare chain and detect cycles or overlap with live trees.
 static void fsck_deep_mark_spares(void) {
    NarfSector sector = spare_head;
+   NarfSector previous = END;
    NarfSector guard = 0;
 
    while (sector != END) {
@@ -2414,17 +2733,24 @@ static void fsck_deep_mark_spares(void) {
       }
       fsck_ctx.m_catalog_marks[index] = FSCK_CATALOG_SPARE;
 
-      if (!read_node_any(sector, &node_work0)) {
+      if (!read_spare_record(sector, &node_work0)) {
          fsck_error();
          return;
       }
-      sector = node_work0.m_next;
+      if (node_work0.m_left != previous) {
+         fsck_error();
+         return;
+      }
+      previous = sector;
+      sector = node_work0.m_right;
       guard++;
       if (guard > root.m_total_sectors) {
          fsck_error();
          return;
       }
    }
+
+   if (previous != spare_tail) fsck_error();
 }
 
 //! @brief Perform whole-catalog reference and coverage checks for deep fsck.
@@ -4036,6 +4362,7 @@ void narf_debug(void) {
    printf("root.m_data_root     = [%08x]\n", root.m_data_root);
    printf("root.m_free_root     = [%08x]\n", root.m_free_root);
    printf("spare_head           = [%08x]\n", spare_head);
+   printf("spare_tail           = [%08x]\n", spare_tail);
    printf("rollback_head        = [%08x]\n", rollback_head);
    printf("root.m_count         = %08x\n", root.m_count);
    printf("root.m_bottom        = %08x\n", root.m_bottom);

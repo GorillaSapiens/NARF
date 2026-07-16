@@ -1,4 +1,8 @@
 === v3
+spare nodes now form an address-sorted doubly linked RAM cache using m_left as previous and m_right as next; m_next is reserved for transaction rollback linkage
+catalog allocation consumes the highest-address spare first, and ordinary rollback appends the consumed high suffix back to the spare tail
+root.m_top now advances across contiguous low spare and retired catalog sectors, returning them to the virgin payload/catalog gap
+framed spare reconstruction writes each doubly linked spare record once by delaying one pending high-to-low record until its lower neighbor is known
 on-disk format version is now 10 after removing the persisted node-version/LFSR fields and adding the generic node m_next field
 transaction-private catalog nodes now form a RAM-headed rollback chain through m_next, allowing ordinary rollback to restore consumed spares without rebuilding the whole spare cache
 initial spare-list reconstruction now uses spare_work as a 4096-sector reachability bitmap, walking each live tree once per frame instead of once per candidate catalog sector
