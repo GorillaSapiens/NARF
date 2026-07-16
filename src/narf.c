@@ -63,10 +63,6 @@ typedef struct PACKED {
    NarfSector m_length;
 } FreePayload;
 
-typedef struct PACKED {
-   NarfSector m_next;
-} SparePayload;
-
 #define INIT_DEFRAG_SEARCH ((FreePayload){ END, 0 })
 
 #define ROOT_FIELDS                        \
@@ -119,7 +115,6 @@ static_assert(sizeof(Root) == NARF_SECTOR_SIZE, "Root wrong size");
    union {                      \
       DataPayload  m_data;      \
       FreePayload  m_free;      \
-      SparePayload m_spare;     \
    };                           \
 
 typedef struct PACKED {
@@ -531,7 +526,7 @@ static bool push_spare(NarfSector sector) {
    spare_work.m_left = END;
    spare_work.m_right = END;
    spare_work.m_height = 1;
-   spare_work.m_spare.m_next = spare_head;
+   spare_work.m_next = spare_head;
    spare_work.m_root_version = root.m_root_version;
    spare_work.m_checksum = 0;
    spare_work.m_checksum = crc32(0, &spare_work, NARF_SECTOR_SIZE - sizeof(uint32_t));
@@ -549,7 +544,7 @@ static bool pop_spare(NarfSector *result) {
    if (spare_head == END) return true;
 
    if (!read_node_any(spare_head, &spare_work)) return false;
-   spare_head = spare_work.m_spare.m_next;
+   spare_head = spare_work.m_next;
    if (transaction_open) {
       spare_consumed_in_transaction = true;
    }
@@ -564,7 +559,7 @@ static bool prepare_allocated_node_sector(NarfSector sector) {
    spare_work.m_left = END;
    spare_work.m_right = END;
    spare_work.m_height = 1;
-   spare_work.m_spare.m_next = END;
+   spare_work.m_next = END;
    spare_work.m_root_version = transaction_root_version();
    spare_work.m_checksum = 0;
    spare_work.m_checksum = crc32(0, &spare_work, NARF_SECTOR_SIZE - sizeof(uint32_t));
@@ -2252,7 +2247,7 @@ static void fsck_spare_list(void) {
          return;
       }
 
-      sector = node_work0.m_spare.m_next;
+      sector = node_work0.m_next;
       guard++;
       if (guard > root.m_total_sectors) {
          fsck_error();
@@ -2321,7 +2316,7 @@ static void fsck_deep_mark_spares(void) {
          fsck_error();
          return;
       }
-      sector = node_work0.m_spare.m_next;
+      sector = node_work0.m_next;
       guard++;
       if (guard > root.m_total_sectors) {
          fsck_error();
