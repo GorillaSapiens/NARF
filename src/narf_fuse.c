@@ -1195,7 +1195,8 @@ static int my_truncate(const char *path, off_t size, struct fuse_file_info *fi) 
       return -EIO;
    }
 
-   ret = write_metadata_string(path + 1, metadata);
+   // ignore metadata write failures
+   (void) write_metadata_string(path + 1, metadata);
    UNLOCK;
    return ret;
 }
@@ -1316,12 +1317,9 @@ static int my_write(const char *path, const char *buf, size_t size, off_t offset
       return -EIO;
    }
 
-   ret = write_metadata_string(path + 1, metadata);
+   // ignore metadata write failures
+   (void) write_metadata_string(path + 1, metadata);
    UNLOCK;
-
-   if (ret != 0) {
-      return ret;
-   }
 
    return (int) size;
 }
